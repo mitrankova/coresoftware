@@ -581,6 +581,12 @@ void PHG4TpcDetector::add_geometry_node()
         SectorPhi[1] * 12 / (double) NPhiBins[1],
         SectorPhi[2] * 12 / (double) NPhiBins[2]}};
 
+  
+const std::array<std::vector<double>, 3> Bias_Phi = 
+      {{{0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.},
+        {0., 0., 0.0029*4, 0., 0., 0., 0., 0., 0., 0., 0., 0.},
+        {0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.}}}; 
+
   // should move to a common file
   static constexpr int NSides = 2;
   static constexpr int NSectors = 12;
@@ -608,8 +614,8 @@ void PHG4TpcDetector::add_geometry_node()
         sector_Phi_bias[zside].push_back(0);
 
         double sec_gap = (2 * M_PI - SectorPhi[iregion] * 12) / 12;
-        double sec_max_phi = M_PI - SectorPhi[iregion] / 2 - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
-        double sec_min_phi = sec_max_phi - SectorPhi[iregion];
+        double sec_max_phi = M_PI - SectorPhi[iregion] / 2 - sec_gap - 2 * M_PI / 12 * isector + Bias_Phi[iregion][isector];  // * (isector+1) ;
+        double sec_min_phi = sec_max_phi - SectorPhi[iregion]+ Bias_Phi[iregion][isector];
         sector_min_Phi[zside].push_back(sec_min_phi);
         sector_max_Phi[zside].push_back(sec_max_phi);
       }  // isector
