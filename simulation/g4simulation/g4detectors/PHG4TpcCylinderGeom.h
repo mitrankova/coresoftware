@@ -36,22 +36,24 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   double get_etamin() const;
 
   virtual std::pair<double, double> get_zbounds(const int ibin) const;
-  virtual std::pair<double, double> get_phibounds(const int ibin) const;
+  virtual std::pair<double, double> get_phibounds(const int ibin, int side = 0) const;
   virtual std::pair<double, double> get_etabounds(const int ibin) const;
   virtual double get_etacenter(const int ibin) const;
   virtual double get_zcenter(const int ibin) const;
-  virtual double get_phicenter(const int ibin) const;
-  virtual double get_phicenter_new(const int ibin) const;
-  virtual double get_phi(const float ibin) const;
+  virtual double get_phicenter(const int ibin, int side = 0) const;
+//  virtual double get_phicenter_new(const int ibin) const;
+  virtual double get_phi(const float ibin, int side = 0) const;
 
   virtual int get_etabin(const double eta) const;
   virtual int get_zbin(const double z) const;
   virtual int get_phibin(const double phi, int side = 0) const;
-  virtual int get_phibin_new(const double phi) const;
+//  virtual int get_phibin_new(const double phi) const;
 
   virtual float get_pad_float(const double phi, int side = 0) const;
   virtual float get_tbin_float(const double z) const;
   virtual int find_phibin(const double phi, int side = 0) const;
+  virtual int find_vecbin(const double phi, int side = 0) const;
+  virtual int nearest_element(const double phi, int s, int side = 0) const;
 
   void set_layer(const int i) override { layer = i; }
   void set_binning(const int i) { binning = i; }
@@ -76,6 +78,8 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   void set_sector_min_phi(std::array<std::vector<double>, NSides> s_min_phi) { sector_min_Phi = s_min_phi; }
   void set_sector_max_phi(std::array<std::vector<double>, NSides> s_max_phi) { sector_max_Phi = s_max_phi; }
 
+  void set_layer_pad_phi( std::vector<double> s_layer_pad_phi) { layer_pad_phi = s_layer_pad_phi; };
+
   std::array<std::vector<double>, NSides> get_sector_min_phi() { return sector_min_Phi; }
   std::array<std::vector<double>, NSides> get_sector_max_phi() { return sector_max_Phi; }
 
@@ -99,6 +103,7 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   std::array<std::vector<double>, NSides> sector_Phi_bias;
   std::array<std::vector<double>, NSides> sector_min_Phi;
   std::array<std::vector<double>, NSides> sector_max_Phi;
+  std::vector<double> layer_pad_phi;
 
   // streamer
   friend std::ostream& operator<<(std::ostream&, const PHG4TpcCylinderGeom&);
