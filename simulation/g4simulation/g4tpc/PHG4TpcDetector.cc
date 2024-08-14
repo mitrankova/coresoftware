@@ -675,6 +675,7 @@ void PHG4TpcDetector::add_geometry_node()
 
         sector_min_Phi[zside].push_back(sec_min_phi);
         sector_max_Phi[zside].push_back(sec_max_phi);
+std::cout<<"iregion = "<<iregion<<" zside = "<<zside<<" phibin width"<<phi_bin_width_cdb[iregion]<<" sector min Phi = "<<sec_min_phi<<" sec_max_phi = "<<sec_max_phi<<" sec_phi = "<<sec_phi_cdb<<"sector gap = "<<sec_gap<<std::endl;
       }  // isector
     }
 
