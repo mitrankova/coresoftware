@@ -10,6 +10,10 @@
 #include <g4main/PHG4DisplayAction.h>  // for PHG4DisplayAction
 #include <g4main/PHG4Subsystem.h>
 
+#include <cdbobjects/CDBTTree.h>
+
+#include <ffamodules/CDBInterface.h>
+
 #include <phool/PHCompositeNode.h>
 #include <phool/PHIODataNode.h>
 #include <phool/PHNodeIterator.h>
@@ -665,14 +669,17 @@ void PHG4TpcDetector::add_geometry_node()
         sector_R_bias[zside].push_back(0);
         sector_Phi_bias[zside].push_back(0);
 
-        phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
+        double sec_max_phi = M_PI - M_PI / 12 - 2 * M_PI / 12 * isector;
+        double sec_min_phi = sec_max_phi - 2 * M_PI / 12;
+
+/*        phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
         double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_cdb[iregion] / 2.;
         double sec_min_phi = pad_phi[iregion * 16][0] - phi_bin_width_cdb[iregion] / 2.;
         double sec_phi_cdb = sec_max_phi - sec_min_phi;
         double sec_gap = (2 * M_PI - sec_phi_cdb * 12) / 12;
         sec_max_phi = M_PI - sec_phi_cdb / 2 - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
         sec_min_phi = sec_max_phi - sec_phi_cdb;
-       // double sec_gap = (2 * M_PI - SectorPhi[iregion] * 12) / 12;
+*/       // double sec_gap = (2 * M_PI - SectorPhi[iregion] * 12) / 12;
        // double sec_max_phi = M_PI - SectorPhi[iregion] / 2 - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
       //  double sec_min_phi = sec_max_phi - SectorPhi[iregion];
         sector_min_Phi[zside].push_back(sec_min_phi);
@@ -739,7 +746,7 @@ void PHG4TpcDetector::add_geometry_node()
       layerseggeo->set_sector_min_phi(sector_min_Phi);
       layerseggeo->set_sector_max_phi(sector_max_Phi);
       if(layer -7 >=0) layerseggeo->set_layer_pad_phi(pad_phi[layer - 7]);
-      else layerseggeo->set_layer_pad_phi(0);
+//      else layerseggeo->set_layer_pad_phi(0);
 
       // Chris Pinkenburg: greater causes huge memory growth which causes problems
       // on our farm. If you need to increase this - TALK TO ME first

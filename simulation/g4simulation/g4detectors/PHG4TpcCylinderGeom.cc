@@ -315,7 +315,7 @@ int PHG4TpcCylinderGeom::get_etabin(const double eta) const
   check_binning_method_eta();
   return floor((eta - zmin) / zstep);
 }
-
+/*
 int PHG4TpcCylinderGeom::get_phibin_new(const double phi) const
 {
   double norm_phi = phi;
@@ -326,7 +326,7 @@ int PHG4TpcCylinderGeom::get_phibin_new(const double phi) const
   }
   check_binning_method_phi();
   return floor((norm_phi - phimin) / phistep);
-}
+}*/
 /*
 int PHG4TpcCylinderGeom::find_phibin(const double phi, int side) const
 {
@@ -764,7 +764,7 @@ PHG4TpcCylinderGeom::get_etacenter(const int ibin) const
   check_binning_method_eta();
   return zmin + (ibin + 0.5) * zstep;
 }
-
+/*
 double
 PHG4TpcCylinderGeom::get_phicenter_new(const int ibin) const
 {
@@ -777,7 +777,7 @@ PHG4TpcCylinderGeom::get_phicenter_new(const int ibin) const
   check_binning_method_phi();
 
   return (phimin + (ibin + 0.5) * phistep);
-}
+}*/
 
 /*
 double
