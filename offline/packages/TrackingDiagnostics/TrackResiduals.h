@@ -4,9 +4,8 @@
 #define TRACKRESIDUALS_H
 
 #include <tpc/TpcClusterMover.h>
-#include <tpc/TpcClusterZCrossingCorrection.h>
+#include <tpc/TpcGlobalPositionWrapper.h>
 
-#include <trackbase/ActsGeometry.h>
 #include <trackbase/ClusterErrorPara.h>
 #include <trackbase/TrkrDefs.h>
 
@@ -48,13 +47,17 @@ class TrackResiduals : public SubsysReco
   void trackmapName(const std::string &name) { m_trackMapName = name; }
   void clusterTree() { m_doClusters = true; }
   void hitTree() { m_doHits = true; }
+  void noEventTree() {m_doEventTree = false;}
+  void MatchedTracksOnly() {m_doMatchedOnly = true;}
   void ppmode() { m_ppmode = true; }
   void convertSeeds(bool flag) { m_convertSeeds = flag; }
   void dropClustersNoState(bool flag) { m_dropClustersNoState = flag; }
   void zeroField() { m_zeroField = true; }
   void runnumber(const int run) { m_runnumber = run; }
   void segment(const int seg) { m_segment = seg; }
+  void job(const int job) { m_job = job; }
   void linefitAll() { m_linefitTPCOnly = false; }
+  void setClusterMinSize(unsigned int size) { m_min_cluster_size = size; }
   void failedTree() { m_doFailedSeeds = true; }
   void setSegment(const int segment) { m_segment = segment; }
 
@@ -66,6 +69,7 @@ class TrackResiduals : public SubsysReco
   void clearClusterStateVectors();
   void createBranches();
   float convertTimeToZ(ActsGeometry *geometry, TrkrDefs::cluskey cluster_key, TrkrCluster *cluster);
+  void fillEventTree(PHCompositeNode *topNode);
   void fillClusterTree(TrkrClusterContainer *clusters, ActsGeometry *geometry);
   void fillHitTree(TrkrHitSetContainer *hitmap, ActsGeometry *geometry,
                    PHG4TpcCylinderGeomContainer *tpcGeom, PHG4CylinderGeomContainer *mvtxGeom,
@@ -78,10 +82,8 @@ class TrackResiduals : public SubsysReco
   void fillClusterBranchesSeeds(TrkrDefs::cluskey ckey,  // SvtxTrack* track,
                                 const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> &global,
                                 PHCompositeNode *topNode);
-  void lineFitClusters(std::vector<TrkrDefs::cluskey> &keys, ActsGeometry *geometry,
-                       TrkrClusterContainer *clusters, const short int &crossing);
-  void circleFitClusters(std::vector<TrkrDefs::cluskey> &keys, ActsGeometry *geometry,
-                         TrkrClusterContainer *clusters, const short int &crossing);
+  void lineFitClusters(std::vector<TrkrDefs::cluskey> &keys, TrkrClusterContainer *clusters, const short int &crossing);
+  void circleFitClusters(std::vector<TrkrDefs::cluskey> &keys, TrkrClusterContainer *clusters, const short int &crossing);
   void fillStatesWithCircleFit(const TrkrDefs::cluskey &key, TrkrCluster *cluster,
                                Acts::Vector3 &glob, ActsGeometry *geometry);
   void fillVertexTree(PHCompositeNode *topNode);
@@ -92,19 +94,20 @@ class TrackResiduals : public SubsysReco
   TFile *m_outfile = nullptr;
   TTree *m_tree = nullptr;
   TTree *m_clustree = nullptr;
+  TTree *m_eventtree = nullptr;
   TTree *m_hittree = nullptr;
   TTree *m_vertextree = nullptr;
   TTree *m_failedfits = nullptr;
 
   bool m_doClusters = false;
   bool m_doHits = false;
+  bool m_doEventTree = true;
   bool m_zeroField = false;
   bool m_doFailedSeeds = false;
+  bool m_doMatchedOnly = false;
 
-  TpcClusterZCrossingCorrection m_clusterCrossingCorrection;
   TpcClusterMover m_clusterMover;
-
-  TpcDistortionCorrectionContainer *m_dccModuleEdge{nullptr}, *m_dccStatic{nullptr}, *m_dccAverage{nullptr}, *m_dccFluctuation{nullptr};
+  TpcGlobalPositionWrapper m_globalPositionWrapper;
 
   ClusterErrorPara m_clusErrPara;
   std::string m_alignmentMapName = "SvtxAlignmentStateMap";
@@ -115,14 +118,30 @@ class TrackResiduals : public SubsysReco
   bool m_convertSeeds = false;
   bool m_linefitTPCOnly = true;
   bool m_dropClustersNoState = false;
+  unsigned int m_min_cluster_size = 0;
 
   bool m_doMicromegasOnly = false;
 
   int m_event = 0;
   int m_segment = std::numeric_limits<int>::quiet_NaN();
   int m_runnumber = std::numeric_limits<int>::quiet_NaN();
+  int m_job = std::numeric_limits<int>::quiet_NaN();
+  int m_ntpcclus = std::numeric_limits<int>::quiet_NaN();
+
   std::vector<int> m_firedTriggers;
   uint64_t m_gl1BunchCrossing = std::numeric_limits<uint64_t>::quiet_NaN();
+
+  //! Event level quantities
+  int m_nmvtx_all = std::numeric_limits<int>::quiet_NaN();
+  int m_nintt_all = std::numeric_limits<int>::quiet_NaN();
+  int m_ntpc_hits0 = std::numeric_limits<int>::quiet_NaN();
+  int m_ntpc_hits1 = std::numeric_limits<int>::quiet_NaN();
+  int m_ntpc_clus0 = std::numeric_limits<int>::quiet_NaN();
+  int m_ntpc_clus1 = std::numeric_limits<int>::quiet_NaN();
+  int m_nmms_all  = std::numeric_limits<int>::quiet_NaN();
+  int m_nsiseed   = std::numeric_limits<int>::quiet_NaN();
+  int m_ntpcseed  = std::numeric_limits<int>::quiet_NaN();
+  int m_ntracks_all = std::numeric_limits<int>::quiet_NaN();
 
   //! Track level quantities
   uint64_t m_bco = std::numeric_limits<uint64_t>::quiet_NaN();

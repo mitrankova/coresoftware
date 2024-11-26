@@ -21,27 +21,32 @@ libzdcinfo_la_LIBADD = \
   -lfun4all \
   -lcalo_io \
   -lcdbobjects \
-  -lglobalvertex_io \
-  -ltrackbase_historic_io
+  -lffamodules \
+  -lglobalvertex_io
 
 pkginclude_HEADERS = \
   Zdcinfo.h \
   Zdcinfov1.h \
+  Zdcinfov2.h \
   ZdcReco.h
 
 ROOTDICTS = \
   Zdcinfo_Dict.cc \
-  Zdcinfov1_Dict.cc 
+  Zdcinfov1_Dict.cc \
+  Zdcinfov2_Dict.cc
 
 pcmdir = $(libdir)
 nobase_dist_pcm_DATA = \
   Zdcinfo_Dict_rdict.pcm \
-  Zdcinfov1_Dict_rdict.pcm 
+  Zdcinfov1_Dict_rdict.pcm \
+  Zdcinfov2_Dict_rdict.pcm
 
 libzdcinfo_io_la_SOURCES = \
   $(ROOTDICTS) \
   Zdcinfo.cc \
-  Zdcinfov1.cc 
+  Zdcinfov1.cc \
+  Zdcinfov2.cc
+
 
 libzdcinfo_la_SOURCES = \
   ZdcReco.cc

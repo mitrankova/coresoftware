@@ -95,7 +95,12 @@ void SingleGl1PoolInput::FillPool(const unsigned int /*nbclks*/)
     }
     int EventSequence = evt->getEvtSequence();
     Packet *packet = evt->getPacket(14001);
-
+    if (!packet)
+    {
+      std::cout << PHWHERE << "Packet 14001 is null ptr" << std::endl;
+      evt->identify();
+      continue;
+    }
     if (Verbosity() > 1)
     {
       packet->identify();
@@ -103,7 +108,6 @@ void SingleGl1PoolInput::FillPool(const unsigned int /*nbclks*/)
 
     Gl1Packet *newhit = new Gl1Packetv2();
     uint64_t gtm_bco = packet->lValue(0, "BCO");
-    m_BeamClockFEE.insert(gtm_bco);
     m_FEEBclkMap.insert(gtm_bco);
     newhit->setBCO(packet->lValue(0, "BCO"));
     newhit->setHitFormat(packet->getHitFormat());
@@ -160,13 +164,7 @@ void SingleGl1PoolInput::FillPool(const unsigned int /*nbclks*/)
 
 void SingleGl1PoolInput::Print(const std::string &what) const
 {
-  if (what == "ALL" || what == "FEE")
-  {
-    for (const auto &bcliter : m_BeamClockFEE)
-    {
-      std::cout << PHWHERE << "Beam clock 0x" << std::hex << bcliter << std::dec << std::endl;
-    }
-  }
+  
   if (what == "ALL" || what == "FEEBCLK")
   {
     for (auto bcliter : m_FEEBclkMap)
@@ -214,15 +212,12 @@ void SingleGl1PoolInput::CleanupUsedPackets(const uint64_t bclk)
       break;
     }
   }
-  // for (auto iter :  m_BeamClockFEE)
-  // {
-  //   iter.second.clear();
-  // }
+
 
   for (auto iter : toclearbclk)
   {
+    m_FEEBclkMap.erase(iter);
     m_BclkStack.erase(iter);
-    m_BeamClockFEE.erase(iter);
     m_Gl1RawHitMap.erase(iter);
   }
 }
@@ -261,7 +256,6 @@ void SingleGl1PoolInput::ClearCurrentEvent()
   //  std::cout << PHWHERE << "clearing bclk 0x" << std::hex << currentbclk << std::dec << std::endl;
   CleanupUsedPackets(currentbclk);
   // m_BclkStack.erase(currentbclk);
-  // m_BeamClockFEE.erase(currentbclk);
   return;
 }
 
@@ -316,12 +310,3 @@ void SingleGl1PoolInput::CreateDSTNode(PHCompositeNode *topNode)
     detNode->addNode(newNode);
   }
 }
-
-// void SingleGl1PoolInput::ConfigureStreamingInputManager()
-// {
-//   if (StreamingInputManager())
-//   {
-//     StreamingInputManager()->SetGl1BcoRange(m_BcoRange);
-//   }
-//   return;
-// }

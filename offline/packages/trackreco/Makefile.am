@@ -77,7 +77,8 @@ pkginclude_HEADERS = \
   PrelimDistortionCorrection.h \
   SecondaryVertexFinder.h \
   SvtxTrackStateRemoval.h \
-  TrackingIterationCounter.h
+  TrackingIterationCounter.h \
+  TpcSeedFilter.h
 
 ROOTDICTS = \
   AssocInfoContainer_Dict.cc \
@@ -162,7 +163,8 @@ libtrack_reco_la_SOURCES = \
   PrelimDistortionCorrection.cc \
   SecondaryVertexFinder.cc \
   SvtxTrackStateRemoval.cc \
-  TrackingIterationCounter.cc
+  TrackingIterationCounter.cc \
+  TpcSeedFilter.cc
 
 libtrack_reco_io_la_LIBADD = \
   -lphool
@@ -185,12 +187,12 @@ libtrack_reco_la_LIBADD = \
   -lintt_io \
   -lmicromegas_io \
   -lmvtx_io \
-  -lphparameter \
+  -lphparameter_io \
   -lPHGenFit \
   -lSubsysReco \
   -ltrack_io \
   -ltpc \
-  -ltrackbase_historic_io
+  -ltrackbase_historic
 
 
 # Rule for generating table CINT dictionaries.

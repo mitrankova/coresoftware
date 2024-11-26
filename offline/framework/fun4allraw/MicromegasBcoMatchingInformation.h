@@ -49,6 +49,9 @@ class MicromegasBcoMatchingInformation
     return m_multiplier;
   }
 
+  //! get adjusted multiplier
+  double get_adjusted_multiplier() const;
+
   //! print gtm bco information
   void print_gtm_bco_information() const;
 
@@ -84,15 +87,15 @@ class MicromegasBcoMatchingInformation
   //! cleanup
   void cleanup();
 
+  //! cleanup
+  void cleanup(uint64_t /*ref_bco*/);
+
   //@}
 
  private:
 
   //! update multiplier adjustment
   void update_multiplier_adjustment(uint64_t /* gtm_bco */, uint32_t /* fee_bco */);
-
-  //! get adjusted multiplier
-  double get_adjusted_multiplier() const;
 
   //! verbosity
   unsigned int m_verbosity = 0;

@@ -28,7 +28,7 @@ libcalo_reco_la_LIBADD = \
   -lgslcblas \
   -lglobalvertex_io \
   -lsph_onnx \
-  -lphparameter \
+  -lphparameter_io \
   -lphool \
   -lSubsysReco
 endif
@@ -55,6 +55,7 @@ pkginclude_HEADERS = \
   RawClusterBuilderGraph.h \
   RawClusterBuilderTopo.h \
   RawClusterBuilderTemplate.h \
+  RawClusterCNNClassifier.h \
   RawClusterPositionCorrection.h \
   RawClusterZVertexRecorrect.h \
   RawTowerCalibration.h \
@@ -84,6 +85,7 @@ libcalo_reco_la_SOURCES = \
   RawClusterBuilderGraph.cc \
   RawClusterBuilderTopo.cc \
   RawClusterBuilderTemplate.cc \
+  RawClusterCNNClassifier.cc \
   RawClusterPositionCorrection.cc \
   RawClusterZVertexRecorrect.cc \
   RawTowerCombiner.cc \

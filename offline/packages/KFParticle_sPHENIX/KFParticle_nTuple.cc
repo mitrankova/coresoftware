@@ -6,8 +6,11 @@
 
 #include <phool/PHNodeIterator.h>  // for PHNodeIterator
 #include <phool/getClass.h>
+#include <trackbase_historic/SvtxTrack.h>   
+#include <trackbase_historic/SvtxTrackMap.h>
 
 #include <KFParticle.h>
+#include <KFVertex.h>
 
 #include <Rtypes.h>
 #include <TString.h>  // for TString, operator+
@@ -23,21 +26,6 @@ class PHNode;
 
 /// Create necessary objects
 KFParticle_Tools kfpTupleTools;
-
-KFParticle_nTuple::KFParticle_nTuple()
-  : m_has_intermediates_nTuple(false)
-  , m_extrapolateTracksToSV_nTuple(true)
-  , m_constrain_to_vertex_nTuple(false)
-  , m_get_all_PVs(false)
-  , m_truth_matching(false)
-  , m_detector_info(false)
-  , m_calo_info(false)
-  , m_use_intermediate_name(true)
-  , m_get_charge_conjugate_nTuple(false)
-  , m_use_fake_pv_nTuple(false)
-  , m_tree(nullptr)
-{
-}  // Constructor
 
 void KFParticle_nTuple::initializeVariables()
 {
@@ -88,6 +76,7 @@ void KFParticle_nTuple::initializeBranches()
     m_tree->Branch(TString(mother_name) + "_decayLength", &m_calculated_mother_decaylength, TString(mother_name) + "_decayLength/F");
     m_tree->Branch(TString(mother_name) + "_decayLengthErr", &m_calculated_mother_decaylength_err, TString(mother_name) + "_decayLengthErr/F");
     m_tree->Branch(TString(mother_name) + "_DIRA", &m_calculated_mother_dira, TString(mother_name) + "_DIRA/F");
+    m_tree->Branch(TString(mother_name) + "_DIRA_xy", &m_calculated_mother_dira_xy, TString(mother_name) + "_DIRA_xy/F");
     m_tree->Branch(TString(mother_name) + "_FDchi2", &m_calculated_mother_fdchi2, TString(mother_name) + "_FDchi2/F");
     m_tree->Branch(TString(mother_name) + "_IP", &m_calculated_mother_ip, TString(mother_name) + "_IP/F");
     m_tree->Branch(TString(mother_name) + "_IPchi2", &m_calculated_mother_ipchi2, TString(mother_name) + "_IPchi2/F");
@@ -118,6 +107,7 @@ void KFParticle_nTuple::initializeBranches()
   m_tree->Branch(TString(mother_name) + "_vertex_volume", &m_calculated_mother_v, TString(mother_name) + "_vertex_volume/F");
   m_tree->Branch(TString(mother_name) + "_chi2", &m_calculated_mother_chi2, TString(mother_name) + "_chi2/F");
   m_tree->Branch(TString(mother_name) + "_nDoF", &m_calculated_mother_ndof, TString(mother_name) + "_nDoF/I");
+  m_tree->Branch(TString(mother_name) + "_SV_chi2_per_nDoF", &m_calculated_mother_SV_chi2_per_ndof, TString(mother_name) + "_SV_chi2_per_nDoF/F");
   m_tree->Branch(TString(mother_name) + "_PDG_ID", &m_calculated_mother_pdgID, TString(mother_name) + "_PDG_ID/I");
   m_tree->Branch(TString(mother_name) + "_Covariance", &m_calculated_mother_cov, TString(mother_name) + "_Covariance[21]/F", 21);
 
@@ -126,15 +116,7 @@ void KFParticle_nTuple::initializeBranches()
   {
     for (int i = 0; i < m_num_intermediate_states_nTuple; ++i)
     {
-      std::string intermediate_name;
-      if (!m_use_intermediate_name)
-      {
-        intermediate_name = "intermediate_" + std::to_string(i + 1);
-      }
-      else
-      {
-        intermediate_name = m_intermediate_name_ntuple[i];
-      }
+      std::string intermediate_name = m_intermediate_name_ntuple[i];
 
       // Note, TBranch will not allow the leaf to contain a forward slash as it is used to define the branch type. Causes problems with J/psi
       for (auto const& [badString, goodString] : forbiddenStrings)
@@ -184,6 +166,7 @@ void KFParticle_nTuple::initializeBranches()
       m_tree->Branch(TString(intermediate_name) + "_vertex_volume", &m_calculated_intermediate_v[i], TString(intermediate_name) + "_vertex_volume/F");
       m_tree->Branch(TString(intermediate_name) + "_chi2", &m_calculated_intermediate_chi2[i], TString(intermediate_name) + "_chi2/F");
       m_tree->Branch(TString(intermediate_name) + "_nDoF", &m_calculated_intermediate_ndof[i], TString(intermediate_name) + "_nDoF/I");
+      m_tree->Branch(TString(intermediate_name) + "_SV_chi2_per_nDoF", &m_calculated_intermediate_SV_chi2_per_ndof[i], TString(intermediate_name) + "_SV_chi2_per_nDoF/F");
       m_tree->Branch(TString(intermediate_name) + "_PDG_ID", &m_calculated_intermediate_pdgID[i], TString(intermediate_name) + "_PDG_ID/I");
       m_tree->Branch(TString(intermediate_name) + "_Covariance", &m_calculated_intermediate_cov[i], TString(intermediate_name) + "_Covariance[21]/F", 21);
 
@@ -235,6 +218,7 @@ void KFParticle_nTuple::initializeBranches()
     m_tree->Branch(TString(daughter_number) + "_pTErr", &m_calculated_daughter_pt_err[i], TString(daughter_number) + "_pTErr/F");
     m_tree->Branch(TString(daughter_number) + "_jT", &m_calculated_daughter_jt[i], TString(daughter_number) + "_jT/F");
     m_tree->Branch(TString(daughter_number) + "_charge", &m_calculated_daughter_q[i], TString(daughter_number) + "_charge/B");
+    m_tree->Branch(TString(daughter_number) + "_bunch_crossing", &m_calculated_daughter_bunch_crossing[i], TString(daughter_number) + "_bunch_crossing/I");
     m_tree->Branch(TString(daughter_number) + "_pseudorapidity", &m_calculated_daughter_eta[i], TString(daughter_number) + "_pseudorapidity/F");
     m_tree->Branch(TString(daughter_number) + "_rapidity", &m_calculated_daughter_rapidity[i], TString(daughter_number) + "_rapidity/F");
     m_tree->Branch(TString(daughter_number) + "_theta", &m_calculated_daughter_theta[i], TString(daughter_number) + "_theta/F");
@@ -269,6 +253,11 @@ void KFParticle_nTuple::initializeBranches()
         std::string dca_branch_name = "track_" + std::to_string(i + 1) + "_track_" + std::to_string(j + 1) + "_DCA";
         std::string dca_leaf_name = dca_branch_name + "/F";
         m_tree->Branch(dca_branch_name.c_str(), &m_daughter_dca[iter], dca_leaf_name.c_str());
+
+        std::string dca_branch_name_xy = dca_branch_name + "_xy";
+        std::string dca_leaf_name_xy = dca_branch_name_xy + "/F";
+        m_tree->Branch(dca_branch_name_xy.c_str(), &m_daughter_dca_xy[iter], dca_leaf_name_xy.c_str());
+
         ++iter;
       }
     }
@@ -390,6 +379,7 @@ void KFParticle_nTuple::fillBranch(PHCompositeNode* topNode,
   if (m_constrain_to_vertex_nTuple)
   {
     m_calculated_mother_dira = kfpTupleTools.eventDIRA(motherParticle, vertex_fillbranch);
+    m_calculated_mother_dira_xy = kfpTupleTools.eventDIRA(motherParticle, vertex_fillbranch, false);
     m_calculated_mother_fdchi2 = kfpTupleTools.flightDistanceChi2(motherParticle, vertex_fillbranch);
     m_calculated_mother_ip = motherParticle.GetDistanceFromVertex(vertex_fillbranch);
     m_calculated_mother_ipchi2 = motherParticle.GetDeviationFromVertex(vertex_fillbranch);
@@ -510,6 +500,11 @@ void KFParticle_nTuple::fillBranch(PHCompositeNode* topNode,
       m_calculated_daughter_cov[i][j] = daughterArray[i].GetCovariance(j);
     }
 
+    //Now get bunch crossing number for the daughter particle
+    SvtxTrackMap *thisTrackMap = findNode::getClass<SvtxTrackMap>(topNode, m_trk_map_node_name_nTuple.c_str());
+    SvtxTrack *thisTrack = getTrack(daughterArray[i].Id(), thisTrackMap);
+    m_calculated_daughter_bunch_crossing[i] = thisTrack->get_crossing(); 
+
     if (m_calo_info)
     {
       fillCaloBranch(topNode, m_tree, daughterArray[i], i);
@@ -528,21 +523,30 @@ void KFParticle_nTuple::fillBranch(PHCompositeNode* topNode,
     }
   }
 
+  KFVertex motherDecayVertex;
+
   int iter = 0;
   // Calcualte jT wrt their own mother, not grandmother
   for (int k = 0; k < m_num_intermediate_states_nTuple; ++k)
   {
+    KFVertex intermediateDecayVertex;
     for (int j = 0; j < m_num_tracks_from_intermediate_nTuple[k]; ++j)
     {
       m_calculated_daughter_jt[iter] = kfpTupleTools.calculateJT(intermediateArray[k], daughterArray[iter]);
+      intermediateDecayVertex += daughterArray[iter];
       ++iter;
     }
+    m_calculated_intermediate_SV_chi2_per_ndof[k] = intermediateDecayVertex.GetChi2() / intermediateDecayVertex.GetNDF();
+    motherDecayVertex += intermediateArray[k];
   }
   for (int k = 0; k < num_remaining_tracks; k++)
   {
     m_calculated_daughter_jt[iter] = kfpTupleTools.calculateJT(motherParticle, daughterArray[iter]);
+    motherDecayVertex += daughterArray[iter];
     ++iter;
   }
+
+  m_calculated_mother_SV_chi2_per_ndof = motherDecayVertex.GetChi2() / motherDecayVertex.GetNDF();
 
   iter = 0;
   for (int i = 0; i < m_num_tracks_nTuple; ++i)
@@ -552,6 +556,7 @@ void KFParticle_nTuple::fillBranch(PHCompositeNode* topNode,
       if (i < j)
       {
         m_daughter_dca[iter] = daughterArray[i].GetDistanceFromParticle(daughterArray[j]);
+        m_daughter_dca_xy[iter] = daughterArray[i].GetDistanceFromParticleXY(daughterArray[j]);
         ++iter;
       }
     }
@@ -588,7 +593,7 @@ void KFParticle_nTuple::fillBranch(PHCompositeNode* topNode,
     {
       m_calculated_vertex_cov[j] = vertex_fillbranch.GetCovariance(j);
     }
-    m_calculated_vertex_nTracks = m_use_fake_pv_nTuple ? 0 : kfpTupleTools.getTracksFromVertex(topNode, vertex_fillbranch, m_vtx_map_node_name_nTuple);
+    m_calculated_vertex_nTracks = m_use_fake_pv_nTuple || m_use_mbd_vertex_truth ? 0 : kfpTupleTools.getTracksFromVertex(topNode, vertex_fillbranch, m_vtx_map_node_name_nTuple);
   }
 
   m_sv_mass = calc_secondary_vertex_mass_noPID(daughters);

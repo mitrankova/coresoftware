@@ -271,6 +271,7 @@ int MbdEvent::InitRun()
 
 int MbdEvent::End()
 {
+  //std::cout << "MbdEvent::End()" << std::endl;
   if ( _calpass == 1 )
   {
     CalcSampMaxCalib();
@@ -278,7 +279,8 @@ int MbdEvent::End()
     std::string fname = _caldir.Data(); fname += "mbd_sampmax.calib";
     _mbdcal->Write_SampMax( fname );
 
-    fname = _caldir.Data(); fname += "mbd_sampmax.root";
+    fname = _caldir.Data(); fname += "mbd_sampmax_";
+    fname += std::to_string(_runnum); fname += ".root";
 #ifndef ONLINE
     _mbdcal->Write_CDB_SampMax( fname );
 #endif
@@ -296,7 +298,9 @@ int MbdEvent::End()
     std::string pedfname = _caldir.Data(); pedfname += "mbd_ped.calib";
     _mbdcal->Write_Ped( pedfname );
 
-    pedfname = _caldir.Data(); pedfname += "mbd_ped.root";
+    pedfname = _caldir.Data(); pedfname += "mbd_ped_"; 
+    pedfname += std::to_string(_runnum); pedfname += ".root";
+    //std::cout << "PEDFNAME " << pedfname << std::endl;
 #ifndef ONLINE
     _mbdcal->Write_CDB_Ped( pedfname );
 #endif
@@ -628,7 +632,7 @@ int MbdEvent::ProcessRawPackets(MbdPmtContainer *bbcpmts)
 
       // calpass 2, uncal_mbd. template fit. make sure qgain = 1, tq_t0 = 0
  
-      if (m_ampl[ifeech] < _mbdcal->get_qgain(pmtch) * 0.25)
+      if ( (m_ampl[ifeech] < (_mbdcal->get_qgain(pmtch) * 0.25)) && (_runnum < 40000) )
       {
         // m_t0[ifeech] = -9999.;
         m_pmttq[pmtch] = std::numeric_limits<Float_t>::quiet_NaN();
@@ -672,7 +676,7 @@ int MbdEvent::ProcessRawPackets(MbdPmtContainer *bbcpmts)
       }
       */
     }
-    else
+    else  // not a good time hit
     {
       m_pmtq[pmtch] = 0.;
       m_pmttq[pmtch] = std::numeric_limits<Float_t>::quiet_NaN();
@@ -787,9 +791,9 @@ int MbdEvent::Calculate(MbdPmtContainer *bbcpmts, MbdOut *bbcout)
     float t_pmt = bbcpmt->get_time();  // hit time of pmt
     float q_pmt = bbcpmt->get_q();     // charge in pmt
 
-    if (_verbose >= 10 && !isnan(t_pmt) )
+    if (_verbose >= 10 && !std::isnan(t_pmt) )
     {
-      std::cout << ipmt << "\t" << t_pmt << std::endl;
+      std::cout << ipmt << "\t" << t_pmt << "\t" << q_pmt << std::endl;
     }
 
     if (fabs(t_pmt) < 25. && q_pmt > 0.)
@@ -943,11 +947,12 @@ int MbdEvent::Calculate(MbdPmtContainer *bbcpmts, MbdOut *bbcout)
       std::cout << "bbcn " << m_bbcn[0] << "\t" << m_bbcn[1] << std::endl;
       std::cout << "bbcq " << m_bbcq[0] << "\t" << m_bbcq[1] << std::endl;
     }
-    m_bbcz = (m_bbct[0] - m_bbct[1]) * TMath::C() * 1e-7 / 2.0;  // in cm
-    m_bbct0 = (m_bbct[0] + m_bbct[1]) / 2.0;
+    m_bbcz = (m_bbct[0] - m_bbct[1]) * TMath::C() * 1e-7 / 2.0;   // in cm
+    m_bbct0 = (m_bbct[0] + m_bbct[1]) / 2.0;                      // in ns
 
-    // correct z-vertex
-    // m_bbcz += bz_offset;
+    // correct t0
+    m_bbct0 -= _mbdcal->get_t0corr();
+    //std::cout << "correcting m_bbct0 with " << _mbdcal->get_t0corr() << std::endl;
 
     // hard code these for now
     // need study to determine muliplicity dependence

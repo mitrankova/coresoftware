@@ -20,9 +20,11 @@ pkginclude_HEADERS = \
   Fun4AllPrdfOutputManager.h \
   Fun4AllRolloverFileOutStream.h \
   Fun4AllStreamingInputManager.h \
+  intt_pool.h \
   InputManagerType.h \
   MicromegasBcoMatchingInformation.h\
-	MvtxRawDefs.h \
+  MicromegasBcoMatchingInformation_v2.h\
+  MvtxRawDefs.h \
   SingleCemcTriggerInput.h \
   SingleGl1PoolInput.h \
   SingleGl1TriggerInput.h \
@@ -30,6 +32,8 @@ pkginclude_HEADERS = \
   SingleLL1TriggerInput.h \
   SingleMbdTriggerInput.h \
   SingleMicromegasPoolInput.h \
+  SingleMicromegasPoolInput_v1.h \
+  SingleMicromegasPoolInput_v2.h \
   SingleInttEventInput.h \
   SingleInttPoolInput.h \
   SingleMvtxPoolInput.h \
@@ -38,7 +42,9 @@ pkginclude_HEADERS = \
   SingleTpcPoolInput.h \
   SingleTriggerInput.h \
   SingleZdcInput.h \
-  SingleZdcTriggerInput.h
+  SingleZdcTriggerInput.h \
+  SingleTpcTimeFrameInput.h \
+  TpcTimeFrameBuilder.h
 
 decoderincludedir = $(includedir)/mvtx_decoder
 decoderinclude_HEADERS = \
@@ -50,7 +56,7 @@ decoderinclude_HEADERS = \
   mvtx_decoder/PayLoadCont.h \
   mvtx_decoder/PayLoadSG.h \
   mvtx_decoder/PixelData.h \
-	mvtx_decoder/StrobeData.h
+  mvtx_decoder/StrobeData.h
 
 lib_LTLIBRARIES = \
   libmvtx_decoder.la \
@@ -64,7 +70,7 @@ libmvtx_decoder_la_SOURCES =\
   mvtx_decoder/InteractionRecord.cc \
   mvtx_decoder/PayLoadCont.cc \
   mvtx_decoder/PixelData.cc \
-	mvtx_decoder/StrobeData.cc
+  mvtx_decoder/StrobeData.cc
 
 libfun4allraw_la_SOURCES = \
   Fun4AllEventOutStream.cc \
@@ -78,6 +84,7 @@ libfun4allraw_la_SOURCES = \
   Fun4AllStreamingInputManager.cc \
   intt_pool.cc \
   MicromegasBcoMatchingInformation.cc\
+  MicromegasBcoMatchingInformation_v2.cc\
   mvtx_pool.cc \
   MvtxRawDefs.cc \
   SingleCemcTriggerInput.cc \
@@ -88,7 +95,8 @@ libfun4allraw_la_SOURCES = \
   SingleInttPoolInput.cc \
   SingleLL1TriggerInput.cc \
   SingleMbdTriggerInput.cc \
-  SingleMicromegasPoolInput.cc \
+  SingleMicromegasPoolInput_v1.cc \
+  SingleMicromegasPoolInput_v2.cc \
   SingleMvtxPoolInput.cc \
   SinglePrdfInput.cc \
   SingleStreamingInput.cc \
@@ -96,7 +104,9 @@ libfun4allraw_la_SOURCES = \
   SingleTriggerInput.cc \
   SingleZdcInput.cc \
   SingleZdcTriggerInput.cc \
-  tpc_pool.cc
+  tpc_pool.cc \
+  SingleTpcTimeFrameInput.cc \
+  TpcTimeFrameBuilder.cc
 
 libfun4allraw_la_LIBADD = \
   libmvtx_decoder.la \

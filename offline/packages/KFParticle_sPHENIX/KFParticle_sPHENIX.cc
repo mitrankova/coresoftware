@@ -21,6 +21,8 @@
 
 #include "KFParticle_sPHENIX.h"
 
+#include <globalvertex/MbdVertex.h>
+#include <globalvertex/MbdVertexMap.h>
 #include <globalvertex/SvtxVertexMap.h>
 #include <trackbase_historic/SvtxTrackMap.h>
 
@@ -127,15 +129,31 @@ int KFParticle_sPHENIX::process_event(PHCompositeNode *topNode)
 
   if (!m_use_fake_pv)
   {
-    SvtxVertexMap *check_vertexmap = findNode::getClass<SvtxVertexMap>(topNode, m_vtx_map_node_name);
-    if (check_vertexmap->size() == 0)
+    if (m_use_mbd_vertex)
     {
-      if (Verbosity() >= VERBOSITY_SOME)
+      MbdVertexMap* check_vertexmap = findNode::getClass<MbdVertexMap>(topNode, "MbdVertexMap");
+      if (check_vertexmap->size() == 0)
       {
-        std::cout << "KFParticle: Event skipped as there are no vertices" << std::endl;
+        if (Verbosity() >= VERBOSITY_SOME)
+        {
+          std::cout << "KFParticle: Event skipped as there are no vertices" << std::endl;
+        }
+        return Fun4AllReturnCodes::ABORTEVENT;
       }
-      return Fun4AllReturnCodes::ABORTEVENT;
     }
+    else
+    {
+      SvtxVertexMap* check_vertexmap = findNode::getClass<SvtxVertexMap>(topNode, m_vtx_map_node_name);
+      if (check_vertexmap->size() == 0)
+      {
+        if (Verbosity() >= VERBOSITY_SOME)
+        {
+          std::cout << "KFParticle: Event skipped as there are no vertices" << std::endl;
+        }
+        return Fun4AllReturnCodes::ABORTEVENT;
+      }
+    }
+
   }
 
   SvtxTrackMap *check_trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trk_map_node_name);
@@ -148,7 +166,9 @@ int KFParticle_sPHENIX::process_event(PHCompositeNode *topNode)
     return Fun4AllReturnCodes::ABORTEVENT;
   }
 
-  createDecay(topNode, mother, vertex_kfparticle, daughters, intermediates, nPVs, multiplicity);
+  multiplicity = check_trackmap->size();
+
+  createDecay(topNode, mother, vertex_kfparticle, daughters, intermediates, nPVs);
 
   if (!m_has_intermediates_sPHENIX)
   {
@@ -300,7 +320,7 @@ int KFParticle_sPHENIX::parseDecayDescriptor()
   if (checkForCC == "[]CC")
   {
     manipulateDecayDescriptor = manipulateDecayDescriptor.substr(1, manipulateDecayDescriptor.size() - 4);
-    getChargeConjugate(true);
+    getChargeConjugate();
   }
 
   // Find the initial particle
@@ -448,7 +468,7 @@ int KFParticle_sPHENIX::parseDecayDescriptor()
 
   if (intermediates_name.size() > 0)
   {
-    hasIntermediateStates(true);
+    hasIntermediateStates();
     setIntermediateStates(intermediate_list);
     setNumberOfIntermediateStates(intermediates_name.size());
     setNumberTracksFromIntermeditateState(m_nTracksFromIntermediates);

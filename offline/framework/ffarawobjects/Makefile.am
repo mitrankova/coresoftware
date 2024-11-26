@@ -5,7 +5,7 @@ lib_LTLIBRARIES = \
 
 AM_CPPFLAGS = \
   -I$(includedir) \
-  -I$(OFFLINE_MAIN)/include \
+  -isystem$(OFFLINE_MAIN)/include \
   -isystem$(ROOTSYS)/include
 
 AM_LDFLAGS = \
@@ -39,7 +39,11 @@ ROOTDICTS = \
   MicromegasRawHit_Dict.cc \
   MicromegasRawHitContainer_Dict.cc \
   MicromegasRawHitContainerv1_Dict.cc \
+  MicromegasRawHitContainerv2_Dict.cc \
+  MicromegasRawHitContainerv3_Dict.cc \
   MicromegasRawHitv1_Dict.cc \
+  MicromegasRawHitv2_Dict.cc \
+  MicromegasRawHitv3_Dict.cc \
   MvtxRawHit_Dict.cc \
   MvtxRawHitv1_Dict.cc \
   MvtxRawHitContainer_Dict.cc \
@@ -54,7 +58,11 @@ ROOTDICTS = \
   TpcRawHit_Dict.cc \
   TpcRawHitContainer_Dict.cc \
   TpcRawHitContainerv1_Dict.cc \
-  TpcRawHitv1_Dict.cc
+  TpcRawHitContainerv2_Dict.cc \
+  TpcRawHitContainerv3_Dict.cc \
+  TpcRawHitv1_Dict.cc \
+  TpcRawHitv2_Dict.cc \
+  TpcRawHitv3_Dict.cc
 
 pcmdir = $(libdir)
 nobase_dist_pcm_DATA = \
@@ -81,7 +89,11 @@ nobase_dist_pcm_DATA = \
   MicromegasRawHit_Dict_rdict.pcm \
   MicromegasRawHitContainer_Dict_rdict.pcm \
   MicromegasRawHitContainerv1_Dict_rdict.pcm \
+  MicromegasRawHitContainerv2_Dict_rdict.pcm \
+  MicromegasRawHitContainerv3_Dict_rdict.pcm \
   MicromegasRawHitv1_Dict_rdict.pcm \
+  MicromegasRawHitv2_Dict_rdict.pcm \
+  MicromegasRawHitv3_Dict_rdict.pcm \
   MvtxRawHit_Dict_rdict.pcm \
   MvtxRawHitv1_Dict_rdict.pcm \
   MvtxRawHitContainer_Dict_rdict.pcm \
@@ -96,7 +108,11 @@ nobase_dist_pcm_DATA = \
   TpcRawHit_Dict_rdict.pcm \
   TpcRawHitContainer_Dict_rdict.pcm \
   TpcRawHitContainerv1_Dict_rdict.pcm \
-  TpcRawHitv1_Dict_rdict.pcm
+  TpcRawHitContainerv2_Dict_rdict.pcm \
+  TpcRawHitContainerv3_Dict_rdict.pcm \
+  TpcRawHitv1_Dict_rdict.pcm \
+  TpcRawHitv2_Dict_rdict.pcm \
+  TpcRawHitv3_Dict_rdict.pcm
 
 pkginclude_HEADERS = \
   CaloPacket.h \
@@ -122,7 +138,11 @@ pkginclude_HEADERS = \
   MicromegasRawHit.h \
   MicromegasRawHitContainer.h \
   MicromegasRawHitContainerv1.h \
+  MicromegasRawHitContainerv2.h \
+  MicromegasRawHitContainerv3.h \
   MicromegasRawHitv1.h \
+  MicromegasRawHitv2.h \
+  MicromegasRawHitv3.h \
   MvtxRawHit.h \
   MvtxRawHitv1.h \
   MvtxRawHitContainer.h \
@@ -137,7 +157,11 @@ pkginclude_HEADERS = \
   TpcRawHit.h \
   TpcRawHitContainer.h \
   TpcRawHitContainerv1.h \
-  TpcRawHitv1.h
+  TpcRawHitContainerv2.h \
+  TpcRawHitContainerv3.h \
+  TpcRawHitv1.h \
+  TpcRawHitv2.h \
+  TpcRawHitv3.h
 
 libffarawobjects_la_SOURCES = \
   $(ROOTDICTS) \
@@ -155,7 +179,11 @@ libffarawobjects_la_SOURCES = \
   LL1Packetv1.cc \
   LL1PacketContainerv1.cc \
   MicromegasRawHitContainerv1.cc \
+  MicromegasRawHitContainerv2.cc \
+  MicromegasRawHitContainerv3.cc \
   MicromegasRawHitv1.cc \
+  MicromegasRawHitv2.cc \
+  MicromegasRawHitv3.cc \
   MvtxRawHitv1.cc \
   MvtxRawHitContainerv1.cc \
   MvtxFeeIdInfov1.cc \
@@ -164,7 +192,11 @@ libffarawobjects_la_SOURCES = \
   OfflinePacket.cc \
   OfflinePacketv1.cc \
   TpcRawHitContainerv1.cc \
-  TpcRawHitv1.cc
+  TpcRawHitContainerv2.cc \
+  TpcRawHitContainerv3.cc \
+  TpcRawHitv1.cc \
+  TpcRawHitv2.cc \
+  TpcRawHitv3.cc
 
 BUILT_SOURCES = testexternals.cc
 

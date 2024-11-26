@@ -15,6 +15,8 @@
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrDefs.h>
 
+//#include <ffaobjects/SyncObject.h>
+
 #include <fun4all/SubsysReco.h>
 
 #include <memory>
@@ -24,6 +26,7 @@ class PHCompositeNode;
 // class CMFlashClusterContainer;
 class CMFlashDifferenceContainer;
 class LaserClusterContainer;
+class EventHeader;
 
 class TF1;
 class TFile;
@@ -79,6 +82,22 @@ class TpcCentralMembraneMatching : public SubsysReco
     m_fieldOn = fieldOn;
   }
 
+  void set_doFancy(bool fancy)
+  {
+    m_doFancy = fancy;
+  }
+
+  void set_doHadd(bool hadd)
+  {
+    m_doHadd = hadd;
+  }
+
+  void set_event_sequence(int seq)
+  {
+    m_event_sequence = seq;
+    m_event_index = 100*seq;
+  }
+
   void set_grid_dimensions(int phibins, int rbins);
 
   //! run initialization
@@ -91,6 +110,8 @@ class TpcCentralMembraneMatching : public SubsysReco
   int End(PHCompositeNode *topNode) override;
 
  private:
+  EventHeader *eventHeader{nullptr};
+
   int GetNodes(PHCompositeNode *topNode);
 
   double getPhiRotation_smoothed(TH1 *hitHist, TH1 *clustHist, bool side);
@@ -100,19 +121,23 @@ class TpcCentralMembraneMatching : public SubsysReco
   void getRegionPhiRotation(bool side);
 
   int getClusterRMatch(double clusterR, int side);
-  /// tpc distortion correction utility class
+
+  //! tpc distortion correction utility class
   TpcDistortionCorrection m_distortionCorrection;
 
-  // CMFlashClusterContainer *m_corrected_CMcluster_map{nullptr};
+  //! CMFlashClusterContainer *m_corrected_CMcluster_map{nullptr};
   LaserClusterContainer *m_corrected_CMcluster_map{nullptr};
   CMFlashDifferenceContainer *m_cm_flash_diffs{nullptr};
 
-  /// static distortion container
+  //!@name distortion correction containers
+  //@{
   /** used in input to correct CM clusters before calculating residuals */
+  TpcDistortionCorrectionContainer *m_dcc_in_module_edge{nullptr};
   TpcDistortionCorrectionContainer *m_dcc_in_static{nullptr};
   TpcDistortionCorrectionContainer *m_dcc_in_average{nullptr};
+  //@}
 
-  /// fluctuation distortion container
+  //! fluctuation distortion container
   /** used in output to write fluctuation distortions */
   TpcDistortionCorrectionContainer *m_dcc_out{nullptr};
 
@@ -160,7 +185,10 @@ class TpcCentralMembraneMatching : public SubsysReco
   //  TNtuple *match_ntup {nullptr};
   TTree *match_tree{nullptr};
 
+  bool m_useHeader{true};
+
   int m_event_index{0};
+  int m_event_sequence{0};
   bool m_matched{false};
   int m_truthIndex{0};
   float m_truthR{0.0};
@@ -168,6 +196,8 @@ class TpcCentralMembraneMatching : public SubsysReco
   float m_recoR{0.0};
   float m_recoPhi{0.0};
   float m_recoZ{0.0};
+  float m_rawR{0.0};
+  float m_rawPhi{0.0};
   bool m_side{false};
   unsigned int m_adc{0};
   unsigned int m_nhits{0};
@@ -184,6 +214,10 @@ class TpcCentralMembraneMatching : public SubsysReco
   int m_highShift{0};
   float m_phiRotation{0.0};
   float m_distanceToTruth{0.0};
+  float m_NNDistance{0.0};
+  float m_NNR{0.0};
+  float m_NNPhi{0.0};
+  int m_NNIndex{0};
 
   //@}
 
@@ -194,7 +228,7 @@ class TpcCentralMembraneMatching : public SubsysReco
 
   /// phi cut for matching clusters to pad
   /** TODO: this will need to be adjusted to match beam-induced time averaged distortions */
-  double m_phi_cut{0.02};
+  double m_phi_cut{0.025};
 
   ///@name distortion correction histograms
   //@{
@@ -282,6 +316,7 @@ class TpcCentralMembraneMatching : public SubsysReco
 
   /// store centers of all central membrane pads
   std::vector<TVector3> m_truth_pos;
+  std::vector<int> m_truth_index;
 
   std::vector<double> m_truth_RPeaks{22.709, 23.841, 24.973, 26.1049, 27.2369, 28.3689, 29.5009, 30.6328, 31.7648, 32.8968, 34.0288, 35.1607, 36.2927, 37.4247, 38.5566, 39.6886, 42.1706, 44.2119, 46.2533, 48.2947, 50.3361, 52.3774, 54.4188, 56.4602, 59.4605, 61.6546, 63.8487, 66.0428, 68.2369, 70.431, 72.6251, 74.8192};
 
@@ -289,6 +324,8 @@ class TpcCentralMembraneMatching : public SubsysReco
 
   bool m_fixShifts{false};
   bool m_fieldOn{true};
+  bool m_doFancy{false};
+  bool m_doHadd{false};
 
   std::vector<double> m_reco_RPeaks[2];
   double m_m[2]{};

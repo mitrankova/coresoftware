@@ -30,12 +30,21 @@ class SingleStreamingInput : public Fun4AllBase, public InputFileHandler
   virtual void AllDone(const int i) { m_AllDone = i; }
   virtual void EventNumberOffset(const int i) { m_EventNumberOffset = i; }
   virtual void Print(const std::string &what = "ALL") const override;
-  virtual void CleanupUsedPackets(const uint64_t) { return; }
+
+  //! remove used packets matching a given BCO from internal container
+  virtual void CleanupUsedPackets(const uint64_t /*BCO*/) {}
+
+  //! remove used packets matching a given BCO from internal container
+  /**
+   * second parameter is to specify whether BCO has been
+   * - succesfully processed or
+   * - is dropped
+   */
+  virtual void CleanupUsedPackets(const uint64_t /*BCO*/ ,bool /*dropped*/) {}
+
   virtual bool CheckPoolDepth(const uint64_t bclk);
   virtual void ClearCurrentEvent();
   virtual Eventiterator *GetEventiterator() const { return m_EventIterator; }
-  /* virtual Fun4AllEvtInputPoolManager *InputManager() { return m_InputMgr; } */
-  /* virtual void InputManager(Fun4AllEvtInputPoolManager *in) { m_InputMgr = in; } */
   virtual Fun4AllStreamingInputManager *StreamingInputManager() { return m_StreamingInputMgr; }
   virtual void StreamingInputManager(Fun4AllStreamingInputManager *in) { m_StreamingInputMgr = in; }
   virtual void CreateDSTNode(PHCompositeNode *) { return; }
@@ -44,14 +53,61 @@ class SingleStreamingInput : public Fun4AllBase, public InputFileHandler
   virtual int SubsystemEnum() const { return m_SubsystemEnum; }
   void MaxBclkDiff(uint64_t ui) { m_MaxBclkSpread = ui; }
   uint64_t MaxBclkDiff() const { return m_MaxBclkSpread; }
-  virtual const std::map<int, std::set<uint64_t>>& BclkStackMap() const { return m_BclkStackPacketMap; }
-  virtual const std::set<uint64_t>& BclkStack() const { return m_BclkStack; }
-  virtual const std::map<uint64_t, std::set<int>>& BeamClockFEE() const { return m_BeamClockFEE; }
+  virtual const std::map<int, std::set<uint64_t>> &BclkStackMap() const { return m_BclkStackPacketMap; }
+  virtual const std::set<uint64_t> &BclkStack() const { return m_BclkStack; }
+  virtual const std::map<uint64_t, std::set<int>> &BeamClockFEE() const { return m_BeamClockFEE; }
   void setHitContainerName(const std::string &name) { m_rawHitContainerName = name; }
   std::string getHitContainerName() const { return m_rawHitContainerName; }
+  const std::map<int, std::set<uint64_t>> &getFeeGTML1BCOMap() const { return m_FeeGTML1BCOMap; }
+
+  //! event assembly QA histograms
+  virtual void createQAHistos() {}
+
+  //! event assembly QA for a given BCO
+  /** TODO: check whether necessary */
+  virtual void FillBcoQA(uint64_t /*gtm_bco*/) {};
+
+  void clearPacketBClkStackMap(const uint64_t& bclk)
+
+  {
+    for(auto& [packetid, set] : m_BclkStackPacketMap)
+    {
+    
+      for(auto it = set.begin(); it != set.end();)
+    {
+      if(*it <= bclk)
+      {
+        it = set.erase(it);
+      }
+      else
+      {
+        ++it;
+      }
+    }
+    }
+  }
+  void clearFeeGTML1BCOMap(const uint64_t &bclk)
+  {
+    for (auto &[key, set] : m_FeeGTML1BCOMap)
+    {
+      for(auto it = set.begin(); it != set.end();)
+      {
+        if(*it <= bclk)
+        {
+          it = set.erase(it);
+        }
+        else
+        {
+          ++it;
+        }
+      }
+      
+    }
+  }
 
  protected:
   std::map<int, std::set<uint64_t>> m_BclkStackPacketMap;
+  std::map<int, std::set<uint64_t>> m_FeeGTML1BCOMap;
   std::string m_rawHitContainerName = "";
 
  private:
