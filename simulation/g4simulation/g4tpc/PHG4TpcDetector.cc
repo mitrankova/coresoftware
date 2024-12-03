@@ -746,7 +746,7 @@ void PHG4TpcDetector::add_geometry_node()
       layerseggeo->set_sector_min_phi(sector_min_Phi);
       layerseggeo->set_sector_max_phi(sector_max_Phi);
       if(layer -7 >=0) layerseggeo->set_layer_pad_phi(pad_phi[layer - 7]);
-//      else layerseggeo->set_layer_pad_phi(0);
+      else layerseggeo->set_layer_pad_phi(0);
 
       // Chris Pinkenburg: greater causes huge memory growth which causes problems
       // on our farm. If you need to increase this - TALK TO ME first
