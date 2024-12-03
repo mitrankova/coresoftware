@@ -636,6 +636,8 @@ void PHG4TpcDetector::add_geometry_node()
 
     // Replace the original phi vector with the sorted one
         pad_phi[layer] = sorted_phi;
+std::cout<<"!!!!!Layer "<<layer<<" pad_num size "<<pad_num[layer].size()<<" NPhiBins "<<NPhiBins[(int)layer/16]<<std::endl; 
+
   }
 
   // should move to a common file
