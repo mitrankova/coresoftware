@@ -36,6 +36,10 @@ lib_LTLIBRARIES = \
 
 pkginclude_HEADERS = \
   LaserClusterizer.h \
+  LaserEventInfo.h \
+  LaserEventInfov1.h \
+  LaserEventIdentifier.h \
+  LaserEventRejecter.h \
   TrainingHitsContainer.h \
   TrainingHits.h \
   Tpc3DClusterizer.h \
@@ -45,6 +49,7 @@ pkginclude_HEADERS = \
   TpcClusterMover.h \
   TpcClusterZCrossingCorrection.h \
   TpcCombinedRawDataUnpacker.h \
+  TpcCombinedRawDataUnpackerDebug.h \
   TpcDistortionCorrection.h \
   TpcDistortionCorrectionContainer.h \
   TpcGlobalPositionWrapper.h \
@@ -54,11 +59,15 @@ pkginclude_HEADERS = \
   TpcSimpleClusterizer.h
 
 ROOTDICTS = \
+  LaserEventInfo_Dict.cc \
+  LaserEventInfov1_Dict.cc \
   TrainingHitsContainer_Dict.cc \
   TrainingHits_Dict.cc
 
 pcmdir = $(libdir)
 nobase_dist_pcm_DATA = \
+  LaserEventInfo_Dict_rdict.pcm \
+  LaserEventInfov1_Dict_rdict.pcm \
   TrainingHitsContainer_Dict_rdict.pcm \
   TrainingHits_Dict_rdict.pcm
 
@@ -69,11 +78,15 @@ dist_mydata_DATA = \
 # sources for tpc library
 libtpc_la_SOURCES = \
   LaserClusterizer.cc \
+  LaserEventInfov1.cc \
+  LaserEventIdentifier.cc \
+  LaserEventRejecter.cc \
   TpcRawDataTree.cc \
   Tpc3DClusterizer.cc \
   TpcClusterCleaner.cc \
   TpcClusterizer.cc \
   TpcCombinedRawDataUnpacker.cc \
+  TpcCombinedRawDataUnpackerDebug.cc \
   TpcGlobalPositionWrapper.cc \
   TpcLoadDistortionCorrection.cc \
   TpcMap.cc \
@@ -89,21 +102,22 @@ libtpc_la_LIBADD = \
   -lc10 \
   -ltorch_cpu \
   -ltorch \
+  -ltrack \
   -lmicromegas_io \
   -lfun4all \
+  -lphool \
   -lSpectrum \
   -lpthread
 
 # sources for io library
 libtpc_io_la_SOURCES = \
   $(ROOTDICTS) \
+  LaserEventInfov1.cc \
   TrainingHitsContainer.cc \
   TrainingHits.cc
 
 libtpc_io_la_LIBADD = \
-  -ltrack_io \
-  -lg4detectors_io \
-  -ltrackbase_historic_io
+  -lg4detectors_io
 
 noinst_PROGRAMS = \
   testexternals_tpc_io \

@@ -39,8 +39,6 @@
 #include <phool/getClass.h>
 #include <phool/phool.h>
 
-#include <tpc/TpcDistortionCorrectionContainer.h>
-
 #include <trackbase/ActsGeometry.h>
 #include <trackbase/InttDefs.h>
 #include <trackbase/MvtxDefs.h>
@@ -57,6 +55,7 @@
 #include <trackbase_historic/SvtxTrack_v4.h>
 #include <trackbase_historic/TrackSeed.h>
 #include <trackbase_historic/TrackSeedContainer.h>
+#include <trackbase_historic/TrackSeedHelper.h>
 
 #include <GenFit/AbsMeasurement.h>  // for AbsMeasurement
 #include <GenFit/Exception.h>       // for Exception
@@ -253,9 +252,10 @@ int PHGenFitTrkFitter::process_event(PHCompositeNode* topNode)
     svtxtrack->set_crossing(crossing);
 
     // track position comes from silicon seed
-    svtxtrack->set_x(siseed->get_x());
-    svtxtrack->set_y(siseed->get_y());
-    svtxtrack->set_z(siseed->get_z());
+    const auto position = TrackSeedHelper::get_xyz(siseed);
+    svtxtrack->set_x(position.x());
+    svtxtrack->set_y(position.y());
+    svtxtrack->set_z(position.z());
 
     // track momentum comes from tpc seed
     svtxtrack->set_charge(tpcseed->get_qOverR() > 0 ? 1 : -1);
@@ -521,45 +521,10 @@ int PHGenFitTrkFitter::GetNodes(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::ABORTEVENT;
   }
 
-  // tpc distortion corrections
-  m_dcc_static = findNode::getClass<TpcDistortionCorrectionContainer>(topNode, "TpcDistortionCorrectionContainerStatic");
-  m_dcc_average = findNode::getClass<TpcDistortionCorrectionContainer>(topNode, "TpcDistortionCorrectionContainerAverage");
-  m_dcc_fluctuation = findNode::getClass<TpcDistortionCorrectionContainer>(topNode, "TpcDistortionCorrectionContainerFluctuation");
+  // global position wrapper
+  m_globalPositionWrapper.loadNodes(topNode);
 
   return Fun4AllReturnCodes::EVENT_OK;
-}
-
-//_________________________________________________________________________________
-Acts::Vector3 PHGenFitTrkFitter::getGlobalPosition(TrkrDefs::cluskey key, TrkrCluster* cluster, short int crossing)
-{
-  // get global position from Acts transform
-  auto globalPosition = m_tgeometry->getGlobalPosition(key, cluster);
-
-  // for the TPC calculate the proper z based on crossing and side
-  const auto trkrid = TrkrDefs::getTrkrId(key);
-  if (trkrid == TrkrDefs::tpcId)
-  {
-    const auto side = TpcDefs::getSide(key);
-    globalPosition.z() = m_clusterCrossingCorrection.correctZ(globalPosition.z(), side, crossing);
-
-    // apply distortion corrections
-    if (m_dcc_static)
-    {
-      globalPosition = m_distortionCorrection.get_corrected_position(globalPosition, m_dcc_static);
-    }
-
-    if (m_dcc_average)
-    {
-      globalPosition = m_distortionCorrection.get_corrected_position(globalPosition, m_dcc_average);
-    }
-
-    if (m_dcc_fluctuation)
-    {
-      globalPosition = m_distortionCorrection.get_corrected_position(globalPosition, m_dcc_fluctuation);
-    }
-  }
-
-  return globalPosition;
 }
 
 /*
@@ -632,7 +597,7 @@ std::shared_ptr<PHGenFit::Track> PHGenFitTrkFitter::ReFitTrack(PHCompositeNode* 
     }
 
     const auto cluster = m_clustermap->findCluster(cluster_key);
-    const auto globalPosition = getGlobalPosition(cluster_key, cluster, crossing);
+    const auto globalPosition = m_globalPositionWrapper.getGlobalPositionDistortionCorrected(cluster_key, cluster, crossing);
     const float r = get_r(globalPosition.x(), globalPosition.y());
     m_r_cluster_id.emplace(r, cluster_key);
     if (Verbosity() > 10)
@@ -672,7 +637,7 @@ std::shared_ptr<PHGenFit::Track> PHGenFitTrkFitter::ReFitTrack(PHCompositeNode* 
       continue;
     }
 
-    const auto globalPosition_acts = getGlobalPosition(cluster_key, cluster, crossing);
+    const auto globalPosition_acts = m_globalPositionWrapper.getGlobalPositionDistortionCorrected(cluster_key, cluster, crossing);
     const TVector3 pos(globalPosition_acts.x(), globalPosition_acts.y(), globalPosition_acts.z());
 
     const double cluster_rphi_error = cluster->getRPhiError();
@@ -1080,7 +1045,7 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
       }
 
       // get position
-      const auto globalPosition = getGlobalPosition( cluster_key, cluster, crossing );
+      const auto globalPosition = m_globalPositionWrapper.getGlobalPositionDistortionCorrected( cluster_key, cluster, crossing );
       const TVector3 pos_A(globalPosition.x(), globalPosition.y(), globalPosition.z() );
       const float r_cluster = std::sqrt( square(globalPosition.x()) + square(globalPosition.y()) );
 

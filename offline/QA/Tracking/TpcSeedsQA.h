@@ -4,17 +4,10 @@
 #define TPCSEEDSQA_H
 
 #include <fun4all/SubsysReco.h>
-/* #include <trackbase/ActsGeometry.h> */
 #include <trackbase/TrkrDefs.h>
 #include <trackbase/TpcDefs.h>
-
-/* #include <trackbase/TrkrClusterContainer.h> */
-/* #include <trackbase/TrkrCluster.h> */
-/* #include <trackbase_historic/SvtxTrackMap.h> */
-/* #include <globalvertex/SvtxVertexMap.h> */
-/* #include <TH1.h> */
-/* #include <TH2.h> */
-/* #include <TProfile2D.h> */
+#include <tpc/TpcGlobalPositionWrapper.h>
+#include <tpc/TpcClusterMover.h>
 
 #include <set>
 #include <string>
@@ -32,7 +25,6 @@ class TProfile2D;
 class TNtuple;
 class SvtxVertexMap;
 class TrackSeedContainer;
-class TpcDistortionCorrectionContainer;
 class PHG4TpcCylinderGeomContainer;
 class TrackSeed;
 
@@ -61,6 +53,7 @@ class TpcSeedsQA : public SubsysReco
   float calc_dedx(TrackSeed* tpcseed);
   void setSegment(const int segment) { m_segment = segment; }
   void segment(const int seg) { m_segment = seg; }
+  void setruntype(bool type) { collision_or_cosmics = type; }
 
  private:
   std::vector<TrkrDefs::cluskey> get_cluster_keys(SvtxTrack* track);
@@ -69,6 +62,9 @@ class TpcSeedsQA : public SubsysReco
   std::set<int> m_layers;
   std::multimap<int, int> m_layerRegionMap;
   std::pair<float, float> cal_tpc_eta_min_max(float vtxz);
+  float eta_to_theta(float eta);
+  float* cal_dedx_cluster(SvtxTrack *track);
+  float cal_track_length(SvtxTrack *track);
 
   std::string m_clusterContainerName{"TRKR_CLUSTER"};
   std::string m_actsGeomName{"ActsGeometry"};
@@ -133,6 +129,9 @@ class TpcSeedsQA : public SubsysReco
   TH2* h_dedx{nullptr};
   TH1* h_mip_dedx{nullptr};
 
+  TH2* h_dedx_pq_z[10] = {nullptr};
+  TH2* h_dedx_pcaz{nullptr};
+
   TH2* h_adc_sector[3] = {nullptr};
   TProfile* h_onepad_frac[3] = {nullptr};
 
@@ -168,7 +167,9 @@ class TpcSeedsQA : public SubsysReco
   double num_track_side0_pt[3][4] = {{0}};
   double num_track_side1_pt[3][4] = {{0}};
 
-  TpcDistortionCorrectionContainer *m_dccModuleEdge{nullptr}, *m_dccStatic{nullptr}, *m_dccAverage{nullptr}, *m_dccFluctuation{nullptr};
+  //! global position wrapper
+  TpcGlobalPositionWrapper m_globalPositionWrapper;
+  TpcClusterMover m_clusterMover;
 
   float m_px = std::numeric_limits<float>::quiet_NaN();
   float m_py = std::numeric_limits<float>::quiet_NaN();
@@ -207,6 +208,8 @@ class TpcSeedsQA : public SubsysReco
 
   using PhiHistoMap = std::map<int, PhiHistoList>;
   PhiHistoMap phihistos;
+
+  bool collision_or_cosmics = false; // false: collision, true: cosmics
 };
 
 #endif  // TPCSEEDSQA_H

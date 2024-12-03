@@ -4,9 +4,8 @@
 #define TRACKRESIDUALS_H
 
 #include <tpc/TpcClusterMover.h>
-#include <tpc/TpcClusterZCrossingCorrection.h>
+#include <tpc/TpcGlobalPositionWrapper.h>
 
-#include <trackbase/ActsGeometry.h>
 #include <trackbase/ClusterErrorPara.h>
 #include <trackbase/TrkrDefs.h>
 
@@ -49,12 +48,14 @@ class TrackResiduals : public SubsysReco
   void clusterTree() { m_doClusters = true; }
   void hitTree() { m_doHits = true; }
   void noEventTree() {m_doEventTree = false;}
+  void MatchedTracksOnly() {m_doMatchedOnly = true;}
   void ppmode() { m_ppmode = true; }
   void convertSeeds(bool flag) { m_convertSeeds = flag; }
   void dropClustersNoState(bool flag) { m_dropClustersNoState = flag; }
   void zeroField() { m_zeroField = true; }
   void runnumber(const int run) { m_runnumber = run; }
   void segment(const int seg) { m_segment = seg; }
+  void job(const int job) { m_job = job; }
   void linefitAll() { m_linefitTPCOnly = false; }
   void setClusterMinSize(unsigned int size) { m_min_cluster_size = size; }
   void failedTree() { m_doFailedSeeds = true; }
@@ -81,10 +82,8 @@ class TrackResiduals : public SubsysReco
   void fillClusterBranchesSeeds(TrkrDefs::cluskey ckey,  // SvtxTrack* track,
                                 const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> &global,
                                 PHCompositeNode *topNode);
-  void lineFitClusters(std::vector<TrkrDefs::cluskey> &keys, ActsGeometry *geometry,
-                       TrkrClusterContainer *clusters, const short int &crossing);
-  void circleFitClusters(std::vector<TrkrDefs::cluskey> &keys, ActsGeometry *geometry,
-                         TrkrClusterContainer *clusters, const short int &crossing);
+  void lineFitClusters(std::vector<TrkrDefs::cluskey> &keys, TrkrClusterContainer *clusters, const short int &crossing);
+  void circleFitClusters(std::vector<TrkrDefs::cluskey> &keys, TrkrClusterContainer *clusters, const short int &crossing);
   void fillStatesWithCircleFit(const TrkrDefs::cluskey &key, TrkrCluster *cluster,
                                Acts::Vector3 &glob, ActsGeometry *geometry);
   void fillVertexTree(PHCompositeNode *topNode);
@@ -105,11 +104,10 @@ class TrackResiduals : public SubsysReco
   bool m_doEventTree = true;
   bool m_zeroField = false;
   bool m_doFailedSeeds = false;
+  bool m_doMatchedOnly = false;
 
-  TpcClusterZCrossingCorrection m_clusterCrossingCorrection;
   TpcClusterMover m_clusterMover;
-
-  TpcDistortionCorrectionContainer *m_dccModuleEdge{nullptr}, *m_dccStatic{nullptr}, *m_dccAverage{nullptr}, *m_dccFluctuation{nullptr};
+  TpcGlobalPositionWrapper m_globalPositionWrapper;
 
   ClusterErrorPara m_clusErrPara;
   std::string m_alignmentMapName = "SvtxAlignmentStateMap";
@@ -127,6 +125,9 @@ class TrackResiduals : public SubsysReco
   int m_event = 0;
   int m_segment = std::numeric_limits<int>::quiet_NaN();
   int m_runnumber = std::numeric_limits<int>::quiet_NaN();
+  int m_job = std::numeric_limits<int>::quiet_NaN();
+  int m_ntpcclus = std::numeric_limits<int>::quiet_NaN();
+
   std::vector<int> m_firedTriggers;
   uint64_t m_gl1BunchCrossing = std::numeric_limits<uint64_t>::quiet_NaN();
 
