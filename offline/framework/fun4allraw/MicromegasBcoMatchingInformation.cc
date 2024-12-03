@@ -89,8 +89,6 @@ namespace
   // define limit for matching two fee_bco
   static constexpr unsigned int m_max_fee_bco_diff = 10;
 
-  // define limit for matching gtm_bco from lvl1 to enddat
-
   // define limit for matching fee_bco to fee_bco_predicted
   static constexpr unsigned int m_max_gtm_bco_diff = 100;
 
@@ -458,6 +456,19 @@ void MicromegasBcoMatchingInformation::cleanup()
   {
     m_bco_matching_list.pop_front();
   }
+
+  // clear orphans
+  m_orphans.clear();
+}
+
+//___________________________________________________
+void MicromegasBcoMatchingInformation::cleanup(uint64_t ref_bco)
+{
+  // erase all elements from bco_list that are less than or equal to ref_bco
+  m_gtm_bco_list.erase( std::remove_if( m_gtm_bco_list.begin(), m_gtm_bco_list.end(), [ref_bco](const uint64_t& bco) { return bco<=ref_bco; }), m_gtm_bco_list.end() );
+
+  // erase all elements from bco_list that are less than or equal to ref_bco
+  m_bco_matching_list.erase( std::remove_if( m_bco_matching_list.begin(), m_bco_matching_list.end(), [ref_bco](const m_bco_matching_pair_t& pair) { return pair.second<=ref_bco; }), m_bco_matching_list.end() );
 
   // clear orphans
   m_orphans.clear();
