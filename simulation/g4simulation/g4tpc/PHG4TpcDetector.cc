@@ -649,6 +649,8 @@ void PHG4TpcDetector::add_geometry_node()
 
   // this initializes the array to 0, caveat: this doesn't work with any other value
      std::array<double, 3> phi_bin_width_cdb{0};
+     std::array<double, 3> phi_bin_width_first{0};
+     std::array<double, 3> phi_bin_width_last{0};
   for (unsigned long iregion = 0; iregion < 3; ++iregion)
   {
     for (int zside = 0; zside < 2; zside++)
@@ -666,8 +668,13 @@ void PHG4TpcDetector::add_geometry_node()
         sector_Phi_bias[zside].push_back(0);
 
         phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
-        double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_cdb[iregion] / 2.;
-        double sec_min_phi = pad_phi[iregion * 16][0] - phi_bin_width_cdb[iregion] / 2.;
+        phi_bin_width_first[iregion] = std::abs(pad_phi[iregion * 16][1] - pad_phi[iregion * 16][0]);
+        phi_bin_width_last[iregion] = std::abs(pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] - pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1-1]);
+
+        double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_last[iregion]/2;
+        double sec_min_phi = pad_phi[iregion * 16][0]-phi_bin_width_first[iregion]/2;
+        //double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_cdb[iregion] / 2.;
+        //double sec_min_phi = pad_phi[iregion * 16][0] - phi_bin_width_cdb[iregion] / 2.;
         double sec_phi_cdb = sec_max_phi - sec_min_phi;
         double sec_gap = (2 * M_PI - sec_phi_cdb * 12) / 12;
         sec_max_phi = M_PI - sec_phi_cdb / 2 - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
@@ -675,7 +682,7 @@ void PHG4TpcDetector::add_geometry_node()
 
         sector_min_Phi[zside].push_back(sec_min_phi);
         sector_max_Phi[zside].push_back(sec_max_phi);
-std::cout<<"iregion = "<<iregion<<" zside = "<<zside<<" phibin width"<<phi_bin_width_cdb[iregion]<<" sector min Phi = "<<sec_min_phi<<" sec_max_phi = "<<sec_max_phi<<" sec_phi = "<<sec_phi_cdb<<"sector gap = "<<sec_gap<<std::endl;
+std::cout<<"iregion = "<<iregion<<" zside = "<<zside<<" inner phibin width "<<phi_bin_width_cdb[iregion]<<" sector min Phi = "<<sec_min_phi<<" sec_max_phi = "<< sec_max_phi<<" sec_phi = "<<sec_phi_cdb <<" first bin width "<<phi_bin_width_first[iregion]<<" last bin width "<<phi_bin_width_last[iregion]<<" sector gap = "<<sec_gap<<std::endl;
       }  // isector
     }
 

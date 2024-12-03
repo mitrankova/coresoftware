@@ -18,16 +18,19 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib
 
 libg4tpc_la_LIBADD = \
+  -lphool \
   -lcdbobjects \
   -lg4detectors \
   -lg4tracking_io \
   -lphg4hit \
   -lphparameter \
-  -lphool \
+  -ltrack \
+  -ltrackbase_historic_io \
   -ltpc_io
 
 pkginclude_HEADERS = \
   PHG4TpcCentralMembrane.h \
+  TpcClusterBuilder.h \
   PHG4TpcDigitizer.h \
   PHG4TpcDirectLaser.h \
   PHG4TpcDistortion.h \
@@ -36,11 +39,11 @@ pkginclude_HEADERS = \
   PHG4TpcPadBaselineShift.h \
   PHG4TpcPadPlane.h \
   PHG4TpcPadPlaneReadout.h \
-  PHG4TpcSubsystem.h \
-  TpcClusterBuilder.h
+  PHG4TpcSubsystem.h
 
 libg4tpc_la_SOURCES = \
   PHG4TpcCentralMembrane.cc \
+  TpcClusterBuilder.cc \
   PHG4TpcDetector.cc \
   PHG4TpcDigitizer.cc \
   PHG4TpcDirectLaser.cc \
@@ -55,8 +58,7 @@ libg4tpc_la_SOURCES = \
   PHG4TpcPadPlane.cc \
   PHG4TpcPadPlaneReadout.cc \
   PHG4TpcSteppingAction.cc \
-  PHG4TpcSubsystem.cc \
-  TpcClusterBuilder.cc 
+  PHG4TpcSubsystem.cc
 
 ################################################
 # linking tests
