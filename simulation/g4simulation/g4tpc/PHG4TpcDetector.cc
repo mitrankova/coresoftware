@@ -651,6 +651,11 @@ void PHG4TpcDetector::add_geometry_node()
 
   // this initializes the array to 0, caveat: this doesn't work with any other value
   std::array<double, 3> phi_bin_width_cdb{0};
+  std::array<double, 3> phi_bin_width_first{0};
+  std::array<double, 3> phi_bin_width_last{0};
+  std::vector<double> pad_phi_null{0};
+
+
   // the unsigned long avoids a clang-tidy warning about a mismatched type for an array index
   for (unsigned long iregion = 0; iregion < 3; ++iregion)
   {
@@ -669,8 +674,14 @@ void PHG4TpcDetector::add_geometry_node()
         sector_R_bias[zside].push_back(0);
         sector_Phi_bias[zside].push_back(0);
 
-        double sec_max_phi = M_PI - M_PI / 12 - 2 * M_PI / 12 * isector;
-        double sec_min_phi = sec_max_phi - 2 * M_PI / 12;
+        phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
+        phi_bin_width_first[iregion] = std::abs(pad_phi[iregion * 16][1] - pad_phi[iregion * 16][0]);
+        phi_bin_width_last[iregion] = std::abs(pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] - pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1-1]);
+
+        double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_last[iregion]/2;
+        double sec_min_phi = pad_phi[iregion * 16][0]-phi_bin_width_first[iregion]/2;
+      //  double sec_max_phi = M_PI - M_PI / 12 - 2 * M_PI / 12 * isector;
+      //  double sec_min_phi = sec_max_phi - 2 * M_PI / 12;
 
 /*        phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
         double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_cdb[iregion] / 2.;
@@ -746,7 +757,7 @@ void PHG4TpcDetector::add_geometry_node()
       layerseggeo->set_sector_min_phi(sector_min_Phi);
       layerseggeo->set_sector_max_phi(sector_max_Phi);
       if(layer -7 >=0) layerseggeo->set_layer_pad_phi(pad_phi[layer - 7]);
-      else layerseggeo->set_layer_pad_phi(0);
+      else layerseggeo->set_layer_pad_phi(pad_phi_null);
 
       // Chris Pinkenburg: greater causes huge memory growth which causes problems
       // on our farm. If you need to increase this - TALK TO ME first
