@@ -768,6 +768,10 @@ void PHG4TpcDetector::add_geometry_node()
                   << " exceed 5.1M limit" << std::endl;
         gSystem->Exit(1);
       }
+
+
+      layerseggeo->identify();
+      
       geonode->AddLayerCellGeom(layerseggeo);
 
       current_r += r_length + pad_space;

@@ -21,6 +21,7 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   // from PHObject
   void identify(std::ostream& os = std::cout) const override;
 
+
   int get_layer() const override { return layer; }
   double get_radius() const override { return radius; }
   double get_thickness() const override { return thickness; }
@@ -36,24 +37,25 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   double get_etamin() const;
 
   virtual std::pair<double, double> get_zbounds(const int ibin) const;
-  virtual std::pair<double, double> get_phibounds(const int ibin, int side = 0) const;
+  virtual std::pair<double, double> get_phibounds(const int ibin) const;
   virtual std::pair<double, double> get_etabounds(const int ibin) const;
   virtual double get_etacenter(const int ibin) const;
   virtual double get_zcenter(const int ibin) const;
-  virtual double get_phicenter(const int ibin, int side = 0) const;
-//  virtual double get_phicenter_new(const int ibin) const;
-  virtual double get_phi(const float ibin, int side = 0) const;
+  virtual double get_phicenter(const int ibin) const;
+  virtual double get_phicenter_new(const int ibin) const;
+  virtual double get_phi(const float ibin) const;
 
   virtual int get_etabin(const double eta) const;
   virtual int get_zbin(const double z) const;
   virtual int get_phibin(const double phi, int side = 0) const;
-//  virtual int get_phibin_new(const double phi) const;
+  virtual int get_phibin_new(const double phi) const;
 
   virtual float get_pad_float(const double phi, int side = 0) const;
   virtual float get_tbin_float(const double z) const;
   virtual int find_phibin(const double phi, int side = 0) const;
-  virtual int find_vecbin(const double phi, int side = 0) const;
+
   virtual int nearest_element(const double phi, int s, int side = 0) const;
+
 
   void set_layer(const int i) override { layer = i; }
   void set_binning(const int i) { binning = i; }
