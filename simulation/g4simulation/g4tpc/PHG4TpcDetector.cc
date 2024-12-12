@@ -651,8 +651,8 @@ void PHG4TpcDetector::add_geometry_node()
 
   // this initializes the array to 0, caveat: this doesn't work with any other value
   std::array<double, 3> phi_bin_width_cdb{0};
-  std::array<double, 3> phi_bin_width_first{0};
-  std::array<double, 3> phi_bin_width_last{0};
+  //std::array<double, 3> phi_bin_width_first{0};
+  //std::array<double, 3> phi_bin_width_last{0};
   std::vector<double> pad_phi_null{0};
 
 
@@ -675,11 +675,11 @@ void PHG4TpcDetector::add_geometry_node()
         sector_Phi_bias[zside].push_back(0);
 
         phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
-        phi_bin_width_first[iregion] = std::abs(pad_phi[iregion * 16][1] - pad_phi[iregion * 16][0]);
-        phi_bin_width_last[iregion] = std::abs(pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] - pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1-1]);
+        //phi_bin_width_first[iregion] = std::abs(pad_phi[iregion * 16][1] - pad_phi[iregion * 16][0]);
+        //phi_bin_width_last[iregion] = std::abs(pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] - pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1-1]);
 
-        double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_last[iregion]/2;
-        double sec_min_phi = pad_phi[iregion * 16][0]-phi_bin_width_first[iregion]/2;
+        double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 2] + phi_bin_width_cdb[iregion]/2.;
+        double sec_min_phi = pad_phi[iregion * 16][1] - phi_bin_width_cdb[iregion]/2.;
       //  double sec_max_phi = M_PI - M_PI / 12 - 2 * M_PI / 12 * isector;
       //  double sec_min_phi = sec_max_phi - 2 * M_PI / 12;
 
