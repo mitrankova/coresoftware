@@ -595,8 +595,26 @@ void PHG4TpcDetector::add_geometry_node()
   constexpr int NLayers{16 * 3};
   std::array<std::vector<double>, NLayers> pad_phi;
   std::array<std::vector<int>, NLayers> pad_num;
+  std::array<double, NLayers> min_id;
+  std::array<double, NLayers> max_id;
+
   int Nfee = 26;
   int Nch = 256;
+  int side=0;
+
+  static constexpr int NSides = 2;
+  static constexpr int NSectors = 12;
+
+  std::array<std::array<std::vector<double>, NSectors>, NSides> sector_min_Phi;
+  std::array<std::array<std::vector<double>, NSectors>, NSides> sector_max_Phi;
+  std::vector<double> phi_bin_width_cdb;
+  //std::vector<double> pad_phi_null{0};
+
+
+  for (int q = 0; q < 24; q++){
+    if(q>11) side=1;
+
+
   for (int f = 0; f < Nfee; f++)
   {
     for (int ch = 0; ch < Nch; ch++)
@@ -615,46 +633,53 @@ void PHG4TpcDetector::add_geometry_node()
     }
   }
 
-  // Sorting phi wrt pad number
-  for (size_t layer = 0; layer < NLayers; ++layer)
-  {
-    // Create a vector of indices
-    std::vector<size_t> indices(pad_num[layer].size());
-    std::iota(indices.begin(), indices.end(), 0);  // Fill with 0, 1, 2, ..., n-1
-    // Define a custom comparator based on the values in the pad vector
-    auto comparator = [&](size_t i, size_t j)
-    {
-      return pad_num[layer][i] < pad_num[layer][j];
-    };
-    // Sort the indices vector based on the values in the pad vector
-    std::sort(indices.begin(), indices.end(), comparator);
-    // Rearrange phi vector according to the sorted indices
-    std::vector<double> sorted_phi(pad_phi[layer].size());
-    for (size_t i = 0; i < pad_num[layer].size(); ++i)
-    {
-      sorted_phi[i] = pad_phi[layer][indices[i]];
-    }
+  for(size_t layer=0;layer<NLayers;layer++){
+    auto min_phi = min_element(pad_phi[layer].begin(),pad_phi[layer].end());
+    auto max_phi = max_element(pad_phi[layer].begin(),pad_phi[layer].end());
 
-    // Replace the original phi vector with the sorted one
-    pad_phi[layer] = sorted_phi;
+     min_id[layer] = distance(pad_phi[layer].begin(),min_phi);
+     max_id[layer] = distance(pad_phi[layer].begin(),max_phi);
   }
 
-  // should move to a common file
-  static constexpr int NSides = 2;
-  static constexpr int NSectors = 12;
+      for(int f=0;f<26;f++){
+        for(int c=0;c<256;c++){
+          int key = 256*f+c;
+          std::string varname1 = "phi";
+          double phi = cdbttree->GetDoubleValue(key,varname1);
+          std::string varname2 = "pad";
+          double pad = cdbttree->GetIntValue(key,varname2);
+
+          //string varname3 = "R";
+          //double R = cdbttree->GetDoubleValue(key,varname3);
+
+          std::string varname4 = "layer";
+          int layer = cdbttree->GetIntValue(key,varname4);
+
+          phi = pow(-1,side)*phi + (q - side*12.0)* M_PI / 6.0;;
+
+          if(phi<0.0) phi = phi + 2.0*M_PI;
+          std::cout<<" phi "<<phi<<" pad "<<pad<<" pad min "<<pad_num[layer - 7][min_id[layer - 7]] + 1<<" pad max "<<pad_num[layer - 7][max_id[layer - 7]]-1<<" layer "<<layer<<std::endl;   
+          double phi_bin_min =0., phi_bin_max = 0.;   
+          if(layer>6  && (pad == pad_num[layer - 7][max_id[layer - 7]] - 3))
+                 phi_bin_min = phi;               
+          if(layer>6  && (pad == pad_num[layer - 7][max_id[layer - 7]] - 4))
+                 phi_bin_max = phi;               
+
+          if(layer>6) phi_bin_width_cdb[layer - 7] = std::abs(phi_bin_min - phi_bin_max);        
+
+          if(layer>6  && (pad == pad_num[layer - 7][min_id[layer - 7]] + 1))
+		sector_min_Phi[side][(int(q/12))].push_back(phi - phi_bin_width_cdb[layer - 7]/2.);
+
+          if(layer>6  && (pad == pad_num[layer - 7][max_id[layer - 7]] - 1))
+		sector_max_Phi[side][(int(q/12))].push_back(phi + phi_bin_width_cdb[layer - 7]/2.);
+           std::cout<<" min phi "<<sector_min_Phi[side].back()<<" max phi "<<sector_max_Phi[side].back()<<std::endl;  
+       }
+      }
+}
+
 
   std::array<std::vector<double>, NSides> sector_R_bias;
   std::array<std::vector<double>, NSides> sector_Phi_bias;
-  std::array<std::vector<double>, NSides> sector_min_Phi;
-  std::array<std::vector<double>, NSides> sector_max_Phi;
-
-
-  // this initializes the array to 0, caveat: this doesn't work with any other value
-  std::array<double, 3> phi_bin_width_cdb{0};
-  //std::array<double, 3> phi_bin_width_first{0};
-  //std::array<double, 3> phi_bin_width_last{0};
-  std::vector<double> pad_phi_null{0};
-
 
   // the unsigned long avoids a clang-tidy warning about a mismatched type for an array index
   for (unsigned long iregion = 0; iregion < 3; ++iregion)
@@ -664,37 +689,12 @@ void PHG4TpcDetector::add_geometry_node()
     {
       sector_R_bias[zside].clear();
       sector_Phi_bias[zside].clear();
-      sector_min_Phi[zside].clear();
-      sector_max_Phi[zside].clear();
-      // int eff_layer = 0;
       for (int isector = 0; isector < NSectors; ++isector)  // 12 sectors
       {
-        // no bias per default
-        // TODO: confirm with what is in PHG4TpcPadPlane Readout
         sector_R_bias[zside].push_back(0);
         sector_Phi_bias[zside].push_back(0);
-
-        phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
-        //phi_bin_width_first[iregion] = std::abs(pad_phi[iregion * 16][1] - pad_phi[iregion * 16][0]);
-        //phi_bin_width_last[iregion] = std::abs(pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] - pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1-1]);
-
-        double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 2] + phi_bin_width_cdb[iregion]/2.;
-        double sec_min_phi = pad_phi[iregion * 16][1] - phi_bin_width_cdb[iregion]/2.;
-      //  double sec_max_phi = M_PI - M_PI / 12 - 2 * M_PI / 12 * isector;
-      //  double sec_min_phi = sec_max_phi - 2 * M_PI / 12;
-
-/*        phi_bin_width_cdb[iregion] = std::abs(pad_phi[iregion * 16][4] - pad_phi[iregion * 16][3]);
-        double sec_max_phi = pad_phi[iregion * 16][NPhiBins[iregion] / 12 - 1] + phi_bin_width_cdb[iregion] / 2.;
-        double sec_min_phi = pad_phi[iregion * 16][0] - phi_bin_width_cdb[iregion] / 2.;
-        double sec_phi_cdb = sec_max_phi - sec_min_phi;
-        double sec_gap = (2 * M_PI - sec_phi_cdb * 12) / 12;
-        sec_max_phi = M_PI - sec_phi_cdb / 2 - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
-        sec_min_phi = sec_max_phi - sec_phi_cdb;
-*/       // double sec_gap = (2 * M_PI - SectorPhi[iregion] * 12) / 12;
-       // double sec_max_phi = M_PI - SectorPhi[iregion] / 2 - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
-      //  double sec_min_phi = sec_max_phi - SectorPhi[iregion];
-        sector_min_Phi[zside].push_back(sec_min_phi);
-        sector_max_Phi[zside].push_back(sec_max_phi);
+     //   sector_min_Phi[zside].push_back(sec_min_phi);
+      //  sector_max_Phi[zside].push_back(sec_max_phi);
       }  // isector
     }
 
@@ -726,7 +726,7 @@ void PHG4TpcDetector::add_geometry_node()
                   << " radius " << MinRadius[iregion] + ((double) (layer - MinLayer[iregion]) + 0.5) * Thickness[iregion]
                   << " thickness " << Thickness[iregion]
                   << " NTBins " << NTBins << " tmin " << MinT << " tstep " << TBinWidth
-                  << " phibins " << NPhiBins[iregion] << " phistep " << phi_bin_width_cdb[iregion] << std::endl;
+                  << " phibins " << NPhiBins[iregion] << " phistep " << phi_bin_width_cdb[layer - 7] << std::endl;
       }
 
       auto layerseggeo = new PHG4TpcCylinderGeom;
@@ -751,13 +751,13 @@ void PHG4TpcDetector::add_geometry_node()
       layerseggeo->set_zmin(MinT);
       layerseggeo->set_zstep(TBinWidth);
       layerseggeo->set_phibins(NPhiBins[iregion]);
-      layerseggeo->set_phistep(phi_bin_width_cdb[iregion]);
+      layerseggeo->set_phistep(phi_bin_width_cdb[layer - 7]);
       layerseggeo->set_r_bias(sector_R_bias);
       layerseggeo->set_phi_bias(sector_Phi_bias);
       layerseggeo->set_sector_min_phi(sector_min_Phi);
       layerseggeo->set_sector_max_phi(sector_max_Phi);
-      if(layer -7 >=0) layerseggeo->set_layer_pad_phi(pad_phi[layer - 7]);
-      else layerseggeo->set_layer_pad_phi(pad_phi_null);
+     // if(layer -7 >=0) layerseggeo->set_layer_pad_phi(pad_phi[layer - 7]);
+     // else layerseggeo->set_layer_pad_phi(pad_phi_null);
 
       // Chris Pinkenburg: greater causes huge memory growth which causes problems
       // on our farm. If you need to increase this - TALK TO ME first
