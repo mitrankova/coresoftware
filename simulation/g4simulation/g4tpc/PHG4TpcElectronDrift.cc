@@ -323,7 +323,7 @@ int PHG4TpcElectronDrift::InitRun(PHCompositeNode *topNode)
   dtrans = new TH1F("difftrans", "transversal diffusion", 100, diffusion_trans - diffusion_trans / 2., diffusion_trans + diffusion_trans / 2.);
   se->registerHisto(dtrans);
 
-  do_ElectronDriftQAHistos = false;  // Whether or not to produce an ElectronDriftQA.root file with useful info
+  do_ElectronDriftQAHistos = true;  // Whether or not to produce an ElectronDriftQA.root file with useful info
   if (do_ElectronDriftQAHistos)
   {
     hitmapstart = new TH2F("hitmapstart", "g4hit starting X-Y locations", 1560, -78, 78, 1560, -78, 78);
@@ -667,7 +667,7 @@ int PHG4TpcElectronDrift::process_event(PHCompositeNode *topNode)
 
           // Fill Diagnostic plots, written into ElectronDriftQA.root
           hitmapstart->Fill(x_start, y_start);  // G4Hit starting positions
-          hitmapend->Fill(x_final, y_final);    // INcludes diffusion and distortion
+//          hitmapend->Fill(x_final, y_final);    // INcludes diffusion and distortion
           hitmapstart_z->Fill(z_start, radstart);
           hitmapend_z->Fill(z_final, rad_final);
           deltar->Fill(radstart, rad_final - radstart);    // total delta r
@@ -707,6 +707,8 @@ int PHG4TpcElectronDrift::process_event(PHCompositeNode *topNode)
         assert(nt);
         nt->Fill(ihit, t_start, t_final, t_sigma, rad_final, z_start, z_final);
       }
+          hitmapend->Fill(x_final, y_final);    // INcludes diffusion and distortion
+
       padplane->MapToPadPlane(truth_clusterer, single_hitsetcontainer.get(),
                               temp_hitsetcontainer.get(), hittruthassoc, x_final, y_final, t_final,
                               side, hiter, ntpad, nthit);
