@@ -21,7 +21,6 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   // from PHObject
   void identify(std::ostream& os = std::cout) const override;
 
-
   int get_layer() const override { return layer; }
   double get_radius() const override { return radius; }
   double get_thickness() const override { return thickness; }
@@ -54,9 +53,6 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   virtual float get_tbin_float(const double z) const;
   virtual int find_phibin(const double phi, int side = 0) const;
 
-  virtual int nearest_element(const double phi, int s, int side = 0) const;
-
-
   void set_layer(const int i) override { layer = i; }
   void set_binning(const int i) { binning = i; }
   void set_radius(const double r) override { radius = r; }
@@ -79,8 +75,6 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   // void set_sector_phi(const double s_phi){sector_phi = s_phi;}
   void set_sector_min_phi(std::array<std::vector<double>, NSides> s_min_phi) { sector_min_Phi = s_min_phi; }
   void set_sector_max_phi(std::array<std::vector<double>, NSides> s_max_phi) { sector_max_Phi = s_max_phi; }
-
-  void set_layer_pad_phi( std::vector<double> s_layer_pad_phi) { layer_pad_phi = s_layer_pad_phi; };
 
   std::array<std::vector<double>, NSides> get_sector_min_phi() { return sector_min_Phi; }
   std::array<std::vector<double>, NSides> get_sector_max_phi() { return sector_max_Phi; }
@@ -105,7 +99,6 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   std::array<std::vector<double>, NSides> sector_Phi_bias;
   std::array<std::vector<double>, NSides> sector_min_Phi;
   std::array<std::vector<double>, NSides> sector_max_Phi;
-  std::vector<double> layer_pad_phi;
 
   // streamer
   friend std::ostream& operator<<(std::ostream&, const PHG4TpcCylinderGeom&);

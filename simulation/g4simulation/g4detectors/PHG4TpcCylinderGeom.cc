@@ -51,8 +51,8 @@ std::ostream& operator<<(std::ostream& out, const PHG4TpcCylinderGeom& geom)
   out << "  sector_Phi_bias: " << geom.sector_Phi_bias << std::endl;
   out << "  sector_min_Phi: " << geom.sector_min_Phi << std::endl;
   out << "  sector_max_Phi: " << geom.sector_max_Phi << std::endl;
-  out << std::endl;
-return out;
+
+  return out;
 }
 
 void PHG4TpcCylinderGeom::set_zbins(const int i)
@@ -198,57 +198,8 @@ void PHG4TpcCylinderGeom::identify(std::ostream& os) const
      << ", phibins: " << nphibins
      << ", phistep: " << phistep
      << std::endl;
-
-if (layer==54){
-for (int sector = 0; sector < 12;sector++){
-  os << "  sector = " << sector
-     << "  sector_min_Phi: " << sector_min_Phi[0][sector] 
-     << "  sector_max_Phi: " << sector_max_Phi[0][sector]
-     << "  sector phi size: " << sector_max_Phi[0][sector] - sector_min_Phi[0][sector]
-     << "  inner phi_bin_width_cdb: " << phistep 
-     << "  first phi_bin_width: " << layer_pad_phi[1] - layer_pad_phi[0]
-     << "  last phi_bin_width: " << layer_pad_phi[nphibins / 12 - 1] - layer_pad_phi[nphibins / 12 - 2]
-     << std::endl;
-}
-}
   return;
 }
-
-
-int PHG4TpcCylinderGeom::nearest_element(const double phi, int s, int side) const
-{
-  //double min_diff = std::abs((sBector_max_Phi[side][s]+sector_min_Phi[side][s])/2 + pow(-1,side)*layer_pad_phi[0] - phi);
-  int closest_index = 0;
-   std::cout<<" "<<std::endl;
- //  std::cout<<"!!!!!!!!!!!!!!!!!!!!!!Nearest el"<<std::endl;
-  for (int i = 0; i < int(layer_pad_phi.size()); ++i) {
-      double current_diff = std::abs(sector_max_Phi[side][s] - pow(-1,side)*layer_pad_phi[i] - phi);
-         // std::cout<<"i"<<i<<" phi "<<phi<<" sector_max_Phi "<<sector_max_Phi[side][s]<<" layer pad phi "<<layer_pad_phi[i]<<" estimated phi "<<sector_max_Phi[side][s] - pow(-1,side)*layer_pad_phi[i]<<" Current diff "<<current_diff<<" phistp "<<phistep<<" first "<<(current_diff < std::abs(layer_pad_phi[(int)layer_pad_phi.size() - 1] - layer_pad_phi[(int)layer_pad_phi.size() - 2]))<<" Last "<<std::abs(layer_pad_phi[1] - layer_pad_phi[0])<<" number of bins "<<(int)layer_pad_phi.size()<<std::endl; 
-
-
-      if (current_diff < phistep) {
-   //       std::cout<<" phi "<<phi<<" sector_max_Phi "<<sector_max_Phi[side][s]<<" layer pad phi "<<layer_pad_phi[i]<<" estimated phi "<<sector_max_Phi[side][s] - pow(-1,side)*layer_pad_phi[i]<<" Current diff "<<current_diff<<std::endl; 
-          closest_index = i;
-
-
-      }
-      else if ((i == (int)layer_pad_phi.size() - 1) && (current_diff < std::abs(layer_pad_phi[(int)layer_pad_phi.size() - 1] - layer_pad_phi[(int)layer_pad_phi.size() - 2]))) {
-     //     std::cout<<" phi "<<phi<<" sector_max_Phi "<<sector_max_Phi[side][s]<<" layer pad phi "<<layer_pad_phi[i]<<" estimated phi "<<sector_max_Phi[side][s] - pow(-1,side)*layer_pad_phi[i]<<" Current diff "<<current_diff<<std::endl; 
-          closest_index = i;
-
-
-      }
-      else if ((i == 0) && (current_diff < std::abs(layer_pad_phi[1] - layer_pad_phi[0]))) {
-       //   std::cout<<" phi "<<phi<<" sector_max_Phi "<<sector_max_Phi[side][s]<<" layer pad phi "<<layer_pad_phi[i]<<" estimated phi "<<sector_max_Phi[side][s] - pow(-1,side)*layer_pad_phi[i]<<" Current diff "<<current_diff<<std::endl; 
-          closest_index = i;
-      }
-
-  }
-
-  return closest_index;
-
-}
-
 
 std::pair<double, double>
 PHG4TpcCylinderGeom::get_zbounds(const int ibin) const
@@ -352,8 +303,6 @@ int PHG4TpcCylinderGeom::find_phibin(const double phi, int side) const
     {
       // NOLINTNEXTLINE(bugprone-integer-division)
       phi_bin = (floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep) + nphibins / 12 * s);
-      //phi_bin = (floor(nearest_element(norm_phi, s, side)) + nphibins / 12 * s);
-     // std::cout<<"!!!!!!!!!! side "<<side<<" sector "<<s<<" norm phi "<<norm_phi<<" protobin "<<floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep)<<" sector_min_Phi "<<sector_min_Phi[side][s]<<" sector_max_Phi "<<sector_max_Phi[side][s]<<" phi_bin "<<phi_bin<<" my phi_bin "<< floor(nearest_element(norm_phi, s, side)) + nphibins / 12 * s << std::endl;
       break;
     }
     if (s == 11)
@@ -362,16 +311,12 @@ int PHG4TpcCylinderGeom::find_phibin(const double phi, int side) const
       {
         // NOLINTNEXTLINE(bugprone-integer-division)
         phi_bin = floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep) + nphibins / 12 * s;
-       // phi_bin = floor(nearest_element(norm_phi, s, side)) + nphibins / 12 * s;
-      //std::cout<<"!!!!!!!!!! side "<<side<<" sector "<<s<<" norm phi "<<norm_phi<<" protobin "<<floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep)<<" sector_min_Phi "<<sector_min_Phi[side][s]<<" sector_max_Phi "<<sector_max_Phi[side][s]<<" phi_bin "<<phi_bin<<" my phi_bin "<< floor(nearest_element(norm_phi, s, side)) + nphibins / 12 * s << std::endl;
         break;
       }
       if (norm_phi > sector_min_Phi[side][s] + 2 * M_PI)
       {
         // NOLINTNEXTLINE(bugprone-integer-division)
         phi_bin = floor(std::abs(sector_max_Phi[side][s] - (norm_phi - 2 * M_PI)) / phistep) + nphibins / 12 * s;
-        //phi_bin = floor(nearest_element(norm_phi - 2 * M_PI, s, side)) + nphibins / 12 * s;
-      //std::cout<<"!!!!!!!!!! side "<<side<<" sector "<<s<<" norm phi "<<norm_phi<<" protobin "<<floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep)<<" sector_min_Phi "<<sector_min_Phi[side][s]<<" sector_max_Phi "<<sector_max_Phi[side][s]<<" phi_bin "<<phi_bin<<" my phi_bin "<< floor(nearest_element(norm_phi, s, side)) + nphibins / 12 * s << std::endl;
         break;
       }
     }
