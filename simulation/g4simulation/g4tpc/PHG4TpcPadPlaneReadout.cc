@@ -718,15 +718,15 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
 
   // make the charge distribution gaussian
   double rphi = phi * radius;
-  if (Verbosity() > 100)
-  {
-    if (LayerGeom->get_layer() == print_layer)
-    {
+//  if (Verbosity() > 100)
+//  {
+ //   if (LayerGeom->get_layer() == print_layer)
+ //   {
       std::cout << " populate_zigzag_phibins for layer " << layernum << " with radius " << radius << " phi " << phi
                 << " rphi " << rphi << " phistepsize " << phistepsize << std::endl;
       std::cout << " fcharge created: radius " << radius << " rphi " << rphi << " cloud_sig_rp " << cloud_sig_rp << std::endl;
-    }
-  }
+  //  }
+//  }
 
   // Get the range of phi values that completely contains all pads  that touch the charge distribution - (nsigmas + 1/2 pad width) in each direction
   const double philim_low_calc = phi - (_nsigmas * cloud_sig_rp / radius) - phistepsize;
@@ -740,14 +740,14 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
   int phibin_high = LayerGeom->get_phibin(philim_low);
   int npads = phibin_high - phibin_low;
 
-  if (Verbosity() > 1000)
-  {
-    if (layernum == print_layer)
-    {
+//  if (Verbosity() > 1000)
+//  {
+//    if (layernum == print_layer)
+//    {
       std::cout << "           zigzags: phi " << phi << " philim_low " << philim_low << " phibin_low " << phibin_low
                 << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads << std::endl;
-    }
-  }
+ //   }
+//  }
 
   if (npads < 0 || npads > 9)
   {
@@ -794,14 +794,14 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
     const double rphi_pad_now = phi_now * radius;
     pad_parameters[ipad] = {{pad_rphi / 2.0, rphi_pad_now}};
 
-    if (Verbosity() > 1000)
-    {
-      if (layernum == print_layer)
-      {
+  //  if (Verbosity() > 1000)
+  //  {
+   //   if (layernum == print_layer)
+     // {
         std::cout << " zigzags: make fpad for ipad " << ipad << " pad_now " << pad_now << " pad_rphi/2 " << pad_rphi / 2.0
                   << " rphi_pad_now " << rphi_pad_now << std::endl;
-      }
-    }
+    //  }
+   // }
     //}
 
     // use analytic integral
@@ -1054,9 +1054,9 @@ void PHG4TpcPadPlaneReadout::SetDefaultParameters()
   set_default_double_param("tpc_sector_phi_mid", 0.5087);    // 2 * M_PI / 12 );//sector size in phi for R2 sector
   set_default_double_param("tpc_sector_phi_outer", 0.5097);  // 2 * M_PI / 12 );//sector size in phi for R3 sector
 
-  set_default_int_param("ntpc_phibins_inner", 1128 - 2);  // 94 * 12
-  set_default_int_param("ntpc_phibins_mid", 1536 - 2);    // 128 * 12
-  set_default_int_param("ntpc_phibins_outer", 2304 - 2);  // 192 * 12
+  set_default_int_param("ntpc_phibins_inner", 1128 - 2*12);  // 94 * 12
+  set_default_int_param("ntpc_phibins_mid", 1536 - 2*12);    // 128 * 12
+  set_default_int_param("ntpc_phibins_outer", 2304 - 2*12);  // 192 * 12
 
   // GEM Gain
   /*
