@@ -714,15 +714,15 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
 
   // make the charge distribution gaussian
   double rphi = phi * radius;
-  if (Verbosity() > 100)
-  {
-    if (LayerGeom->get_layer() == print_layer)
-    {
+//  if (Verbosity() > 100)
+//  {
+  //  if (LayerGeom->get_layer() == print_layer)
+   // {
       std::cout << " populate_zigzag_phibins for layer " << layernum << " with radius " << radius << " phi " << phi
                 << " rphi " << rphi << " phistepsize " << phistepsize << std::endl;
       std::cout << " fcharge created: radius " << radius << " rphi " << rphi << " cloud_sig_rp " << cloud_sig_rp << std::endl;
-    }
-  }
+  //  }
+ // }
 
   // Get the range of phi values that completely contains all pads  that touch the charge distribution - (nsigmas + 1/2 pad width) in each direction
   const double philim_low_calc = phi - (_nsigmas * cloud_sig_rp / radius) - phistepsize;
@@ -736,14 +736,14 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
   int phibin_high = LayerGeom->get_phibin(philim_low);
   int npads = phibin_high - phibin_low;
 
-  if (Verbosity() > 1000)
-  {
-    if (layernum == print_layer)
-    {
+//  if (Verbosity() > 1000)
+//  {
+  //  if (layernum == print_layer)
+   // {
       std::cout << "           zigzags: phi " << phi << " philim_low " << philim_low << " phibin_low " << phibin_low
                 << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads << std::endl;
-    }
-  }
+  //  }
+//  }
 
   if (npads < 0 || npads > 9)
   {
