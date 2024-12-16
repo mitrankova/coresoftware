@@ -17,8 +17,6 @@ class PHCompositeNode;
 class PHG4TpcDisplayAction;
 class PHG4Subsystem;
 class PHParameters;
-class CDBTTree;
-class CDBInterface;
 
 class PHG4TpcDetector : public PHG4Detector
 {
