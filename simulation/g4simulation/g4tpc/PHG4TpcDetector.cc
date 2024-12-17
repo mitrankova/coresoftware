@@ -687,9 +687,10 @@ std::cout<<" Layer "<<layer<<std::endl;
   //    std::cout<<"left index "<<left_index<<" right index "<<right_index<<" mid left "<<mid_left_index<<" mid_right "<<mid_right_index<<std::endl;
       //std::cout<<" mid left "<<mid_left_index<<" mid_right "<<mid_right_index<<" left phi "<<pad_data[layer][mid_left_index].second<<" right phi "<<pad_data[layer][mid_right_index].second<<" bim width "<<std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second)<<std::endl;
       std::cout<<"  left "<<left_index<<" right "<<right_index<<" left phi "<<pad_data[layer][left_index].second<<" right phi "<<pad_data[layer][right_index].second<<" bin width "<<std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second)<<std::endl;
-              phi_bin_width_cdb[layer] = std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second);
+              //phi_bin_width_cdb[layer] = std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second);
+              phi_bin_width_cdb[layer] = std::abs(pad_data[layer][left_index].second - pad_data[layer][right_index].second)/(NPhiBins[(int)(layer - 7)/16] - 1);
 // std::cout<<"phi_bin_width "<<phi_bin_width_cdb[layer];
-      double SectorPhi = std::abs(pad_data[layer][left_index].second - pad_data[layer][right_index].second); 
+      double SectorPhi = std::abs(phi_bin_width_cdb[layer] + pad_data[layer][left_index].second - pad_data[layer][right_index].second); 
       for (int zside = 0; zside < 2; zside++)
       {
          for (int isector = 0; isector < NSectors; isector++)  // 12 sectors
