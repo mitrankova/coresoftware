@@ -637,11 +637,6 @@ std::cout<<" CDB is read. pad_data size for 1 layer "<<pad_data[1].size()<<std::
     for(size_t layer=0;layer<NLayers;layer++)
     {
 
-          //  auto min_phi = std::min_element(pad_data[layer].begin()->second,pad_data[layer].end()->second);
-          //  auto max_phi = std::max_element(pad_data[layer].begin()->second,pad_data[layer].end()->second);
-
-            //min_id[layer] = std::distance(pad_data[layer].begin()->second,min_phi);
-            //max_id[layer] = std::distance(pad_data[layer].begin()->second,max_phi);
 std::cout<<" Layer "<<layer<<std::endl;
 //std::cout<<" Calculating max_phi and min_phi "<<std::endl;
     auto it_min = std::min_element(
@@ -686,11 +681,11 @@ std::cout<<" Layer "<<layer<<std::endl;
           }
   //    std::cout<<"left index "<<left_index<<" right index "<<right_index<<" mid left "<<mid_left_index<<" mid_right "<<mid_right_index<<std::endl;
       //std::cout<<" mid left "<<mid_left_index<<" mid_right "<<mid_right_index<<" left phi "<<pad_data[layer][mid_left_index].second<<" right phi "<<pad_data[layer][mid_right_index].second<<" bim width "<<std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second)<<std::endl;
-      std::cout<<"  left "<<left_index<<" right "<<right_index<<" left phi "<<pad_data[layer][left_index].second<<" right phi "<<pad_data[layer][right_index].second<<" bin width "<<std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second)<<std::endl;
+      //std::cout<<"  left "<<left_index<<" right "<<right_index<<" left phi "<<pad_data[layer][left_index].second<<" right phi "<<pad_data[layer][right_index].second<<" bin width "<<std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second)<<std::endl;
               //phi_bin_width_cdb[layer] = std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second);
-              phi_bin_width_cdb[layer] = std::abs(pad_data[layer][left_index].second - pad_data[layer][right_index].second)/(NPhiBins[(int)(layer - 7)/16] - 1);
-// std::cout<<"phi_bin_width "<<phi_bin_width_cdb[layer];
-      double SectorPhi = std::abs(phi_bin_width_cdb[layer] + pad_data[layer][left_index].second - pad_data[layer][right_index].second); 
+      phi_bin_width_cdb[layer] = std::abs(pad_data[layer][left_index].second - pad_data[layer][right_index].second)/((int)(NPhiBins[(int)(layer - 7)/16]/12)- 1);
+      double SectorPhi = phi_bin_width_cdb[layer] + std::abs(pad_data[layer][left_index].second - pad_data[layer][right_index].second); 
+      std::cout<<"  left "<<left_index<<" right "<<right_index<<" left phi "<<pad_data[layer][left_index].second<<" right phi "<<pad_data[layer][right_index].second<<" bin width "<<std::abs(pad_data[layer][mid_left_index].second - pad_data[layer][mid_right_index].second)<<" other width "<<phi_bin_width_cdb[layer]<<" SectorPhi"<<SectorPhi<<std::endl;
       for (int zside = 0; zside < 2; zside++)
       {
          for (int isector = 0; isector < NSectors; isector++)  // 12 sectors
@@ -698,12 +693,12 @@ std::cout<<" Layer "<<layer<<std::endl;
         double sec_gap = (2 * M_PI - SectorPhi * 12) / 12;
         double sec_max_phi = M_PI - SectorPhi / 2 - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
         double sec_min_phi = sec_max_phi - SectorPhi;
-        // std::cout<<"side "<<zside<<" sector "<<isector<<" layer "<<layer<<std::endl;
+         std::cout<<"side "<<zside<<" sector "<<isector<<" layer "<<layer<<std::endl;
             //double sec_min_phi = pow(-1,zside)*pad_data[layer][left_index].second + (isector - zside*12.0)* M_PI / 6.0 - phi_bin_width_cdb[layer]/2.;   
             //double sec_max_phi = pow(-1,zside)*pad_data[layer][right_index].second + (isector - zside*12.0)* M_PI / 6.0 + phi_bin_width_cdb[layer]/2.;   
          
 
-          //std::cout<<" min phi "<<sec_min_phi<<" max phi "<<sec_max_phi<<" pad min "<<pad_data[layer][left_index].first<<" pad max "<<pad_data[layer][right_index].first<<" layer "<<layer<<std::endl;   
+          std::cout<<" min phi "<<sec_min_phi<<" max phi "<<sec_max_phi<<" pad min "<<pad_data[layer][left_index].first<<" pad max "<<pad_data[layer][right_index].first<<" layer "<<layer<<std::endl;   
 
             if((int)layer % 16 == 0)
             {
