@@ -530,6 +530,7 @@ std::unique_ptr<CDBTTree> cdbttree;
   }
 
   std::string calibdir = CDBInterface::instance()->getUrl("TPC_FEE_CHANNEL_MAP");
+  //std::string calibdir = "/sphenix/user/mitrankova/PadPlane_Readout/map/TPCPadPlaneCDBTTree.root";
   if (! calibdir.empty())
   {
         cdbttree = std::unique_ptr<CDBTTree>(new CDBTTree(calibdir));
