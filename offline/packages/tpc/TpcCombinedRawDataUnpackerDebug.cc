@@ -280,7 +280,7 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
     varname = "phi";  // + std::to_string(key);
     double phi = -1 * pow(-1, side) * m_cdbttree->GetDoubleValue(key, varname) + (sector % 12) * M_PI / 6;
     PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
-    unsigned int phibin = layergeom->get_phibin(phi);
+    unsigned int phibin = layergeom->get_phibin(phi, side);
     if (m_writeTree)
     {
       float fX[12];

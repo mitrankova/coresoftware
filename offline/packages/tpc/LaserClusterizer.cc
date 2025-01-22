@@ -370,7 +370,7 @@ int LaserClusterizer::process_event(PHCompositeNode *topNode)
         }
 
         // std::cout << "iphi: " << iphi << std::endl;
-        double phi = layergeom->get_phi(iphi);
+        double phi = layergeom->get_phi(iphi, side);
         // std::cout << "phi: " << phi << std::endl;
         double zdriftlength = layergeom->get_zcenter(it) * m_tGeometry->get_drift_velocity();
 
@@ -612,7 +612,7 @@ void LaserClusterizer::calc_cluster_parameter(std::vector<pointKeyLaser> &clusHi
     PHG4TpcCylinderGeom *layergeom = m_geom_container->GetLayerCellGeom((int) coords[0]);
 
     double r = layergeom->get_radius();
-    double phi = layergeom->get_phi(coords[1]);
+    double phi = layergeom->get_phi(coords[1], side);
     double t = layergeom->get_zcenter(fabs(coords[2]));
 
     double hitzdriftlength = t * m_tGeometry->get_drift_velocity();

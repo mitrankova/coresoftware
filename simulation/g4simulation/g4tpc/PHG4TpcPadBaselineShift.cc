@@ -346,6 +346,7 @@ int PHG4TpcPadBaselineShift::process_event(PHCompositeNode *topNode)
     {
       unsigned short phibin = TpcDefs::getPad(hitr->first);
       unsigned short tbin = TpcDefs::getTBin(hitr->first);
+      int side = TpcDefs::getSide(hitr->first);
       // Get the hitkey
       TrkrDefs::hitkey hitkey = TpcDefs::genHitKey(phibin, tbin);
       TrkrHit *hit = nullptr;
@@ -353,7 +354,7 @@ int PHG4TpcPadBaselineShift::process_event(PHCompositeNode *topNode)
 
       tbin = TpcDefs::getTBin(hitr->first);
       phibin = TpcDefs::getPad(hitr->first);
-      double phi_center = layergeom->get_phicenter(phibin);
+      double phi_center = layergeom->get_phicenter(phibin, side);
       if (phi_center < 0)
       {
         phi_center += 2 * pi;
