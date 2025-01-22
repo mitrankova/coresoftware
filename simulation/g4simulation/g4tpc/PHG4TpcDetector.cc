@@ -632,17 +632,27 @@ std::unique_ptr<CDBTTree> cdbttree;
       auto max_phi_iter = std::max_element(pad_phi[layer].begin(),pad_phi[layer].end());
       double min_phi = static_cast<double>(*min_phi_iter);
       double max_phi = static_cast<double>(*max_phi_iter);
+      min_phi = min_phi - M_PI/2.;
+      max_phi = max_phi - M_PI/2.;
       phi_bin_width_cdb[layer] = std::abs(max_phi - min_phi)/(NPhiBins[(int)(layer / 16)]/12 - 1); 
       double SectorPhi = std::abs(max_phi - min_phi) + phi_bin_width_cdb[layer];
-      double sec_gap = (2 * M_PI - SectorPhi * 12) / 12;
+      //double sec_gap = (2 * M_PI - SectorPhi * 12) / 12;
       
-      std::cout<<" layer "<<layer + 7<<" min phi "<<min_phi<<" - max phi "<<max_phi<<" -- Sector phi "<<SectorPhi<<" phi pad width "<<phi_bin_width_cdb[layer]<<" -- sector gap "<<sec_gap<<std::endl;
+     // std::cout<<" layer "<<layer + 7<<" min phi "<<min_phi<<" - max phi "<<max_phi<<" -- Sector phi "<<SectorPhi<<" phi pad width "<<phi_bin_width_cdb[layer]<<std::endl;
       for (int zside = 0; zside < 2; zside++)
       {
          for (int isector = 0; isector < NSectors; isector++)  // 12 sectors
          {
-            double sec_max_phi = M_PI - (M_PI/2 - min_phi + phi_bin_width_cdb[layer]/2. ) - sec_gap - 2 * M_PI / 12 * isector;  // * (isector+1) ;
-            double sec_min_phi = sec_max_phi - SectorPhi;
+            double sec_max_phi =0; 
+            double sec_min_phi =0;
+            if (zside ==0){
+                 sec_max_phi = M_PI - 2 * M_PI / 12 * (isector + 1)+(-(max_phi-SectorPhi) + phi_bin_width_cdb[layer]/2. ) ;
+                 sec_min_phi = M_PI - 2 * M_PI / 12 * (isector + 1) +(-(max_phi) - phi_bin_width_cdb[layer]/2. ) ;
+                } 
+            if (zside ==1){
+                 sec_max_phi = M_PI - 2 * M_PI / 12 * (isector + 1)+(max_phi + phi_bin_width_cdb[layer]/2. ) ;
+                 sec_min_phi = M_PI - 2 * M_PI / 12 * (isector + 1) +((max_phi - SectorPhi) - phi_bin_width_cdb[layer]/2. ) ;
+                } 
          
             if((int)layer % 16 == 0)
             {

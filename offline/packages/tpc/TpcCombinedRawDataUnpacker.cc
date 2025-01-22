@@ -56,7 +56,8 @@ int TpcCombinedRawDataUnpacker::Init(PHCompositeNode* /*topNode*/)
   std::cout << "TpcCombinedRawDataUnpacker::Init(PHCompositeNode *topNode) Initializing" << std::endl;
 
   m_cdb = CDBInterface::instance();
-  std::string calibdir = m_cdb->getUrl("TPC_FEE_CHANNEL_MAP");
+  //std::string calibdir = m_cdb->getUrl("TPC_FEE_CHANNEL_MAP");
+  std::string calibdir = "/sphenix/user/mitrankova/PadPlane_Readout/map/TPCPadPlaneCDBTTree.root";
 
   if (calibdir[0] == '/')
   {
@@ -273,7 +274,7 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     //    uint16_t sam = tpchit->get_samples();
     max_time_range = tpchit->get_samples();
     varname = "phi";  // + std::to_string(key);
-    double phi = -1 * pow(-1, side) * m_cdbttree->GetDoubleValue(key, varname) + (sector % 12) * M_PI / 6;
+    double phi = -1 * pow(-1, side) * (m_cdbttree->GetDoubleValue(key, varname) - M_PI/2.) + (sector % 12) * M_PI / 6;
     PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
     unsigned int phibin = layergeom->get_phibin(phi);
    

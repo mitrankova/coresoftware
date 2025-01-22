@@ -303,6 +303,7 @@ int PHG4TpcCylinderGeom::find_phibin(const double phi, int side) const
     {
       // NOLINTNEXTLINE(bugprone-integer-division)
       phi_bin = (floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep) + nphibins / 12 * s);
+      //std::cout<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
       break;
     }
     if (s == 11)
@@ -311,12 +312,14 @@ int PHG4TpcCylinderGeom::find_phibin(const double phi, int side) const
       {
         // NOLINTNEXTLINE(bugprone-integer-division)
         phi_bin = floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep) + nphibins / 12 * s;
+      //std::cout<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
         break;
       }
       if (norm_phi > sector_min_Phi[side][s] + 2 * M_PI)
       {
         // NOLINTNEXTLINE(bugprone-integer-division)
         phi_bin = floor(std::abs(sector_max_Phi[side][s] - (norm_phi - 2 * M_PI)) / phistep) + nphibins / 12 * s;
+      //std::cout<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
         break;
       }
     }
@@ -394,12 +397,14 @@ int PHG4TpcCylinderGeom::get_phibin(const double phi, int side) const
   }
   // Get phi-bin number
   int phi_bin = find_phibin(new_phi);
-
+  //std::cout<<"PHG4TpcCylinderGeom::get_phibin ::: side "<<side<<" phi "<<phi<<"  ";
   side = 0;
   // If phi-bin is not defined, check that it is in the dead area and put it to the edge of sector
   if (phi_bin < 0)
   {
     //
+    //std::cout<<" "<<std::endl;
+    //std::cout<<"--- phi bin ( "<<phi_bin<<" ) < 0 -----";
     for (std::size_t s = 0; s < sector_max_Phi[side].size(); s++)
     {
       double daPhi = 0;
@@ -427,8 +432,9 @@ int PHG4TpcCylinderGeom::get_phibin(const double phi, int side) const
       }
     }
     // exit(1);
-
+  //  std::cout<<" new phi "<<new_phi<<"    ";
     phi_bin = find_phibin(new_phi);
+
     if (phi_bin < 0)
     {
       std::cout << PHWHERE << "Asking for bin for phi outside of phi range: " << phi << std::endl;
