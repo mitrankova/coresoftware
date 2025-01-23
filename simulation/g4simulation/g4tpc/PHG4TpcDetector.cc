@@ -679,8 +679,6 @@ std::unique_ptr<CDBTTree> cdbttree;
         // TODO: confirm with what is in PHG4TpcPadPlane Readout
         sector_R_bias[zside].push_back(0);
         sector_Phi_bias[zside].push_back(0);
-//        sector_min_Phi[zside].push_back(sec_min_phi);
-//        sector_max_Phi[zside].push_back(sec_max_phi);
       }  // isector
     }
 
