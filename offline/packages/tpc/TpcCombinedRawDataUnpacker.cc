@@ -267,7 +267,7 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     std::string varname = "layer";
     int layer = m_cdbttree->GetIntValue(key, varname);
     // antenna pads will be in 0 layer
-    if (layer <= 0)
+    if (layer <= 6)
     {
       continue;
     }
@@ -279,8 +279,20 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     varname = "phi";  // + std::to_string(key);
     double phi = -1 * pow(-1, side) * (m_cdbttree->GetDoubleValue(key, varname) - M_PI/2.) + (sector % 12) * M_PI / 6;
     PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
+ /*   int softwaresector =-1;
+    if (sector >= 0 && sector <= 5) {
+        softwaresector = 5 -sector ;
+    } else if (sector >= 6 && sector <= 11) {
+        softwaresector = 11 - sector;
+    } else if (sector >= 12 && sector <= 17) {
+        softwaresector = 17 - sector;
+    } else if (sector >= 18 && sector <= 23) {
+        softwaresector = 23 - sector;
+    }
+*/
+   //varname = "R"; 
+    //std::cout<<"side "<<side<<" sector "<<sector<<" softwaresector "<<softwaresector<<" layer "<<layer<<" R "<<m_cdbttree->GetDoubleValue(key, varname)<<" phi min "<<layergeom->get_layerphimin(softwaresector, side)<<" phi "<<phi<<" phi max "<<layergeom->get_layerphimax(softwaresector, side)<<" bin width "<<layergeom->get_phistep()<<" nphibins "<<layergeom->get_phibins()<<std::endl;
     unsigned int phibin = layergeom->get_phibin(phi, side);
-   
     hit_set_key = TpcDefs::genHitSetKey(layer, (mc_sectors[sector % 12]), side);
     hit_set_container_itr = trkr_hit_set_container->findOrAddHitSet(hit_set_key);
 

@@ -706,13 +706,8 @@ int PHG4TpcElectronDrift::process_event(PHCompositeNode *topNode)
         assert(nt);
         nt->Fill(ihit, t_start, t_final, t_sigma, rad_final, z_start, z_final);
       }
-<<<<<<< HEAD
-      //std::cout<<"ELECTRON HIT "<<ihit<<" "<<x_final<<" "<<y_final<<std::endl;
-      hitmapend->Fill(x_final, y_final);    // INcludes diffusion and distortion
-=======
           hitmapend->Fill(x_final, y_final);    // INcludes diffusion and distortion
 
->>>>>>> master
       padplane->MapToPadPlane(truth_clusterer, single_hitsetcontainer.get(),
                               temp_hitsetcontainer.get(), hittruthassoc, x_final, y_final, t_final,
                               side, hiter, ntpad, nthit);

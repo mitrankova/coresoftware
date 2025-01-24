@@ -604,6 +604,8 @@ std::unique_ptr<CDBTTree> cdbttree;
   std::array<std::vector<double >, NSides > sector_max_Phi;
   std::array<std::vector<double >, NLayers > pad_phi;
   std::array<double, NLayers > phi_bin_width_cdb;
+  std::array<std::array<std::array<double, 3 >, NSectors >, NSides > sec_max_phi; 
+  std::array<std::array<std::array<double, 3 >, NSectors >, NSides > sec_min_phi; 
   //std::array<std::vector<std::pair<int, double > >, NLayers > pad_data;//num, phi
   for (int f = 0; f < Nfee; f++)
   {
@@ -643,23 +645,16 @@ std::unique_ptr<CDBTTree> cdbttree;
       {
          for (int isector = 0; isector < NSectors; isector++)  // 12 sectors
          {
-            double sec_max_phi =0; 
-            double sec_min_phi =0;
             if (zside ==0){
-                 sec_max_phi = M_PI - 2 * M_PI / 12 * (isector + 1)+(-(max_phi-SectorPhi) + phi_bin_width_cdb[layer]/2. ) ;
-                 sec_min_phi = M_PI - 2 * M_PI / 12 * (isector + 1) +(-(max_phi) - phi_bin_width_cdb[layer]/2. ) ;
+                 sec_max_phi[zside][isector][(int)layer / 16] = M_PI - 2 * M_PI / 12 * (isector + 1)+(-(max_phi-SectorPhi) + phi_bin_width_cdb[layer]/2. ) ;
+                 sec_min_phi[zside][isector][(int)layer / 16] = M_PI - 2 * M_PI / 12 * (isector + 1) +(-(max_phi) - phi_bin_width_cdb[layer]/2. ) ;
                 } 
             if (zside ==1){
-                 sec_max_phi = M_PI - 2 * M_PI / 12 * (isector + 1)+(max_phi + phi_bin_width_cdb[layer]/2. ) ;
-                 sec_min_phi = M_PI - 2 * M_PI / 12 * (isector + 1) +((max_phi - SectorPhi) - phi_bin_width_cdb[layer]/2. ) ;
+                 sec_max_phi[zside][isector][(int)layer / 16] = M_PI - 2 * M_PI / 12 * (isector + 1)+(max_phi + phi_bin_width_cdb[layer]/2. ) ;
+                 sec_min_phi[zside][isector][(int)layer / 16] = M_PI - 2 * M_PI / 12 * (isector + 1) +((max_phi - SectorPhi) - phi_bin_width_cdb[layer]/2. ) ;
                 } 
          
-            if((int)layer % 16 == 0)
-            {
-               std::cout<<" Module "<<(int)layer / 16 <<" side "<<zside<<" sector "<<isector<<" sec_min "<<sec_min_phi<<" sec_max "<<sec_max_phi<<" Sector width "<<SectorPhi<<" phi pad width "<<phi_bin_width_cdb[layer]<<std::endl; 
-               sector_min_Phi[zside].push_back(sec_min_phi);
-               sector_max_Phi[zside].push_back(sec_max_phi); 
-            }
+              // std::cout<<" Module "<<(int)layer / 16 <<" side "<<zside<<" sector "<<isector<<" sec_min "<<sec_min_phi<<" sec_max "<<sec_max_phi<<" Sector width "<<SectorPhi<<" phi pad width "<<phi_bin_width_cdb[layer]<<std::endl; 
            
          }
       }
@@ -672,6 +667,8 @@ std::unique_ptr<CDBTTree> cdbttree;
     {
       sector_R_bias[zside].clear();
       sector_Phi_bias[zside].clear();
+      sector_min_Phi[zside].clear();
+      sector_max_Phi[zside].clear();
       // int eff_layer = 0;
       for (int isector = 0; isector < NSectors; ++isector)  // 12 sectors
       {
@@ -679,6 +676,10 @@ std::unique_ptr<CDBTTree> cdbttree;
         // TODO: confirm with what is in PHG4TpcPadPlane Readout
         sector_R_bias[zside].push_back(0);
         sector_Phi_bias[zside].push_back(0);
+        sector_min_Phi[zside].push_back(sec_min_phi[zside][isector][iregion]);
+        sector_max_Phi[zside].push_back(sec_max_phi[zside][isector][iregion]);
+               std::cout<<" Module "<<iregion <<" side "<<zside<<" sector "<<isector<<" sec_min "<<sector_min_Phi[zside].at(isector)<<" sec_max "<<sector_max_Phi[zside].at(isector)<<" phi pad width "<<phi_bin_width_cdb[iregion*16]<<std::endl; 
+
       }  // isector
     }
 
@@ -740,7 +741,7 @@ std::unique_ptr<CDBTTree> cdbttree;
       layerseggeo->set_phi_bias(sector_Phi_bias);
       layerseggeo->set_sector_min_phi(sector_min_Phi);
       layerseggeo->set_sector_max_phi(sector_max_Phi);
-      std::cout<<" sector_min_Phi size "<<sector_min_Phi[0].size()<<std::endl; 
+      std::cout<<"layer "<<layer<<" sector_min_Phi size "<<sector_min_Phi[0].size()<<std::endl; 
       // Chris Pinkenburg: greater causes huge memory growth which causes problems
       // on our farm. If you need to increase this - TALK TO ME first
       if (NPhiBins[iregion] * NTBins > 5100000)

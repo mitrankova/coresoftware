@@ -330,7 +330,7 @@ std::map<TrkrDefs::cluskey, std::shared_ptr<TrkrCluster>> SvtxTruthEval::all_tru
     if (layer >= _nlayers_maps + _nlayers_intt && layer < _nlayers_maps + _nlayers_intt + _nlayers_tpc)  // in TPC
     {
       unsigned int side = 0;
-      if (gz > 0)
+      if (gz < 0)
       {
         side = 1;
       }
@@ -735,6 +735,11 @@ void SvtxTruthEval::G4ClusterSize(TrkrDefs::cluskey ckey, unsigned int layer, st
   double inner_phi = atan2(inner_y, inner_x);
   double outer_phi = atan2(outer_y, outer_x);
   double avge_z = (outer_z + inner_z) / 2.0;
+  unsigned int side = 0;
+  if (avge_z < 0)
+  {
+    side = 1;
+  }
 
   // Now fold these with the expected diffusion and shaping widths
   // assume spread is +/- equals this many sigmas times diffusion and shaping when extending the size
@@ -766,8 +771,8 @@ void SvtxTruthEval::G4ClusterSize(TrkrDefs::cluskey ckey, unsigned int layer, st
     double g4min_phi = inner_phi - sigmas * std::sqrt(pow(phidiffusion, 2) + pow(added_smear_trans, 2) + pow(gem_spread, 2)) / radius;
 
     // find the bins containing these max and min z edges
-    unsigned int phibinmin = layergeom->get_phibin(g4min_phi);
-    unsigned int phibinmax = layergeom->get_phibin(g4max_phi);
+    unsigned int phibinmin = layergeom->get_phibin(g4min_phi, side);
+    unsigned int phibinmax = layergeom->get_phibin(g4max_phi, side);
     unsigned int phibinwidth = phibinmax - phibinmin + 1;
     g4phisize = (double) phibinwidth * layergeom->get_phistep() * layergeom->get_radius();
 

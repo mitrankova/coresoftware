@@ -30,6 +30,8 @@ class PHG4TpcCylinderGeom : public PHG4CylinderGeom
   double get_zmin() const override;
   double get_phistep() const;
   double get_phimin() const;
+  double get_layerphimin(const double sector, int side) const;
+  double get_layerphimax(const double sector, int side) const;
   double get_zstep() const;
   int get_etabins() const;
   double get_etastep() const;

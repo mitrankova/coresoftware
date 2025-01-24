@@ -346,7 +346,7 @@ int PHG4TpcPadBaselineShift::process_event(PHCompositeNode *topNode)
     {
       unsigned short phibin = TpcDefs::getPad(hitr->first);
       unsigned short tbin = TpcDefs::getTBin(hitr->first);
-      int side = TpcDefs::getSide(hitr->first);
+    //  int side = TpcDefs::getSide(hitr->first);
       // Get the hitkey
       TrkrDefs::hitkey hitkey = TpcDefs::genHitKey(phibin, tbin);
       TrkrHit *hit = nullptr;

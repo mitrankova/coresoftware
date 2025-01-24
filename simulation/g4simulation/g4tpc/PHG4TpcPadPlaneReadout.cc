@@ -738,10 +738,10 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
 //  std::cout << "   !!!!!!! zigzags: phi " << phi <<std::endl;
 // std::cout << " populate_zigzag_phibins for layer " << layernum << " with radius " << radius<<std::endl; 
  // std::cout << " before phi low "<<std::endl;
-   int phibin_low = LayerGeom->get_phibin(philim_high);
+   int phibin_low = LayerGeom->get_phibin(philim_high,side);
 //  std::cout << " philim_high " << philim_high << " phibin_low " << phibin_low<<std::endl; 
 //  std::cout << " before phi high "<<std::endl;
-  int phibin_high = LayerGeom->get_phibin(philim_low);
+  int phibin_high = LayerGeom->get_phibin(philim_low,side);
 //  std::cout << " philim_low " << philim_low << " phibin_high " << phibin_high<<std::endl; 
   int npads = phibin_high - phibin_low;
   if (Verbosity() > 1000)

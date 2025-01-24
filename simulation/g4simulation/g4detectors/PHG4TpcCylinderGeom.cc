@@ -107,6 +107,20 @@ PHG4TpcCylinderGeom::get_phistep() const
 }
 
 double
+PHG4TpcCylinderGeom::get_layerphimin(const double sector, int side) const
+{
+  check_binning_method_phi("PHG4TpcCylinderGeom::get_layerphimin");
+  return sector_min_Phi[side][sector];
+}
+
+double
+PHG4TpcCylinderGeom::get_layerphimax(const double sector, int side) const
+{
+  check_binning_method_phi("PHG4TpcCylinderGeom::get_layerphimax");
+  return sector_max_Phi[side][sector];
+}
+
+double
 PHG4TpcCylinderGeom::get_phimin() const
 {
   check_binning_method_phi("PHG4TpcCylinderGeom::get_phimin");
@@ -299,11 +313,12 @@ int PHG4TpcCylinderGeom::find_phibin(const double phi, int side) const
 
   for (std::size_t s = 0; s < sector_max_Phi[side].size(); s++)
   {
+//std::cout<<"Find phi bin::::LOOP side "<<side<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_min_Phi "<<sector_min_Phi[side][s]<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<std::endl;
     if (norm_phi < sector_max_Phi[side][s] && norm_phi > sector_min_Phi[side][s])
     {
       // NOLINTNEXTLINE(bugprone-integer-division)
       phi_bin = (floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep) + nphibins / 12 * s);
-      //std::cout<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
+     // std::cout<<"Find phi bin:::: side "<<side<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_min_Phi "<<sector_min_Phi[side][s]<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
       break;
     }
     if (s == 11)
@@ -312,14 +327,14 @@ int PHG4TpcCylinderGeom::find_phibin(const double phi, int side) const
       {
         // NOLINTNEXTLINE(bugprone-integer-division)
         phi_bin = floor(std::abs(sector_max_Phi[side][s] - norm_phi) / phistep) + nphibins / 12 * s;
-      //std::cout<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
+      //std::cout<<"Find phi bin:::: side "<<side<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_min_Phi "<<sector_min_Phi[side][s]<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
         break;
       }
       if (norm_phi > sector_min_Phi[side][s] + 2 * M_PI)
       {
         // NOLINTNEXTLINE(bugprone-integer-division)
         phi_bin = floor(std::abs(sector_max_Phi[side][s] - (norm_phi - 2 * M_PI)) / phistep) + nphibins / 12 * s;
-      //std::cout<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
+      //std::cout<<"Find phi bin:::: side "<<side<<" sector "<<s<<" phibin "<<phi_bin<<"  sector_min_Phi "<<sector_min_Phi[side][s]<<"  sector_max_Phi "<<sector_max_Phi[side][s]<<" phistep "<<phistep<<" nphibins "<<nphibins<<std::endl;
         break;
       }
     }
@@ -396,15 +411,15 @@ int PHG4TpcCylinderGeom::get_phibin(const double phi, int side) const
     new_phi = phi + 2 * M_PI;
   }
   // Get phi-bin number
-  int phi_bin = find_phibin(new_phi);
-  //std::cout<<"PHG4TpcCylinderGeom::get_phibin ::: side "<<side<<" phi "<<phi<<"  ";
+//  std::cout<<"PHG4TpcCylinderGeom::get_phibin ::: side "<<side<<" phi "<<phi<<"  ";
+  int phi_bin = find_phibin(new_phi, side);
  // side = 0;
   // If phi-bin is not defined, check that it is in the dead area and put it to the edge of sector
   if (phi_bin < 0)
   {
     //
-    //std::cout<<" "<<std::endl;
-    //std::cout<<"--- phi bin ( "<<phi_bin<<" ) < 0 -----";
+  //  std::cout<<" "<<std::endl;
+  //  std::cout<<"--- phi bin ( "<<phi_bin<<" ) < 0 -----";
     for (std::size_t s = 0; s < sector_max_Phi[side].size(); s++)
     {
       double daPhi = 0;
@@ -432,8 +447,8 @@ int PHG4TpcCylinderGeom::get_phibin(const double phi, int side) const
       }
     }
     // exit(1);
-  //  std::cout<<" new phi "<<new_phi<<"    ";
-    phi_bin = find_phibin(new_phi);
+    //std::cout<<" new phi "<<new_phi<<"    ";
+    phi_bin = find_phibin(new_phi, side);
 
     if (phi_bin < 0)
     {
