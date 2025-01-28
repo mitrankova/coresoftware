@@ -11,6 +11,7 @@
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
+#include <trackbase/TrkrClusterHitAssocv3.h>
 
 #include <g4detectors/PHG4CylinderGeomContainer.h>
 #include <g4detectors/PHG4TpcCylinderGeom.h>
@@ -205,7 +206,7 @@ void TrackResiduals::clearClusterStateVectors()
 int TrackResiduals::process_event(PHCompositeNode* topNode)
 {
   auto trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
   auto hitmap = findNode::getClass<TrkrHitSetContainer>(topNode, "TRKR_HITSET");
   auto tpcGeom =
@@ -213,6 +214,15 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
   auto mvtxGeom = findNode::getClass<PHG4CylinderGeomContainer>(topNode, "CYLINDERGEOM_MVTX");
   auto inttGeom = findNode::getClass<PHG4CylinderGeomContainer>(topNode, "CYLINDERGEOM_INTT");
   auto mmGeom = findNode::getClass<PHG4CylinderGeomContainer>(topNode, "CYLINDERGEOM_MICROMEGAS_FULL");
+  auto clusterhitassocmap = findNode::getClass<TrkrClusterHitAssoc>(topNode, "TRKR_CLUSTERHITASSOC");
+
+  if(!clusterhitassocmap)
+  {
+    std::cerr << "ERROR: Can't find TRKR_CLUSTERHITASSOC node!" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  std::cout << "TRKR_CLUSTERHITASSOC size: " << clusterhitassocmap->size() << std::endl;
 
   if (!mmGeom)
   {
@@ -271,7 +281,7 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
 
   if (m_doClusters)
   {
-    fillClusterTree(clustermap, geometry);
+    fillClusterTree(clusterhitassocmap, clustermap, geometry);
   }
 
   if (m_convertSeeds)
@@ -353,7 +363,7 @@ void TrackResiduals::fillFailedSeedTree(PHCompositeNode* topNode, std::set<unsig
 {
   auto tpcseedmap = findNode::getClass<TrackSeedContainer>(topNode, "TpcTrackSeedContainer");
   auto trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
   auto silseedmap = findNode::getClass<TrackSeedContainer>(topNode, "SiliconTrackSeedContainer");
   auto svtxseedmap = findNode::getClass<TrackSeedContainer>(topNode, "SvtxTrackSeedContainer");
@@ -472,7 +482,7 @@ void TrackResiduals::fillVertexTree(PHCompositeNode* topNode)
 {
   auto svtxvertexmap = findNode::getClass<SvtxVertexMap>(topNode, "SvtxVertexMap");
   auto trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   if (svtxvertexmap)
   {
     m_nvertices = svtxvertexmap->size();
@@ -627,13 +637,21 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
   m_yzslope = std::get<0>(yzparams);
 }
 
-void TrackResiduals::fillClusterTree(TrkrClusterContainer* clusters,
+void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrClusterContainer* clusters,
                                      ActsGeometry* geometry)
 {
   if (clusters->size()< m_min_cluster_size)
   {
     return;
   }
+
+  //auto clusterhitassoc = findNode::getClass<TrkrClusterHitAssoc>(topNode, "TRKR_CLUSTERHITASSOC");
+  if (!clusterhitassoc)
+  {
+      std::cerr << "ERROR: Can't find TRKR_CLUSTERHITASSOC node!" << std::endl;
+      return;
+  }
+
   for (auto& det : {TrkrDefs::TrkrId::mvtxId, TrkrDefs::TrkrId::inttId,
                     TrkrDefs::TrkrId::tpcId, TrkrDefs::TrkrId::micromegasId})
   {
@@ -646,6 +664,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterContainer* clusters,
         auto key = iter->first;
         auto cluster = clusters->findCluster(key);
         Acts::Vector3 glob;
+        m_scluskey=key; 
         // NOT IMPLEMENTED YET
         // if (TrkrDefs::getTrkrId(key) == TrkrDefs::tpcId)
         // {
@@ -730,7 +749,19 @@ void TrackResiduals::fillClusterTree(TrkrClusterContainer* clusters,
         default:
           break;
         }
+        m_clust_hitkeys.clear();
+        auto hitrange = clusterhitassoc->getHits(key);
+        size_t num_hits = std::distance(hitrange.first, hitrange.second);
+        std::cout << "Cluster Key: " << key << " has " << num_hits << " associated hits." << std::endl;
+        for (auto hit_iter = hitrange.first; hit_iter != hitrange.second; ++hit_iter)
+        {
+            TrkrDefs::hitkey hkey = hit_iter->second;
 
+          
+            m_clust_hitkeys.push_back(hkey);
+            std::cout << "  Hitkey: " << hkey << std::endl;
+              
+        }
         m_clustree->Fill();
       }
     }
@@ -863,7 +894,7 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
 
       switch (det)
       {
-      case TrkrDefs::TrkrId::mvtxId:
+      /*case TrkrDefs::TrkrId::mvtxId:
       {
         m_row = MvtxDefs::getRow(hitkey);
         m_col = MvtxDefs::getCol(hitkey);
@@ -886,8 +917,8 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
 
         m_zdriftlength = std::numeric_limits<float>::quiet_NaN();
         break;
-      }
-      case TrkrDefs::TrkrId::inttId:
+      }*/
+      /*case TrkrDefs::TrkrId::inttId:
       {
         m_row = InttDefs::getRow(hitkey);
         m_col = InttDefs::getCol(hitkey);
@@ -910,7 +941,7 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
         m_hittbin = std::numeric_limits<int>::quiet_NaN();
         m_zdriftlength = std::numeric_limits<float>::quiet_NaN();
         break;
-      }
+      }*/
       case TrkrDefs::TrkrId::tpcId:
       {
         m_row = std::numeric_limits<int>::quiet_NaN();
@@ -934,7 +965,7 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
 
         break;
       }
-      case TrkrDefs::TrkrId::micromegasId:
+      /*case TrkrDefs::TrkrId::micromegasId:
       {
         const auto layergeom = dynamic_cast<CylinderGeomMicromegas*>(mmGeom->GetLayerGeom(m_hitlayer));
         m_strip = MicromegasDefs::getStrip(hitkey);
@@ -950,7 +981,7 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
         m_hittbin = std::numeric_limits<int>::quiet_NaN();
 
         m_zdriftlength = std::numeric_limits<float>::quiet_NaN();
-      }
+      }*/
       default:
         break;
       }
@@ -964,7 +995,7 @@ void TrackResiduals::fillClusterBranchesKF(TrkrDefs::cluskey ckey, SvtxTrack* tr
                                            const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>>& global,
                                            PHCompositeNode* topNode)
 {
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
 
   // move the corrected cluster positions back to the original readout surface
@@ -1294,7 +1325,7 @@ void TrackResiduals::fillClusterBranchesSeeds(TrkrDefs::cluskey ckey,  // SvtxTr
   // CircleFitClusters is called in this method. It applies TOF, crossing, and all distortion corrections before fitting
   //    stategx etc are at the intersection point of the helical fit with the cluster surface
 
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
 
   // move the cluster positions back to the original readout surface
@@ -1676,6 +1707,7 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("timebucket", &m_timebucket, "m_timebucket/I");
   m_clustree->Branch("segtype", &m_segtype, "m_segtype/I");
   m_clustree->Branch("tile", &m_tileid, "m_tileid/I");
+  m_clustree->Branch("clus_hitkeys", &m_clust_hitkeys); 
 
   m_tree = new TTree("residualtree", "A tree with track, cluster, and state info");
   m_tree->Branch("run", &m_runnumber, "m_runnumber/I");
@@ -1750,6 +1782,8 @@ void TrackResiduals::createBranches()
   m_tree->Branch("Y0", &m_Y0, "m_Y0/F");
   m_tree->Branch("dcaxy", &m_dcaxy, "m_dcaxy/F");
   m_tree->Branch("dcaz", &m_dcaz, "m_dcaz/F");
+  m_tree->Branch("dcaxy_primary_vertex", &m_dcaxy_primary_vertex, "m_dcaxy_primary_vertex/F");
+  m_tree->Branch("dcaz_primary_vertex", &m_dcaz_primary_vertex, "m_dcaz_primary_vertex/F"); 
 
   m_tree->Branch("cluskeys", &m_cluskeys);
   m_tree->Branch("clusedge", &m_clusedge);
@@ -1842,7 +1876,7 @@ void TrackResiduals::fillResidualTreeKF(PHCompositeNode* topNode)
   auto tpcGeom =
       findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode, "CYLINDERCELLGEOM_SVTX");
   auto trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto vertexmap = findNode::getClass<GlobalVertexMap>(topNode, "GlobalVertexMap");
   auto alignmentmap = findNode::getClass<SvtxAlignmentStateMap>(topNode, m_alignmentMapName);
 
@@ -1922,6 +1956,42 @@ void TrackResiduals::fillResidualTreeKF(PHCompositeNode* topNode)
     auto dcapair = TrackAnalysisUtils::get_dca(track, zero);
     m_dcaxy = dcapair.first.first;
     m_dcaz = dcapair.second.first;
+      if (vertexmap)
+      {
+          std::cerr << "Warning: vertexmap exists" << std::endl;
+          auto vertexit = vertexmap->find(m_vertexid);
+          if (vertexit != vertexmap->end())
+          {
+              std::cerr << "Warning: vertexit exists" << std::endl;
+              auto svtxVertex = vertexit->second;
+              if (svtxVertex)
+              {
+                  std::cerr << "Warning: svtxVertex exists" << std::endl;
+                  Acts::Vector3 vertex(svtxVertex->get_x(), svtxVertex->get_y(), svtxVertex->get_z());
+                  auto dca_primary_track = TrackAnalysisUtils::get_dca(track, vertex);
+                  m_dcaxy_primary_vertex = dca_primary_track.first.first;
+                  m_dcaz_primary_vertex = dca_primary_track.second.first;
+              }
+              else
+              {
+                  m_dcaxy_primary_vertex = std::numeric_limits<float>::quiet_NaN();
+                  m_dcaz_primary_vertex = std::numeric_limits<float>::quiet_NaN();
+                  std::cerr << "Warning: svtxVertex is nullptr" << std::endl;
+              }
+          }
+          else
+          {
+              m_dcaxy_primary_vertex = std::numeric_limits<float>::quiet_NaN();
+              m_dcaz_primary_vertex = std::numeric_limits<float>::quiet_NaN();
+              std::cerr << "Warning: Vertex with id " << m_vertexid << " not found in vertexmap" << std::endl;
+          }
+      }
+      else
+      {
+          m_dcaxy_primary_vertex = std::numeric_limits<float>::quiet_NaN();
+          m_dcaz_primary_vertex = std::numeric_limits<float>::quiet_NaN();
+          std::cerr << "Warning: vertexmap is nullptr" << std::endl;
+      }
 
     auto tpcseed = track->get_tpc_seed();
     if (tpcseed)
@@ -2072,7 +2142,7 @@ void TrackResiduals::fillEventTree(PHCompositeNode* topNode)
   auto silseedmap = findNode::getClass<TrackSeedContainer>(topNode, "SiliconTrackSeedContainer");
   auto tpcseedmap = findNode::getClass<TrackSeedContainer>(topNode, "TpcTrackSeedContainer");
   auto trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto hitmap = findNode::getClass<TrkrHitSetContainer>(topNode, "TRKR_HITSET");
 
   m_ntpc_hits0 = 0;
@@ -2167,7 +2237,7 @@ void TrackResiduals::fillResidualTreeSeeds(PHCompositeNode* topNode)
   auto tpcGeom =
       findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode, "CYLINDERCELLGEOM_SVTX");
   auto trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
-  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
+  auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto vertexmap = findNode::getClass<GlobalVertexMap>(topNode, "GlobalVertexMap");
   auto alignmentmap = findNode::getClass<SvtxAlignmentStateMap>(topNode, m_alignmentMapName);
 
