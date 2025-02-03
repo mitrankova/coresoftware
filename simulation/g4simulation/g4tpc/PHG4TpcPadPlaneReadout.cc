@@ -1040,13 +1040,13 @@ void PHG4TpcPadPlaneReadout::ReadGain()
 }
 void PHG4TpcPadPlaneReadout::SetDefaultParameters()
 {
-  set_default_double_param("tpc_minradius_inner", 31.105);  // 30.0);  // cm
-  set_default_double_param("tpc_minradius_mid", 41.153);    // 40.0);
-  set_default_double_param("tpc_minradius_outer", 58.367);  // 60.0);
+  set_default_double_param("tpc_minradius_inner", 31.49836110818037);  //31.105 30.0);  // cm
+  set_default_double_param("tpc_minradius_mid", 41.659202613529567);    //41.153 40.0);
+  set_default_double_param("tpc_minradius_outer", 58.91096495597712 );  //58.367 60.0);
 
-  set_default_double_param("tpc_maxradius_inner", 40.249);  // 40.0);  // cm
-  set_default_double_param("tpc_maxradius_mid", 57.475);    // 60.0);
-  set_default_double_param("tpc_maxradius_outer", 75.911);  // 77.0);  // from Tom
+  set_default_double_param("tpc_maxradius_inner", 39.985222874031024);  //40.249 40.0);  // cm
+  set_default_double_param("tpc_maxradius_mid", 56.9695373910603 );    //57.475 60.0);
+  set_default_double_param("tpc_maxradius_outer", 75.36667758418596 );  //75.911 77.0);  // from Tom
 
   set_default_double_param("neffelectrons_threshold", 1.0);
   set_default_double_param("maxdriftlength", 105.5);     // cm
