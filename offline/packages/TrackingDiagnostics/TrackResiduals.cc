@@ -218,11 +218,13 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
 
   if(!clusterhitassocmap)
   {
-    std::cerr << "ERROR: Can't find TRKR_CLUSTERHITASSOC node!" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
+  std::cerr << "ERROR: Can't find TRKR_CLUSTERHITASSOC node!" << std::endl;
+  return Fun4AllReturnCodes::ABORTRUN;
   }
 
   std::cout << "TRKR_CLUSTERHITASSOC size: " << clusterhitassocmap->size() << std::endl;
+
+    m_vx = m_vy = m_vz = std::numeric_limits<float>::quiet_NaN();
 
   if (!mmGeom)
   {
@@ -1707,6 +1709,7 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("timebucket", &m_timebucket, "m_timebucket/I");
   m_clustree->Branch("segtype", &m_segtype, "m_segtype/I");
   m_clustree->Branch("tile", &m_tileid, "m_tileid/I");
+  m_clustree->Branch("cluskey", &m_scluskey);
   m_clustree->Branch("clus_hitkeys", &m_clust_hitkeys); 
 
   m_tree = new TTree("residualtree", "A tree with track, cluster, and state info");
