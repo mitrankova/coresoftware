@@ -155,6 +155,7 @@ bool InttBCOMap::IsBad(const int &felix_server, const int &felix_channel, uint64
 
   // -1: m_bco is initial value, not load the parameter. accept all bco
   if (bco_peak == -1 || bco_diff == bco_peak || bco_diff == bco_minus || bco_diff == bco_plus)
+ // if (bco_peak == -1 || bco_diff == bco_peak)
   {
     // std::cout<<"m_bco is initial value, not load the parameter. accept all bco "<<felix_server<<" "<<felix_channel<<std::endl;
     return false;
