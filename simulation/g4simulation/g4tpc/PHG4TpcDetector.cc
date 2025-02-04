@@ -552,7 +552,7 @@ std::unique_ptr<CDBTTree> cdbttree;
   MinLayer[1] = MinLayer[0] + NTpcLayers[0];
   MinLayer[2] = MinLayer[1] + NTpcLayers[1];
 
-  const std::array<double, 3> MinRadius =
+ /* const std::array<double, 3> MinRadius =
       {{m_Params->get_double_param("tpc_minradius_inner"),
         m_Params->get_double_param("tpc_minradius_mid"),
         m_Params->get_double_param("tpc_minradius_outer")}};
@@ -562,15 +562,15 @@ std::unique_ptr<CDBTTree> cdbttree;
           m_Params->get_double_param("tpc_maxradius_inner"),
           m_Params->get_double_param("tpc_maxradius_mid"),
           m_Params->get_double_param("tpc_maxradius_outer"),
-      }};
+      }};*/
 
   const std::array<double, 5> Thickness =
       {{
-          0.687,
+          0.56598621677629212,
           1.0206889851687158,/*1.012,*/
           1.0970475085472556,/*1.088,*/
-          0.56891770257002054,/*0.534,*/
-          0.5630547309825637,/*0.595,*/
+          0.5630547309825637,/*0.534,*/
+          0.56891770257002054,/*0.595,*/
       }};
 
   const double drift_velocity = m_Params->get_double_param("drift_velocity");
@@ -603,8 +603,8 @@ std::unique_ptr<CDBTTree> cdbttree;
   std::array<std::vector<double >, NSides > sector_min_Phi;
   std::array<std::vector<double >, NSides > sector_max_Phi;
   std::array<std::vector<double >, NLayers > pad_phi;
-  //std::array<std::vector<double >, NLayers > pad_R;
-  //std::array<double, NLayers > layer_radius;
+  std::array<std::vector<double >, NLayers > pad_R;
+  std::array<double, NLayers > layer_radius;
   std::array<double, NLayers > phi_bin_width_cdb;
   std::array<std::array<std::array<double, 3 >, NSectors >, NSides > sec_max_phi; 
   std::array<std::array<std::array<double, 3 >, NSectors >, NSides > sec_min_phi; 
@@ -622,9 +622,9 @@ std::unique_ptr<CDBTTree> cdbttree;
         std::string phiname = "phi";  // + to_string(key);
        // std::string padname = "pad";  // + to_string(key);
         pad_phi[v_layer].push_back( cdbttree->GetDoubleValue(key, phiname) );
-        //std::string rname = "R";  // + to_string(key);
+        std::string rname = "R";  // + to_string(key);
        // std::string padname = "pad";  // + to_string(key);
-       // pad_R[v_layer].push_back( cdbttree->GetDoubleValue(key, rname) );
+        pad_R[v_layer].push_back( cdbttree->GetDoubleValue(key, rname) );
       }
     }
   }
@@ -633,13 +633,16 @@ std::unique_ptr<CDBTTree> cdbttree;
     
     for(size_t layer=0;layer<NLayers;layer++)
     {
-      /*layer_radius[layer]=0;
+      layer_radius[layer]=0;
       for (int pad=0; pad<(int)pad_R[(int)layer].size(); pad++)
       {
               layer_radius[(int)layer] += pad_R[(int)layer][pad];
+              //std::cout<<" Layer "<<layer<<" pad "<<pad<<" R "<<pad_R[(int)layer][pad]<<" layer radius "<<layer_radius[(int)layer]<<" phi "<<pad_phi[(int)layer][pad]<<std::endl;
       }
-      layer_radius[(int)layer] = layer_radius[(int)layer]/pad_R[layer].size();
-      layer_radius[(int)layer] = layer_radius[(int)layer]/10.;*/
+
+      layer_radius[(int)layer] = layer_radius[(int)layer]/pad_R[(int)layer].size();
+      layer_radius[(int)layer] = layer_radius[(int)layer]/10.;
+           //  std::cout<<" Layer "<<layer<<" N pads "<<pad_R[(int)layer].size()<<" layer radius "<<layer_radius[(int)layer]<<std::endl;
       //std::cout<<" Layer "<<layer<<std::endl;
       auto min_phi_iter = std::min_element(pad_phi[layer].begin(),pad_phi[layer].end());
       auto max_phi_iter = std::max_element(pad_phi[layer].begin(),pad_phi[layer].end());
@@ -711,19 +714,11 @@ std::unique_ptr<CDBTTree> cdbttree;
       }
       sum_r += r_length;
     }
-    const double pad_space = (MaxRadius[iregion] - MinRadius[iregion] - sum_r) / (NTpcLayers[iregion] - 1);
-    double current_r = MinRadius[iregion];//layer_radius[layer];//
+   // const double pad_space = (MaxRadius[iregion] - MinRadius[iregion] - sum_r) / (NTpcLayers[iregion] - 1);
+    //double current_r = MinRadius[iregion];//layer_radius[layer];//
 
     for (int layer = MinLayer[iregion]; layer < MinLayer[iregion] + NTpcLayers[iregion]; ++layer)
     {
-     // if (Verbosity())
-     // {
-        std::cout << " layer " << layer << " MinLayer " << MinLayer[iregion] << " region " << iregion
-                  << " radius " <<MinRadius[iregion] + ((double) (layer - MinLayer[iregion]) + 0.5) * Thickness[iregion]
-                  << " thickness " << Thickness[iregion]
-                  << " NTBins " << NTBins << " tmin " << MinT << " tstep " << TBinWidth
-                  << " phibins " << NPhiBins[iregion] << " phistep " << phi_bin_width_cdb[layer] << std::endl;
-     // }
 
       auto layerseggeo = new PHG4TpcCylinderGeom;
       layerseggeo->set_layer(layer);
@@ -740,8 +735,18 @@ std::unique_ptr<CDBTTree> cdbttree;
           r_length = Thickness[3];
         }
       }
+           // if (Verbosity())
+     // {
+        std::cout << " layer " << layer << " MinLayer " << MinLayer[iregion] << " region " << iregion
+                  /*<< " radius " <<MinRadius[iregion] + ((double) (layer - MinLayer[iregion]) + 0.5) * Thickness[iregion]*/
+                  << " radius " << layer_radius[(int) layer - MinLayer[iregion]]
+                  << " thickness " << r_length
+                  << " NTBins " << NTBins << " tmin " << MinT << " tstep " << TBinWidth
+                  << " phibins " << NPhiBins[iregion] << " phistep " << phi_bin_width_cdb[layer] << std::endl;
+     // }
+
       layerseggeo->set_thickness(r_length);
-      layerseggeo->set_radius(current_r + r_length / 2);
+      layerseggeo->set_radius(layer_radius[(int) layer - MinLayer[iregion]]);
       layerseggeo->set_binning(PHG4CellDefs::sizebinning);
       layerseggeo->set_zbins(NTBins);
       layerseggeo->set_zmin(MinT);
@@ -764,7 +769,7 @@ std::unique_ptr<CDBTTree> cdbttree;
       }
       geonode->AddLayerCellGeom(layerseggeo);
 
-      current_r += r_length + pad_space;
+      //current_r += r_length + pad_space;
     }
   }
 }
