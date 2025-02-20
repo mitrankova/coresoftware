@@ -739,14 +739,14 @@ std::unique_ptr<CDBTTree> cdbttree;
      // {
         std::cout << " layer " << layer << " MinLayer " << MinLayer[iregion] << " region " << iregion
                   /*<< " radius " <<MinRadius[iregion] + ((double) (layer - MinLayer[iregion]) + 0.5) * Thickness[iregion]*/
-                  << " radius " << layer_radius[(int) layer - MinLayer[iregion]]
+                  << " radius " << layer_radius[(int) layer - 7]
                   << " thickness " << r_length
                   << " NTBins " << NTBins << " tmin " << MinT << " tstep " << TBinWidth
                   << " phibins " << NPhiBins[iregion] << " phistep " << phi_bin_width_cdb[layer] << std::endl;
      // }
 
       layerseggeo->set_thickness(r_length);
-      layerseggeo->set_radius(layer_radius[(int) layer - MinLayer[iregion]]);
+      layerseggeo->set_radius(layer_radius[(int) layer -7]);
       layerseggeo->set_binning(PHG4CellDefs::sizebinning);
       layerseggeo->set_zbins(NTBins);
       layerseggeo->set_zmin(MinT);
