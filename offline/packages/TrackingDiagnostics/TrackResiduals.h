@@ -31,6 +31,7 @@ class PHG4TpcCylinderGeomContainer;
 class PHG4CylinderGeomContainer;
 class TpcDistortionCorrectionContainer;
 class TrkrClusterHitAssoc; 
+class TrkrClusterCrossingAssoc; 
 
 class TrackResiduals : public SubsysReco
 {
@@ -73,7 +74,7 @@ class TrackResiduals : public SubsysReco
   void createBranches();
   float convertTimeToZ(ActsGeometry *geometry, TrkrDefs::cluskey cluster_key, TrkrCluster *cluster);
   void fillEventTree(PHCompositeNode *topNode);
-  void fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrClusterContainer *clusters, ActsGeometry *geometry);
+  void fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrClusterContainer *clusters,TrkrClusterCrossingAssoc* clustercrossingassoc, ActsGeometry *geometry);
   void fillHitTree(TrkrHitSetContainer *hitmap, ActsGeometry *geometry,
                    PHG4TpcCylinderGeomContainer *tpcGeom, PHG4CylinderGeomContainer *mvtxGeom,
                    PHG4CylinderGeomContainer *inttGeom, PHG4CylinderGeomContainer *mmGeom);
@@ -246,11 +247,15 @@ class TrackResiduals : public SubsysReco
   float m_clusmaxadc = std::numeric_limits<float>::quiet_NaN();
   int m_phisize = std::numeric_limits<int>::quiet_NaN();
   int m_zsize = std::numeric_limits<int>::quiet_NaN();
+  int m_aclussize = std::numeric_limits<int>::quiet_NaN(); 
   float m_scluslx = std::numeric_limits<float>::quiet_NaN();
   float m_scluslz = std::numeric_limits<float>::quiet_NaN();
   float m_sclusgx = std::numeric_limits<float>::quiet_NaN();
   float m_sclusgy = std::numeric_limits<float>::quiet_NaN();
   float m_sclusgz = std::numeric_limits<float>::quiet_NaN();
+  float m_sclusgx_corr = std::numeric_limits<float>::quiet_NaN();
+  float m_sclusgy_corr = std::numeric_limits<float>::quiet_NaN();
+  float m_sclusgz_corr = std::numeric_limits<float>::quiet_NaN();
   int m_scluslayer = std::numeric_limits<int>::quiet_NaN();
   float m_scluselx = std::numeric_limits<float>::quiet_NaN();
   float m_scluselz = std::numeric_limits<float>::quiet_NaN();
@@ -265,6 +270,8 @@ class TrackResiduals : public SubsysReco
   int m_segtype = std::numeric_limits<int>::quiet_NaN();
   int m_tileid = std::numeric_limits<int>::quiet_NaN();
 
+  std::vector<short int> m_clust_crossings;
+  
   //! clusters on track information
   std::vector<float> m_clusAdc;
   std::vector<float> m_clusMaxAdc;

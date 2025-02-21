@@ -12,6 +12,7 @@
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
 #include <trackbase/TrkrClusterHitAssocv3.h>
+#include <trackbase/TrkrClusterCrossingAssocv1.h> 
 
 #include <g4detectors/PHG4CylinderGeomContainer.h>
 #include <g4detectors/PHG4TpcCylinderGeom.h>
@@ -215,7 +216,13 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
   auto inttGeom = findNode::getClass<PHG4CylinderGeomContainer>(topNode, "CYLINDERGEOM_INTT");
   auto mmGeom = findNode::getClass<PHG4CylinderGeomContainer>(topNode, "CYLINDERGEOM_MICROMEGAS_FULL");
   auto clusterhitassocmap = findNode::getClass<TrkrClusterHitAssoc>(topNode, "TRKR_CLUSTERHITASSOC");
-
+  auto clustercrossingassoc = findNode::getClass<TrkrClusterCrossingAssoc>(
+    topNode, "TRKR_CLUSTERCROSSINGASSOC");
+    if (!clustercrossingassoc)
+    {
+      std::cerr << "ERROR: Can't find TRKR_CLUSTERCROSSINGASSOC node!" << std::endl;
+      return Fun4AllReturnCodes::ABORTEVENT;
+    }
   if(!clusterhitassocmap)
   {
   std::cerr << "ERROR: Can't find TRKR_CLUSTERHITASSOC node!" << std::endl;
@@ -283,7 +290,7 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
 
   if (m_doClusters)
   {
-    fillClusterTree(clusterhitassocmap, clustermap, geometry);
+    fillClusterTree(clusterhitassocmap, clustermap, clustercrossingassoc, geometry);
   }
 
   if (m_convertSeeds)
@@ -639,7 +646,7 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
   m_yzslope = std::get<0>(yzparams);
 }
 
-void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrClusterContainer* clusters,
+void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrClusterContainer* clusters, TrkrClusterCrossingAssoc* clustercrossingassoc,
                                      ActsGeometry* geometry)
 {
   if (clusters->size()< m_min_cluster_size)
@@ -690,8 +697,53 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrC
         auto para_errors = m_clusErrPara.get_clusterv5_modified_error(cluster, m_sclusgr, key);
         m_phisize = cluster->getPhiSize();
         m_zsize = cluster->getZSize();
+        m_aclussize=cluster->getSize(); 
         m_scluselx = std::sqrt(para_errors.first);
         m_scluselz = std::sqrt(para_errors.second);
+
+
+  float sclusgx_corr = std::numeric_limits<float>::quiet_NaN();
+        float sclusgy_corr = std::numeric_limits<float>::quiet_NaN();
+        float sclusgz_corr = std::numeric_limits<float>::quiet_NaN();
+
+
+        m_clust_crossings.clear();  
+        auto crossingRange = clustercrossingassoc->getCrossings(key);
+          for (auto cxit = crossingRange.first; cxit != crossingRange.second; ++cxit) {
+          short int crossing_number = cxit->second;
+          m_clust_crossings.push_back(crossing_number);
+        }
+        
+
+
+        // Only apply corrections if this is a TPC cluster
+        if (det == TrkrDefs::TrkrId::tpcId)
+        {
+          // Define or retrieve a valid crossing value
+          // TODO: adapt logic to obtain a real crossing per event/track
+          short int crossing = 0; 
+
+          // Retrieve distortion-corrected global position
+          //   (no “move-back” to readout surface)
+          Acts::Vector3 correctedGlobal =
+            m_globalPositionWrapper.getGlobalPositionDistortionCorrected(
+                key, cluster, crossing);
+
+          sclusgx_corr = correctedGlobal.x();
+          sclusgy_corr = correctedGlobal.y();
+          sclusgz_corr = correctedGlobal.z();
+        }
+        else
+        {
+          sclusgx_corr = glob.x();
+          sclusgy_corr = glob.y();
+          sclusgz_corr = glob.z();
+        }
+
+        m_sclusgx_corr = sclusgx_corr;
+        m_sclusgy_corr = sclusgy_corr;
+        m_sclusgz_corr = sclusgz_corr;
+
 
         //! Fill relevant geom info that is specific to subsystem
         switch (det)
@@ -753,15 +805,15 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrC
         }
         m_clust_hitkeys.clear();
         auto hitrange = clusterhitassoc->getHits(key);
-        size_t num_hits = std::distance(hitrange.first, hitrange.second);
-        std::cout << "Cluster Key: " << key << " has " << num_hits << " associated hits." << std::endl;
+        //size_t num_hits = std::distance(hitrange.first, hitrange.second);
+       // std::cout << "Cluster Key: " << key << " has " << num_hits << " associated hits." << std::endl;
         for (auto hit_iter = hitrange.first; hit_iter != hitrange.second; ++hit_iter)
         {
             TrkrDefs::hitkey hkey = hit_iter->second;
 
           
             m_clust_hitkeys.push_back(hkey);
-            std::cout << "  Hitkey: " << hkey << std::endl;
+            //std::cout << "  Hitkey: " << hkey << std::endl;
               
         }
         m_clustree->Fill();
@@ -1689,12 +1741,17 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("gx", &m_sclusgx, "m_sclusgx/F");
   m_clustree->Branch("gy", &m_sclusgy, "m_sclusgy/F");
   m_clustree->Branch("gz", &m_sclusgz, "m_sclusgz/F");
+  m_clustree->Branch("gx_corr", &m_sclusgx_corr, "m_sclusgx_corr/F");
+  m_clustree->Branch("gy_corr", &m_sclusgy_corr, "m_sclusgy_corr/F");
+  m_clustree->Branch("gz_corr", &m_sclusgz_corr, "m_sclusgz_corr/F");
+
   m_clustree->Branch("r", &m_sclusgr, "m_sclusgr/F");
   m_clustree->Branch("phi", &m_sclusphi, "m_sclusphi/F");
   m_clustree->Branch("eta", &m_scluseta, "m_scluseta/F");
   m_clustree->Branch("adc", &m_adc, "m_adc/F");
   m_clustree->Branch("phisize", &m_phisize, "m_phisize/I");
   m_clustree->Branch("zsize", &m_zsize, "m_zsize/I");
+  m_clustree->Branch("clussize", &m_aclussize, "m_aclussize/I"); 
   m_clustree->Branch("layer", &m_scluslayer, "m_scluslayer/I");
   m_clustree->Branch("erphi", &m_scluselx, "m_scluselx/F");
   m_clustree->Branch("ez", &m_scluselz, "m_scluselz/F");
@@ -1711,6 +1768,8 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("tile", &m_tileid, "m_tileid/I");
   m_clustree->Branch("cluskey", &m_scluskey);
   m_clustree->Branch("clus_hitkeys", &m_clust_hitkeys); 
+  m_clustree->Branch("clust_crossings", &m_clust_crossings);
+
 
   m_tree = new TTree("residualtree", "A tree with track, cluster, and state info");
   m_tree->Branch("run", &m_runnumber, "m_runnumber/I");
