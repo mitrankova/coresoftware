@@ -5,6 +5,9 @@
 #include <trackbase/ActsGeometry.h>
 #include <trackbase/TrkrCluster.h>
 
+#include <TTree.h>
+#include <TFile.h>
+#include <TH1F.h>
 #include <map>
 #include <string>
 #include <vector>
@@ -20,6 +23,21 @@ class PHG4TpcCylinderGeom;
 class PHG4TpcCylinderGeomContainer;
 class RawHitSetContainer;
 class RawHitSet;
+
+TFile *m_outfile = nullptr;
+TTree *m_tree = nullptr;
+TH1F *hist;
+      int m_layer=0;
+      int m_side=0;
+      uint64_t m_cluskey=0;
+      int m_phisize=0;
+      double m_clusadc=0;
+      double m_clusphi=0;
+      float m_norm_clus_pos=0;
+      double m_cluslx=0;
+      double m_clusly=0;
+
+
 class TpcClusterizer : public SubsysReco
 {
 public:
@@ -111,6 +129,9 @@ public:
   double m_sampa_tbias = 39.6;  // ns
 
   TrainingHitsContainer *m_training;
+
+
+
 };
 
 #endif
