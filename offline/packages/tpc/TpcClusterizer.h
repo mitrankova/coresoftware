@@ -24,7 +24,7 @@ class PHG4TpcCylinderGeomContainer;
 class RawHitSetContainer;
 class RawHitSet;
 
-TFile *m_outfile = nullptr;
+/*TFile *m_outfile = nullptr;
 TTree *m_tree = nullptr;
 TH1F *hist;
       int m_layer=0;
@@ -35,7 +35,7 @@ TH1F *hist;
       double m_clusphi=0;
       float m_norm_clus_pos=0;
       double m_cluslx=0;
-      double m_clusly=0;
+      double m_clusly=0;*/
 
 
 class TpcClusterizer : public SubsysReco

@@ -1259,7 +1259,7 @@ int TpcClusterizer::InitRun(PHCompositeNode *topNode)
   }
   
   AdcClockPeriod = geom->GetFirstLayerCellGeom()->get_zstep();
-  m_outfile = new TFile("HIT_CLUSTERS.root", "RECREATE");
+ /*m_outfile = new TFile("HIT_CLUSTERS.root", "RECREATE");
   hist = new TH1F("clusterhittree", "clusterhittree", 100, -2, 2);
   m_tree = new TTree("clusterhittree", "A tree with all clusters");
   m_tree->Branch("cluskey", &m_cluskey, "m_cluskey/I");
@@ -1269,7 +1269,7 @@ int TpcClusterizer::InitRun(PHCompositeNode *topNode)
   m_tree->Branch("phisize", &m_phisize, "m_phisize/I");
   m_tree->Branch("clus_norm_phi", &m_norm_clus_pos, "m_norm_clus_pos/F");
   m_tree->Branch("layer", &m_layer, "m_layer/I");
-  m_tree->Branch("side", &m_side, "m_side/I");
+  m_tree->Branch("side", &m_side, "m_side/I");*/
 
 
   return Fun4AllReturnCodes::EVENT_OK;
@@ -1530,7 +1530,7 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
         {
           // generate cluster key
           const auto ckey = TrkrDefs::genClusKey(hitsetkey, index);
-          std::cout << "!!!!!!!!!!!!Adding hit " << hkey << " to cluster " << ckey << std::endl;
+         // std::cout << "!!!!!!!!!!!!Adding hit " << hkey << " to cluster " << ckey << std::endl;
           // add to association table
           m_clusterhitassoc->addAssoc(ckey, hkey);
         }
@@ -1677,7 +1677,7 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
       // get the hitsetkey from thread data
       const auto &data(thread_pair.data);
       const auto hitsetkey = TpcDefs::genHitSetKey(data.layer, data.sector, data.side);
-      int i_ind=0;
+      //int i_ind=0;
       // copy clusters to map
       for (uint32_t index = 0; index < data.cluster_vector.size(); ++index)
       {
@@ -1691,7 +1691,7 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
         //std::cout << "X: " << cluster->getLocalX() << "Y: " << cluster->getLocalY() << std::endl;
         m_clusterlist->addClusterSpecifyKey(ckey, cluster);
 
-               m_layer=data.layer;
+               /*m_layer=data.layer;
               m_side=data.side;
               m_cluskey=ckey;
               m_phisize=cluster->getPhiSize(); 
@@ -1702,7 +1702,7 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
               m_tree->Fill();
               hist->Fill(m_norm_clus_pos);
 std::cout << "!!!!!!!!!!!!Adding cluster " << ckey << " to layer " << data.layer << " side " << data.side<<" norm phi "<<m_norm_clus_pos << std::endl;
-i_ind++;
+i_ind++;*/
         if (mClusHitsVerbose)
         {
           for (auto &hit : data.phivec_ClusHitsVerbose[index])
@@ -1749,9 +1749,9 @@ i_ind++;
 
 int TpcClusterizer::End(PHCompositeNode * /*topNode*/)
 {
-    m_outfile->cd();
+   /* m_outfile->cd();
     m_tree->Write();
     hist->Write();
-    m_outfile->Close();
+    m_outfile->Close();*/
   return Fun4AllReturnCodes::EVENT_OK;
 }

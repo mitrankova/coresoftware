@@ -240,7 +240,7 @@ class TrackResiduals : public SubsysReco
   int m_nvertices = std::numeric_limits<int>::quiet_NaN();
 
   //! cluster tree info
-  TrkrDefs::cluskey m_scluskey;
+  //uint64_t m_scluskey;
   std::vector<TrkrDefs::hitkey> m_clust_hitkeys; 
   float m_sclusgr = std::numeric_limits<float>::quiet_NaN();
   float m_sclusphi = std::numeric_limits<float>::quiet_NaN();

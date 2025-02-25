@@ -673,7 +673,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrC
         auto key = iter->first;
         auto cluster = clusters->findCluster(key);
         Acts::Vector3 glob;
-        m_scluskey=key; 
+        //m_scluskey=key; 
         // NOT IMPLEMENTED YET
         // if (TrkrDefs::getTrkrId(key) == TrkrDefs::tpcId)
         // {
@@ -1770,7 +1770,7 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("timebucket", &m_timebucket, "m_timebucket/I");
   m_clustree->Branch("segtype", &m_segtype, "m_segtype/I");
   m_clustree->Branch("tile", &m_tileid, "m_tileid/I");
-  m_clustree->Branch("cluskey", &m_scluskey);
+  //m_clustree->Branch("cluskey", &m_scluskey, "m_scluskey/L");
   m_clustree->Branch("clus_hitkeys", &m_clust_hitkeys); 
   m_clustree->Branch("clust_crossings", &m_clust_crossings);
 
