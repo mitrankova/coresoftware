@@ -668,6 +668,8 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc* clusterhitassoc, TrkrC
     {
       m_scluslayer = TrkrDefs::getLayer(hitsetkey);
       auto range = clusters->getClusters(hitsetkey);
+      m_clustHitsetkey = std::numeric_limits<uint32_t>::max();
+      m_clustHitsetkey = hitsetkey; 
       for (auto iter = range.first; iter != range.second; ++iter)
       {
         auto key = iter->first;
@@ -852,6 +854,7 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
                                  PHG4CylinderGeomContainer* inttGeom,
                                  PHG4CylinderGeomContainer* mmGeom)
 {
+  m_hitkey = std::numeric_limits<uint32_t>::max(); 
   if (!tpcGeom or !mvtxGeom or !inttGeom or !mmGeom)
   {
     std::cout << PHWHERE << "missing hit map, can't continue with hit tree"
@@ -948,7 +951,7 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
 
       switch (det)
       {
-      /*case TrkrDefs::TrkrId::mvtxId:
+      case TrkrDefs::TrkrId::mvtxId:
       {
         m_row = MvtxDefs::getRow(hitkey);
         m_col = MvtxDefs::getCol(hitkey);
@@ -971,8 +974,8 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
 
         m_zdriftlength = std::numeric_limits<float>::quiet_NaN();
         break;
-      }*/
-      /*case TrkrDefs::TrkrId::inttId:
+      }
+      case TrkrDefs::TrkrId::inttId:
       {
         m_row = InttDefs::getRow(hitkey);
         m_col = InttDefs::getCol(hitkey);
@@ -995,7 +998,7 @@ void TrackResiduals::fillHitTree(TrkrHitSetContainer* hitmap,
         m_hittbin = std::numeric_limits<int>::quiet_NaN();
         m_zdriftlength = std::numeric_limits<float>::quiet_NaN();
         break;
-      }*/
+      }
       case TrkrDefs::TrkrId::tpcId:
       {
         m_hitkey = hitkey; 
@@ -1222,6 +1225,33 @@ void TrackResiduals::fillClusterBranchesKF(TrkrDefs::cluskey ckey, SvtxTrack* tr
   m_cluszsize.push_back(cluster->getZSize());
   m_clussize.push_back(cluster->getPhiSize() * cluster->getZSize());
   m_clushitsetkey.push_back(TrkrDefs::getHitSetKeyFromClusKey(ckey));
+
+/*
+  if (TrkrDefs::getTrkrId(m_hitsetkey)==TrkrDefs::TrkrId::tpcId){
+        m_clust_track_hitkeys.clear();
+        m_clust_track_hit_adc.clear();
+        m_clust_track_hit_phi.clear();
+        auto hitrange = clusterhitassoc->getHits(ckey);
+        //size_t num_hits = std::distance(hitrange.first, hitrange.second);
+       // std::cout << "Cluster Key: " << key << " has " << num_hits << " associated hits." << std::endl;
+        for (auto hit_iter = hitrange.first; hit_iter != hitrange.second; ++hit_iter)
+        {
+            TrkrDefs::hitkey hkey = hit_iter->first;
+            auto hit = hit_iter->second;
+
+            m_clust_track_hitkeys.push_back(hkey);
+            m_clust_track_hit_adc.push_back(hit.getAdc());
+            int hitpad = TpcDefs::getPad(hkey);
+           // int hittbin = TpcDefs::getTBin(hkey);
+           // int m_side = TpcDefs::getSide(m_hitsetkey);
+            auto geoLayer = tpcGeom->GetLayerCellGeom(m_hitlayer);
+            auto phi = geoLayer->get_phicenter(hitpad, m_side);
+            m_clust_track_hit_phi.push_back(phi);
+            //std::cout << "  Hitkey: " << hkey << std::endl;
+              
+        }
+}
+*/
 
   auto misaligncenter = surf->center(geometry->geometry().getGeoContext());
   auto misalignnorm = -1 * surf->normal(geometry->geometry().getGeoContext());
@@ -1734,6 +1764,8 @@ void TrackResiduals::createBranches()
   m_hittree->Branch("zdriftlength", &m_zdriftlength, "m_zdriftlength/F");
 
   m_clustree = new TTree("clustertree", "A tree with all clusters");
+  m_clustree->Branch("cluskey", &m_scluskey);
+  m_clustree->Branch("hitsetkey", &m_clustHitsetkey, "m_clustHitsetkey/i"); 
   m_clustree->Branch("run", &m_runnumber, "m_runnumber/I");
   m_clustree->Branch("segment", &m_segment, "m_segment/I");
   m_clustree->Branch("job", &m_job, "m_job/I");
@@ -1770,7 +1802,6 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("timebucket", &m_timebucket, "m_timebucket/I");
   m_clustree->Branch("segtype", &m_segtype, "m_segtype/I");
   m_clustree->Branch("tile", &m_tileid, "m_tileid/I");
-  //m_clustree->Branch("cluskey", &m_scluskey, "m_scluskey/L");
   m_clustree->Branch("clus_hitkeys", &m_clust_hitkeys); 
   m_clustree->Branch("clust_crossings", &m_clust_crossings);
 
@@ -1851,6 +1882,9 @@ void TrackResiduals::createBranches()
   m_tree->Branch("dcaxy_primary_vertex", &m_dcaxy_primary_vertex, "m_dcaxy_primary_vertex/F");
   m_tree->Branch("dcaz_primary_vertex", &m_dcaz_primary_vertex, "m_dcaz_primary_vertex/F"); 
 
+//  m_tree->Branch("clus_hitkeys", &m_clust_track_hitkeys); 
+//  m_tree->Branch("clus_hitadc", &m_clust_track_hit_adc); 
+//  m_tree->Branch("clus_hitphi", &m_clust_track_hit_phi); 
   m_tree->Branch("cluskeys", &m_cluskeys);
   m_tree->Branch("clusedge", &m_clusedge);
   m_tree->Branch("clusoverlap", &m_clusoverlap);
@@ -1945,6 +1979,7 @@ void TrackResiduals::fillResidualTreeKF(PHCompositeNode* topNode)
   auto clustermap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
   auto vertexmap = findNode::getClass<GlobalVertexMap>(topNode, "GlobalVertexMap");
   auto alignmentmap = findNode::getClass<SvtxAlignmentStateMap>(topNode, m_alignmentMapName);
+ // auto clusterhitassocmap = findNode::getClass<TrkrClusterHitAssoc>(topNode, "TRKR_CLUSTERHITASSOC");
 
   std::set<unsigned int> tpc_seed_ids;
   for (const auto& [key, track] : *trackmap)
@@ -2138,6 +2173,7 @@ void TrackResiduals::fillResidualTreeKF(PHCompositeNode* topNode)
     {
       for (const auto& ckey : get_cluster_keys(track))
       {
+        //fillClusterBranchesKF(clusterhitassocmap, tpcGeom, ckey, track, global_raw, topNode);
         fillClusterBranchesKF(ckey, track, global_raw, topNode);
       }
     }
@@ -2157,6 +2193,7 @@ void TrackResiduals::fillResidualTreeKF(PHCompositeNode* topNode)
         {
           auto ckey = state->get_cluster_key();
 
+          //fillClusterBranchesKF(clusterhitassocmap, tpcGeom, ckey, track, global_raw, topNode);
           fillClusterBranchesKF(ckey, track, global_raw, topNode);
 
           auto& globderivs = state->get_global_derivative_matrix();

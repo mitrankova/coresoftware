@@ -240,8 +240,9 @@ class TrackResiduals : public SubsysReco
   int m_nvertices = std::numeric_limits<int>::quiet_NaN();
 
   //! cluster tree info
-  //uint64_t m_scluskey;
+  TrkrDefs::cluskey m_scluskey;
   std::vector<TrkrDefs::hitkey> m_clust_hitkeys; 
+  uint32_t m_clustHitsetkey = std::numeric_limits<uint32_t>::max(); 
   float m_sclusgr = std::numeric_limits<float>::quiet_NaN();
   float m_sclusphi = std::numeric_limits<float>::quiet_NaN();
   float m_scluseta = std::numeric_limits<float>::quiet_NaN();
@@ -272,9 +273,12 @@ class TrackResiduals : public SubsysReco
   int m_segtype = std::numeric_limits<int>::quiet_NaN();
   int m_tileid = std::numeric_limits<int>::quiet_NaN();
 
-  std::vector<short int> m_clust_crossings;
+  //std::vector<short int> m_clust_crossings;
   
   //! clusters on track information
+//  std::vector<TrkrDefs::hitkey> m_clust_track_hitkeys; 
+//  std::vector<float> m_clust_track_hit_adc;
+//  std::vector<float> m_clust_track_hit_phi;
   std::vector<float> m_clusAdc;
   std::vector<float> m_clusMaxAdc;
   std::vector<float> m_cluslx;
@@ -319,6 +323,7 @@ class TrackResiduals : public SubsysReco
   std::vector<float> m_missurfalpha;
   std::vector<float> m_missurfbeta;
   std::vector<float> m_missurfgamma;
+  std::vector<short int> m_clust_crossings; 
 
   //! states on track information
   std::vector<float> m_statelx;
