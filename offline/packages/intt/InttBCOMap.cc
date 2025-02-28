@@ -142,7 +142,7 @@ bool InttBCOMap::IsBad(const int &felix_server, const int &felix_channel, uint64
   // Hits belongs to [peak+1,peak-1] (3BCO region) will survive after BCO cut //
   //////////////////////////////////////////////////////////////////////////////
   int bco_peak = m_bco[felix_server][felix_channel];
-  /*int bco_minus = bco_peak - 1;
+  int bco_minus = bco_peak - 1;
   if (bco_minus == -1)
   {
     bco_minus = 127;
@@ -151,11 +151,11 @@ bool InttBCOMap::IsBad(const int &felix_server, const int &felix_channel, uint64
   if (bco_plus == 128)
   {
     bco_plus = 0;
-  }*/
+  }
 
   // -1: m_bco is initial value, not load the parameter. accept all bco
-  //if (bco_peak == -1 || bco_diff == bco_peak || bco_diff == bco_minus || bco_diff == bco_plus)
-  if (bco_peak == -1 || bco_diff == bco_peak)
+ // if (bco_peak == -1 || bco_diff == bco_peak)
+  if (bco_peak == -1 || bco_diff == bco_peak || bco_diff == bco_minus || bco_diff == bco_plus)
   {
     // std::cout<<"m_bco is initial value, not load the parameter. accept all bco "<<felix_server<<" "<<felix_channel<<std::endl;
     return false;

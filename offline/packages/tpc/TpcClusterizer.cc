@@ -106,7 +106,6 @@ namespace
     float min_err_squared = 0;
     float min_clus_size = 0;
     float min_adc_sum = 0;
-   // float norm_clus_pos = 0;
     bool do_assoc = true;
     bool do_wedge_emulation = true;
     bool do_singles = true;
@@ -122,7 +121,6 @@ namespace
     double sampa_tbias = 0;
     std::vector<assoc> association_vector;
     std::vector<TrkrCluster *> cluster_vector;
-    std::vector<double> cluster_norm_vector;
     std::vector<TrainingHits *> v_hits;
     int verbosity = 0;
     bool fillClusHitsVerbose = false;
@@ -490,7 +488,6 @@ namespace
     double radius = my_data.layergeom->get_radius();  // returns center of layer
 
     int phibinhi = -1;
-    int iphi_max=999;
     int phibinlo = 666666;
     int tbinhi = -1;
     int tbinlo = 666666;
@@ -529,15 +526,12 @@ namespace
     // keep track of the hit locations in a given cluster
     std::map<int, unsigned int> m_phi{};
     std::map<int, unsigned int> m_z{};
-    
 
     for (auto iter : ihit_list)
     {
       int iphi = iter.iphi + my_data.phioffset;
       int it = iter.it + my_data.toffset;
       double adc = iter.adc;
-
-
 
       if (adc <= 0)
       {
@@ -547,7 +541,6 @@ namespace
       if (adc > max_adc)
       {
         max_adc = adc;
-        iphi_max = iphi;
       }
 
       if (iphi > phibinhi)
@@ -624,12 +617,10 @@ namespace
       hitkeyvec.clear();
       return;  // skip obvious noise "clusters"
     }
-    
+
     // This is the global position
     double clusiphi = iphi_sum / adc_sum;
     double clusphi = my_data.layergeom->get_phi(clusiphi, my_data.side);
-
-
 
     float clusx = radius * cos(clusphi);
     float clusy = radius * sin(clusphi);
@@ -698,7 +689,6 @@ namespace
     //	std::cout << "clus num" << my_data.cluster_vector.size() << " X " << local(0) << " Y " << clust << std::endl;
     if (sqrt(phi_err_square) > my_data.min_err_squared)
     {
-
       auto clus = new TrkrClusterv5;
       // auto clus = std::make_unique<TrkrClusterv3>();
       clus_base = clus;
@@ -715,16 +705,6 @@ namespace
       clus->setZError(sqrt(t_err_square * pow(my_data.tGeometry->get_drift_velocity(), 2)));
       my_data.cluster_vector.push_back(clus);
       b_made_cluster = true;
-
-      if (iphi_max>1 && iphi_max<my_data.phibins-1)
-    {
-      if (clusphi > my_data.layergeom->get_phi(iphi_max,my_data.side))
-      {
-         my_data.cluster_norm_vector.push_back(double(1 - (my_data.layergeom->get_phi(iphi_max + 1, my_data.side) - clusphi) / (my_data.layergeom->get_phi(iphi_max + 1, my_data.side) - my_data.layergeom->get_phi(iphi_max,my_data.side)))) ;
-      }else{
-        my_data.cluster_norm_vector.push_back(double(-1 + (clusphi - my_data.layergeom->get_phi(iphi_max - 1, my_data.side)) / (my_data.layergeom->get_phi(iphi_max, my_data.side) - my_data.layergeom->get_phi(iphi_max - 1, my_data.side)))) ;
-      }
-    }
     }
 
     if (use_nn && clus_base && training_hits)
@@ -783,7 +763,6 @@ namespace
     {
       // get cluster index in vector. It is used to store associations, and build relevant cluster keys when filling the containers
       uint32_t index = my_data.cluster_vector.size() - 1;
-
       for (unsigned int &i : hitkeyvec)
       {
         my_data.association_vector.emplace_back(index, i);
@@ -799,7 +778,6 @@ namespace
       my_data.v_hits.emplace_back(training_hits);
     }
     //      std::cout << "done calc" << std::endl;
-    
   }
 
   void ProcessSectorData(thread_data *my_data)
@@ -1259,18 +1237,6 @@ int TpcClusterizer::InitRun(PHCompositeNode *topNode)
   }
   
   AdcClockPeriod = geom->GetFirstLayerCellGeom()->get_zstep();
- /*m_outfile = new TFile("HIT_CLUSTERS.root", "RECREATE");
-  hist = new TH1F("clusterhittree", "clusterhittree", 100, -2, 2);
-  m_tree = new TTree("clusterhittree", "A tree with all clusters");
-  m_tree->Branch("cluskey", &m_cluskey, "m_cluskey/I");
-  m_tree->Branch("cluslx", &m_cluslx, "m_cluslx/F");
-  m_tree->Branch("clusly", &m_clusly, "m_clusly/F");
-  m_tree->Branch("clusadc", &m_clusadc, "m_clusadc/F");
-  m_tree->Branch("phisize", &m_phisize, "m_phisize/I");
-  m_tree->Branch("clus_norm_phi", &m_norm_clus_pos, "m_norm_clus_pos/F");
-  m_tree->Branch("layer", &m_layer, "m_layer/I");
-  m_tree->Branch("side", &m_side, "m_side/I");*/
-
 
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -1372,6 +1338,7 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
   TrkrHitSetContainer::ConstRange hitsetrange;
   RawHitSetContainer::ConstRange rawhitsetrange;
   int num_hitsets = 0;
+
   if (!do_read_raw)
   {
     hitsetrange = m_hits->getHitSets(TrkrDefs::TrkrId::tpcId);
@@ -1476,13 +1443,9 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
       thread_pair.data.drift_velocity = m_tGeometry->get_drift_velocity();
       thread_pair.data.pads_per_sector = 0;
       thread_pair.data.phistep = 0;
-
-
       int rc;
       rc = pthread_create(&thread_pair.thread, &attr, ProcessSector, (void *) &thread_pair.data);
-      
-       
-   
+
       if (rc)
       {
         std::cout << "Error:unable to create thread," << rc << std::endl;
@@ -1530,7 +1493,7 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
         {
           // generate cluster key
           const auto ckey = TrkrDefs::genClusKey(hitsetkey, index);
-         // std::cout << "!!!!!!!!!!!!Adding hit " << hkey << " to cluster " << ckey << std::endl;
+
           // add to association table
           m_clusterhitassoc->addAssoc(ckey, hkey);
         }
@@ -1677,7 +1640,7 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
       // get the hitsetkey from thread data
       const auto &data(thread_pair.data);
       const auto hitsetkey = TpcDefs::genHitSetKey(data.layer, data.sector, data.side);
-      //int i_ind=0;
+
       // copy clusters to map
       for (uint32_t index = 0; index < data.cluster_vector.size(); ++index)
       {
@@ -1688,21 +1651,9 @@ int TpcClusterizer::process_event(PHCompositeNode *topNode)
         auto cluster = data.cluster_vector[index];
 
         // insert in map
-        //std::cout << "X: " << cluster->getLocalX() << "Y: " << cluster->getLocalY() << std::endl;
+        // std::cout << "X: " << cluster->getLocalX() << "Y: " << cluster->getLocalY() << std::endl;
         m_clusterlist->addClusterSpecifyKey(ckey, cluster);
 
-               /*m_layer=data.layer;
-              m_side=data.side;
-              m_cluskey=ckey;
-              m_phisize=cluster->getPhiSize(); 
-              m_clusadc=cluster->getAdc();
-              m_cluslx=cluster->getLocalX();
-              m_clusly=cluster->getLocalY();
-              if (i_ind<(int)data.cluster_norm_vector.size()) m_norm_clus_pos=data.cluster_norm_vector[i_ind];
-              m_tree->Fill();
-              hist->Fill(m_norm_clus_pos);
-std::cout << "!!!!!!!!!!!!Adding cluster " << ckey << " to layer " << data.layer << " side " << data.side<<" norm phi "<<m_norm_clus_pos << std::endl;
-i_ind++;*/
         if (mClusHitsVerbose)
         {
           for (auto &hit : data.phivec_ClusHitsVerbose[index])
@@ -1722,6 +1673,7 @@ i_ind++;*/
       {
         // generate cluster key
         const auto ckey = TrkrDefs::genClusKey(hitsetkey, index);
+
         // add to association table
         m_clusterhitassoc->addAssoc(ckey, hkey);
       }
@@ -1749,9 +1701,5 @@ i_ind++;*/
 
 int TpcClusterizer::End(PHCompositeNode * /*topNode*/)
 {
-   /* m_outfile->cd();
-    m_tree->Write();
-    hist->Write();
-    m_outfile->Close();*/
   return Fun4AllReturnCodes::EVENT_OK;
 }
