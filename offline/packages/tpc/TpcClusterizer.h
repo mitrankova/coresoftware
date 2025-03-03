@@ -56,7 +56,7 @@ public:
   void set_nzbins(int val){NZBinsSide = val; is_reco = true;}
   void set_rawdata_reco()
   {
-    set_do_hit_association(false);
+    set_do_hit_association(true);
     set_do_split(false);
     set_pedestal(0);
     set_seed_threshold(5);
