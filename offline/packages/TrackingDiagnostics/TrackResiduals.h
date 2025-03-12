@@ -83,6 +83,9 @@ class TrackResiduals : public SubsysReco
   void fillClusterBranchesKF(TrkrDefs::cluskey ckey, SvtxTrack *track,
                              const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> &global_moved,
                              PHCompositeNode *topNode);
+   // void fillClusterBranchesKF(TrkrClusterHitAssoc* clusterhitassoc,TrkrDefs::cluskey ckey, SvtxTrack *track,
+   //                          const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> &global_moved,
+   //                          PHCompositeNode *topNode);                           
   void fillClusterBranchesSeeds(TrkrDefs::cluskey ckey,  // SvtxTrack* track,
                                 const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> &global,
                                 PHCompositeNode *topNode);
@@ -240,7 +243,7 @@ class TrackResiduals : public SubsysReco
   int m_nvertices = std::numeric_limits<int>::quiet_NaN();
 
   //! cluster tree info
-  TrkrDefs::cluskey m_scluskey;
+  uint64_t m_scluskey;
   std::vector<TrkrDefs::hitkey> m_clust_hitkeys; 
   uint32_t m_clustHitsetkey = std::numeric_limits<uint32_t>::max(); 
   float m_sclusgr = std::numeric_limits<float>::quiet_NaN();
@@ -276,7 +279,7 @@ class TrackResiduals : public SubsysReco
   //std::vector<short int> m_clust_crossings;
   
   //! clusters on track information
-//  std::vector<TrkrDefs::hitkey> m_clust_track_hitkeys; 
+  //std::vector<TrkrDefs::hitkey> m_clust_track_hitkeys; 
 //  std::vector<float> m_clust_track_hit_adc;
 //  std::vector<float> m_clust_track_hit_phi;
   std::vector<float> m_clusAdc;
