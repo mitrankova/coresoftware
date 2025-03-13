@@ -308,7 +308,8 @@ void KFParticle_truthAndDetTools::fillTruthBranch(PHCompositeNode *topNode, TTre
 
     if (truePoint == nullptr && isParticleValid)
     {
-      PHG4Particle *g4mother = m_truthinfo->GetPrimaryParticle(g4particle->get_primary_id());
+      //PHG4Particle *g4mother = m_truthinfo->GetParticle(g4particle->get_parent_id());
+      PHG4Particle *g4mother = m_truthinfo->GetPrimaryParticle(g4particle->get_parent_id());
       truePoint = m_truthinfo->GetVtx(g4mother->get_vtx_id());  // Note, this may not be the PV for a decay with tertiaries
     }
 
