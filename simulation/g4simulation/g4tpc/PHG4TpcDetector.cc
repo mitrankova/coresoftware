@@ -594,7 +594,7 @@ std::unique_ptr<CDBTTree> cdbttree;
         m_Params->get_int_param("ntpc_phibins_outer")}};
 */
 
-  // should move to a common file
+// should move to a common file
   static constexpr int NSides = 2;
   static constexpr int NSectors = 12;
   static constexpr int NLayers = 16*3;

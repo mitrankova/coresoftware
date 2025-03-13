@@ -321,7 +321,6 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
     }
   }
 
-  //phi = check_phi(side, phi, rad_gem);
   unsigned int layernum = 0;
   /* TpcClusterBuilder pass_data {}; */
 
@@ -359,9 +358,7 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
   sector_min_Phi = LayerGeom->get_sector_min_phi();
   sector_max_Phi = LayerGeom->get_sector_max_phi();
   phi_bin_width = LayerGeom->get_phistep();
-
-  phi = check_phi(side, phi, rad_gem);
-  // store phi bins and tbins upfront to avoid repetitive checks on the phi methods
+  phi = check_phi(side, phi, rad_gem);  // store phi bins and tbins upfront to avoid repetitive checks on the phi methods
   const auto phibins = LayerGeom->get_phibins();
   /* pass_data.nphibins = phibins; */
 
@@ -1096,8 +1093,6 @@ void PHG4TpcPadPlaneReadout::UpdateInternalParameters()
   const double MinT = 0;
   NTBins = (int) ((MaxT - MinT) / TBinWidth) + 1;
 
-
   averageGEMGain = get_double_param("gem_amplification");
   polyaTheta = get_double_param("polya_theta");
-
 }

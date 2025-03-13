@@ -71,7 +71,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   double sigmaT = std::numeric_limits<double>::signaling_NaN();
   std::array<double, 2> sigmaL{};
-  double phi_bin_width{};
+ double phi_bin_width{}; 
   double drift_velocity = 8.0e-03;  // default value, override from macro
   float extended_readout_time = 0;  // ns
   int NTBins = std::numeric_limits<int>::max();
@@ -90,9 +90,9 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   double averageGEMGain = std::numeric_limits<double>::signaling_NaN();
   double polyaTheta = std::numeric_limits<double>::signaling_NaN();
 
+
   std::array<std::vector<double>, NSides> sector_min_Phi;
   std::array<std::vector<double>, NSides> sector_max_Phi;
-
   // return random distribution of number of electrons after amplification of GEM for each initial ionizing electron
   double getSingleEGEMAmplification();
   double getSingleEGEMAmplification(double weight);
