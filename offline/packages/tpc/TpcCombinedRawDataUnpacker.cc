@@ -296,7 +296,7 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     std::string varname = "layer";
     int layer = m_cdbttree->GetIntValue(key, varname);
     // antenna pads will be in 0 layer
-    if (layer <= 0)
+    if (layer <= 6)
     {
       continue;
     }
@@ -309,6 +309,7 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     uint16_t sampch = tpchit->get_sampachannel();
     //    uint16_t sam = tpchit->get_samples();
     max_time_range = tpchit->get_samples();
+
      
     int region = 2;
     if(layer < 7 + 16)
@@ -319,6 +320,7 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     {
       region = 1;
     }
+
 
     hit_set_key = TpcDefs::genHitSetKey(layer, (mc_sectors[sector % 12]), side);
     hit_set_container_itr = trkr_hit_set_container->findOrAddHitSet(hit_set_key);
