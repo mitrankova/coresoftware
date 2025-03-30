@@ -300,11 +300,6 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     {
       continue;
     }
-    varname = "phi";
-    double phi = -1 * pow(-1, side) * m_cdbttree->GetDoubleValue(key, varname) + (sector % 12) * M_PI / 6;
-    PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
-    unsigned int phibin = layergeom->get_phibin(phi);
-
     uint16_t sampadd = tpchit->get_sampaaddress();
     uint16_t sampch = tpchit->get_sampachannel();
     //    uint16_t sam = tpchit->get_samples();
@@ -321,6 +316,10 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
       region = 1;
     }
 
+    varname = "phi";  // + std::to_string(key);
+    double phi = (side == 1 ? 1 : -1) * ( m_cdbttree->GetDoubleValue(key, varname) - M_PI/2.) + (sector % 12) * M_PI / 6;
+    PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
+    unsigned int phibin = layergeom->get_phibin(phi, side);
 
     hit_set_key = TpcDefs::genHitSetKey(layer, (mc_sectors[sector % 12]), side);
     hit_set_container_itr = trkr_hit_set_container->findOrAddHitSet(hit_set_key);
