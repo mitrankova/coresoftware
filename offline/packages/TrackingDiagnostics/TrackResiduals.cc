@@ -606,7 +606,12 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
 
     // exclude 1d tpot clusters for now
 
-    if (fabs(clusr) > 80 || (m_linefitTPCOnly && fabs(clusr) < 20.))
+    /*if (fabs(clusr) > 80 || (m_linefitTPCOnly && fabs(clusr) < 20.))
+    {
+      continue;
+    }*/
+
+    if (fabs(clusr) <= 80 && fabs(clusr) < 20.)
     {
       continue;
     }
