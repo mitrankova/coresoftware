@@ -615,7 +615,7 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
 
     if (fabs(clusr) <= 80 && fabs(clusr) >= 20.)
     {
-      std::cout << "TPC cluster skipped: clusr " << clusr << std::endl;
+     // std::cout << "TPC cluster skipped: clusr " << clusr << std::endl;
       continue;
     }
     std::cout << "Si or TPOT cluster is used: clusr " << clusr << std::endl;
