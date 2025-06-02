@@ -157,7 +157,8 @@ class MakeActsGeometry : public SubsysReco
 
   //! Create New nodes
   int createNodes(PHCompositeNode *);
-
+  void exportTpcSurfacesToGDML(const std::string &filename);
+  void exportTpcSurfacesToOBJ(const std::string &filename);
   /// Functions to edit TGeoManager to include TPC boxes
   void setPlanarSurfaceDivisions();
   void editTPCGeometry(PHCompositeNode *topNode);

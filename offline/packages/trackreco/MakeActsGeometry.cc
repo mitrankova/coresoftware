@@ -79,6 +79,10 @@
 #include <TSystem.h>
 #include <TVector3.h>
 
+#include <TFile.h>
+#include <TH2.h>
+#include <TGraph.h>
+#include <TMultiGraph.h>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -88,6 +92,8 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <fstream>
+#include <iomanip>
 
 namespace
 {
@@ -262,6 +268,7 @@ int MakeActsGeometry::buildAllGeometry(PHCompositeNode *topNode)
   {
     PHGeomUtility::ExportGeomtry(topNode, "sPHENIXActsGeom.root");
     PHGeomUtility::ExportGeomtry(topNode, "sPHENIXActsGeom.gdml");
+    PHGeomUtility::ExportGeomtry(topNode, "sPHENIXActsGeom.obj");
   }
 
   if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)
@@ -271,7 +278,8 @@ int MakeActsGeometry::buildAllGeometry(PHCompositeNode *topNode)
 
   /// Run Acts layer builder
   buildActsSurfaces();
-
+// exportTpcSurfacesToGDML("acts_tpc_surfaces.gdml");
+ exportTpcSurfacesToOBJ("acts_tpc_surfaces.obj");
   /// Create a map of sensor TGeoNode pointers using the TrkrDefs:: hitsetkey as the key
   // makeTGeoNodeMap(topNode);
 
@@ -1685,6 +1693,203 @@ int MakeActsGeometry::createNodes(PHCompositeNode *topNode)
 
   return Fun4AllReturnCodes::EVENT_OK;
 }
+
+
+
+void MakeActsGeometry::exportTpcSurfacesToGDML(const std::string &filename)
+{
+  std::ofstream gdml(filename);
+  if (!gdml.is_open())
+  {
+    std::cerr << " Failed to open " << filename << std::endl;
+    return;
+  }
+
+  const double halfX = 0.05;  // thickness in cm (radial)
+  const double halfY = 0.25;  // phi extent
+  const double halfZ = 0.5;   // z extent
+
+  // Begin GDML
+  gdml << "<?xml version='1.0' encoding='UTF-8'?>\n";
+  gdml << "<gdml>\n";
+
+  // Materials
+  gdml << "  <materials>\n";
+  gdml << "    <material name='Air'>\n";
+  gdml << "      <D value='0.001225' unit='g/cm3'/>\n";
+  gdml << "      <composite n='1' ref='G4_AIR'/>\n";
+  gdml << "    </material>\n";
+  gdml << "    <material name='DetectorMat'>\n";
+  gdml << "      <D value='2.33' unit='g/cm3'/>\n";
+  gdml << "      <composite n='1' ref='G4_Si'/>\n";
+  gdml << "    </material>\n";
+  gdml << "  </materials>\n";
+
+  // Solids
+  gdml << "  <solids>\n";
+  gdml << "    <box name='worldbox' x='200' y='200' z='200' unit='cm'/>\n";
+  gdml << "    <box name='surfbox' x='" << 2 * halfX
+       << "' y='" << 2 * halfY
+       << "' z='" << 2 * halfZ
+       << "' unit='cm'/>\n";
+  gdml << "  </solids>\n";
+
+  // Structure with surface volumes and placements
+  gdml << "  <structure>\n";
+
+  // Surface volume (reused)
+  gdml << "    <volume name='surfvol'>\n";
+  gdml << "      <materialref ref='DetectorMat'/>\n";
+  gdml << "      <solidref ref='surfbox'/>\n";
+  gdml << "    </volume>\n";
+
+  // World volume begins
+  gdml << "    <volume name='world'>\n";
+  gdml << "      <materialref ref='Air'/>\n";
+  gdml << "      <solidref ref='worldbox'/>\n";
+
+  int surfIndex = 0;
+  for (const auto &[layer, surfaces] : m_clusterSurfaceMapTpcEdit)
+  {
+    for (const auto &surface : surfaces)
+    {
+      const auto center = surface->center(m_geoCtxt) / 10.0;  // mm → cm
+
+      gdml << std::fixed << std::setprecision(4);
+      gdml << "      <physvol>\n";
+      gdml << "        <volumeref ref='surfvol'/>\n";
+      gdml << "        <position name='pos_" << surfIndex
+           << "' unit='cm' x='" << center.x()
+           << "' y='" << center.y()
+           << "' z='" << center.z() << "'/>\n";
+      gdml << "      </physvol>\n";
+
+      ++surfIndex;
+    }
+  }
+
+  gdml << "    </volume>\n";  // end of world volume
+  gdml << "  </structure>\n";
+
+  // Setup
+  gdml << "  <setup name='Default' version='1.0'>\n";
+  gdml << "    <world ref='world'/>\n";
+  gdml << "  </setup>\n";
+  gdml << "</gdml>\n";
+
+  gdml.close();
+  std::cout << "Exported " << surfIndex << " TPC surfaces to GDML: " << filename << std::endl;
+}
+
+
+void MakeActsGeometry::exportTpcSurfacesToOBJ(const std::string &filename)
+{
+  std::ofstream obj(filename);
+  if (!obj.is_open())
+  {
+    std::cerr << " Failed to open OBJ file: " << filename << std::endl;
+    return;
+  }
+  const std::string rootFilename =  "tpc_surfaces.root";
+
+ TFile *outFile = new TFile(rootFilename.c_str(), "RECREATE");
+ //TH2F *hPosPhi = new TH2F("hPosPhi", "South side; x [cm];y [cm]", 400, -100, 100, 400, -100, 100);
+ // TH2F *hNegPhi = new TH2F("hNegPhi", "North side; x [cm];y [cm]", 400, -100, 100, 400, -100, 100);
+TMultiGraph *mgPos = new TMultiGraph("mgPos", "South side;X [cm];Y [cm]");
+TMultiGraph *mgNeg = new TMultiGraph("mgNeg", "North side;X [cm];Y [cm]");
+
+
+  //const double halfX = 1.0;   // radial direction (cm)  ---- phi
+  const double halfY = 100;   // phi direction (cm) --- z direction
+  const double halfZ = 0.2; // z direction (cm)   --- radious
+
+  int vertexIndex = 1;
+  int surfIndex = 0;
+
+  for (const auto &[layer, surfaces] : m_clusterSurfaceMapTpcEdit)
+  {
+    for (const auto &surface : surfaces)
+    {
+      Acts::Vector3 center = surface->center(m_geoCtxt) / 10.0; // mm → cm
+      auto transform = surface->transform(m_geoCtxt);
+      auto rot = transform.rotation();
+
+     // Acts::Vector3 dx = rot.col(0) * halfX;
+      Acts::Vector3 dy = rot.col(1) * halfY;
+      Acts::Vector3 dz = rot.col(2) * halfZ;
+
+
+      double radius = std::hypot(center.x(), center.y());  // in cm
+      double arcLength = radius * (2.0 * M_PI / 180.0);     // 3 deg arc
+      Acts::Vector3 dx = rot.col(0) * (arcLength / 2.0);  
+
+      /*if (center.z() >= 0)
+        hPosPhi->Fill(center.x(), center.y());
+      else
+        hNegPhi->Fill(center.x(), center.y());
+      */
+      // Project 4 corners onto XZ plane (ignore phi/y)
+      Acts::Vector3 p1 = center - dx - dy;
+      Acts::Vector3 p2 = center + dx + dy;
+
+      // Fill a closed TGraph with XZ coordinates
+      double xy[2][2] = {
+        {p1.x(), p1.y()},
+        {p2.x(), p2.y()} // Close the polygon
+      };
+
+      TGraph *g = new TGraph(2);
+      for (int i = 0; i < 2; ++i)
+        g->SetPoint(i, xy[i][0], xy[i][1]);
+
+      g->SetLineColor(center.z() >= 0 ? kRed : kBlue);
+      g->SetLineWidth(1);
+
+      if (center.z() >= 0)
+        mgPos->Add(g);
+      else
+        mgNeg->Add(g);
+
+      // Compute 8 corners of the box
+      Acts::Vector3 corner[8];
+      int idx = 0;
+      for (int iz = -1; iz <= 1; iz += 2)
+        for (int iy = -1; iy <= 1; iy += 2)
+          for (int ix = -1; ix <= 1; ix += 2)
+            corner[idx++] = center + ix * dx + iy * dy + iz * dz;
+
+      // Write vertices to OBJ
+      for (int i = 0; i < 8; ++i)
+        obj << "v " << corner[i].x() << " " << corner[i].y() << " " << corner[i].z() << "\n";
+
+      // Define 6 faces (note: OBJ is 1-based)
+      obj << "f " << vertexIndex + 0 << " " << vertexIndex + 1
+          << " " << vertexIndex + 3 << " " << vertexIndex + 2 << "\n"; // -Z bottom
+      obj << "f " << vertexIndex + 4 << " " << vertexIndex + 5
+          << " " << vertexIndex + 7 << " " << vertexIndex + 6 << "\n"; // +Z top
+      obj << "f " << vertexIndex + 0 << " " << vertexIndex + 1
+          << " " << vertexIndex + 5 << " " << vertexIndex + 4 << "\n"; // side
+      obj << "f " << vertexIndex + 1 << " " << vertexIndex + 3
+          << " " << vertexIndex + 7 << " " << vertexIndex + 5 << "\n"; // side
+      obj << "f " << vertexIndex + 3 << " " << vertexIndex + 2
+          << " " << vertexIndex + 6 << " " << vertexIndex + 7 << "\n"; // side
+      obj << "f " << vertexIndex + 2 << " " << vertexIndex + 0
+          << " " << vertexIndex + 4 << " " << vertexIndex + 6 << "\n"; // side
+
+      vertexIndex += 8;
+      ++surfIndex;
+    }
+  }
+
+  obj.close();
+  //hPosPhi->Write();
+  //hNegPhi->Write();
+  mgPos->Write();
+  mgNeg->Write();
+  outFile->Close();
+  std::cout << "Exported " << surfIndex << " TPC surfaces as 3D boxes to: " << filename << std::endl;
+}
+
 
 /*
  * GetNodes():
