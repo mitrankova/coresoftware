@@ -29,6 +29,12 @@ void PHG4TruthInfoContainer::Reset()
   }
   particlemap.clear();
 
+  for (auto& iter : sPHENIXprimaryparticlemap)
+  {
+    delete iter.second;
+  }
+  sPHENIXprimaryparticlemap.clear();
+
   for (auto& iter : vtxmap)
   {
     delete iter.second;
@@ -114,10 +120,46 @@ PHG4TruthInfoContainer::AddParticle(const int trackid, PHG4Particle* newparticle
   return particlemap.end();
 }
 
+PHG4TruthInfoContainer::ConstIterator
+PHG4TruthInfoContainer::AddsPHENIXPrimaryParticle(const int trackid, PHG4Particle* newparticle)
+{
+  int key = trackid;
+  ConstIterator it;
+  bool added = false;
+
+  boost::tie(it, added) = sPHENIXprimaryparticlemap.insert(std::make_pair(key, newparticle));
+  if (added)
+  {
+    return it;
+  }
+
+  cerr << "PHG4TruthInfoContainer::AddsPHENIXPrimaryParticle"
+       << " - Attempt to add sPHENIX primary particle with existing trackid "
+       << trackid << ": " << newparticle->get_name() << " id "
+       << newparticle->get_track_id()
+       << ", p = [" << newparticle->get_px()
+       << ", " << newparticle->get_py()
+       << ", " << newparticle->get_pz() << "], "
+       << " parent ID " << newparticle->get_parent_id()
+       << std::endl;
+  return sPHENIXprimaryparticlemap.end();
+}
+
 PHG4Particle* PHG4TruthInfoContainer::GetParticle(const int trackid)
 {
   int key = trackid;
   Iterator it = particlemap.find(key);
+  if (it != particlemap.end())
+  {
+    return it->second;
+  }
+  return nullptr;
+}
+
+PHG4Particle* PHG4TruthInfoContainer::GetParticle(const int trackid) const
+{
+  int key = trackid;
+  ConstIterator it = particlemap.find(key);
   if (it != particlemap.end())
   {
     return it->second;
@@ -133,6 +175,16 @@ PHG4Particle* PHG4TruthInfoContainer::GetPrimaryParticle(const int trackid)
   }
   Iterator it = particlemap.find(trackid);
   if (it != particlemap.end())
+  {
+    return it->second;
+  }
+  return nullptr;
+}
+
+PHG4Particle* PHG4TruthInfoContainer::GetsPHENIXPrimaryParticle(const int trackid)
+{
+  Iterator it = sPHENIXprimaryparticlemap.find(trackid);
+  if (it != sPHENIXprimaryparticlemap.end())
   {
     return it->second;
   }
@@ -368,7 +420,14 @@ void PHG4TruthInfoContainer::delete_shower(ShowerIterator siter)
 
 int PHG4TruthInfoContainer::isEmbeded(const int trackid) const
 {
-  std::map<int, int>::const_iterator iter = particle_embed_flags.find(trackid);
+  //I think here for G4 secondarys we just check their primary's embedding ID
+  int trackid_embed = trackid;
+  if (trackid_embed <= 0)
+  {
+    const PHG4Particle* p = GetParticle(trackid_embed);
+    if(p) trackid_embed = p->get_primary_id();
+  }
+  std::map<int, int>::const_iterator iter = particle_embed_flags.find(trackid_embed);
   if (iter == particle_embed_flags.end())
   {
     return 0;
@@ -396,6 +455,13 @@ bool PHG4TruthInfoContainer::is_primary_vtx(const PHG4VtxPoint* v) const
 bool PHG4TruthInfoContainer::is_primary(const PHG4Particle* p) const
 {
   return (p->get_track_id() > 0);
+}
+
+// this is O(log N)...
+bool PHG4TruthInfoContainer::is_sPHENIX_primary(const PHG4Particle* p) const
+{
+  // sPHENIX primary particles are in the sPHENIXprimaryparticlemap
+  return (sPHENIXprimaryparticlemap.find(p->get_track_id()) != sPHENIXprimaryparticlemap.end());
 }
 
 int PHG4TruthInfoContainer::GetPrimaryVertexIndex() const
