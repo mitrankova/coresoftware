@@ -635,15 +635,16 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
                                      const short int& crossing)
 {
   std::vector<Acts::Vector3> clusPos;
+  std::vector<int> cluslayers;
   for (auto& key : keys)
   {
     auto *cluster = clusters->findCluster(key);
     const Acts::Vector3 pos = m_globalPositionWrapper.getGlobalPositionDistortionCorrected(key, cluster, crossing);
     clusPos.push_back(pos);
+    cluslayers.push_back((unsigned int)TrkrDefs::getLayer(key));
   }
-  TrackFitUtils::position_vector_t xypoints;
-  TrackFitUtils::position_vector_t rzpoints;
-  TrackFitUtils::position_vector_t yzpoints;
+  TrackFitUtils::position_vector_t xypoints, rzpoints, yzpoints;
+  int idx=0;
   for (auto& pos : clusPos)
   {
     float clusr = r(pos.x(), pos.y());
@@ -656,15 +657,16 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
 
 
 
-    if (fabs(clusr) <= 80 && fabs(clusr) >= 20.)
+    if ((cluslayers.at(idx)!=55) && fabs(clusr) >= 20.)
     {
-     // std::cout << "TPC cluster skipped: clusr " << clusr << std::endl;
+      if(cluslayers.at(idx)==55)std::cout << "!!!!!!TPOT cluster is skipted!!!: clusr " << clusr << " layer = "<<cluslayers.at(idx)<<std::endl;
       continue;
     }
-
-    rzpoints.emplace_back(pos.z(), clusr);
-    xypoints.emplace_back(pos.x(), pos.y());
-    yzpoints.emplace_back(pos.z(), pos.y());
+    if((clusr>80))std::cout << "!!!!!!TPOT cluster is used: clusr " << clusr << " layer = "<<cluslayers.at(idx)<<std::endl;
+    rzpoints.push_back(std::make_pair(pos.z(), clusr));
+    xypoints.push_back(std::make_pair(pos.x(), pos.y()));
+    yzpoints.push_back(std::make_pair(pos.z(), pos.y()));
+    idx++;
   }
 
   auto xyparams = TrackFitUtils::line_fit(xypoints);
@@ -2353,6 +2355,7 @@ void TrackResiduals::fillResidualTreeSeeds(PHCompositeNode* topNode)
       m_silseedphi = silseed->get_phi();
       m_silseedeta = silseed->get_eta();
       m_silseedcharge = silseed->get_qOverR() > 0 ? 1 : -1;
+     std::cout << "!!!TRACK RESIDUALS---Silicon seed crossing: " << silseed->get_crossing() << std::endl;
     }
     if (tpcseed)
     {
