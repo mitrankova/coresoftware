@@ -659,10 +659,10 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
 
     if ((cluslayers.at(idx)!=55) && fabs(clusr) >= 20.)
     {
-      if(cluslayers.at(idx)==55)std::cout << "!!!!!!TPOT cluster is skipted!!!: clusr " << clusr << " layer = "<<cluslayers.at(idx)<<std::endl;
+      idx++;
       continue;
     }
-    if((clusr>80))std::cout << "!!!!!!TPOT cluster is used: clusr " << clusr << " layer = "<<cluslayers.at(idx)<<std::endl;
+    if((fabs(clusr)>80))std::cout << "!!!!!!TPOT cluster is used: clusr " << clusr << " layer = "<<cluslayers.at(idx)<<std::endl;
     rzpoints.push_back(std::make_pair(pos.z(), clusr));
     xypoints.push_back(std::make_pair(pos.x(), pos.y()));
     yzpoints.push_back(std::make_pair(pos.z(), pos.y()));
