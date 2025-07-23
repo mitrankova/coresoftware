@@ -53,6 +53,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   void SetDefaultParameters() override;
   void UpdateInternalParameters() override;
 
+
   void SetDeadChannelMapName(const std::string& dcmap) 
   {
     m_maskDeadChannels = true;
@@ -64,7 +65,16 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
     m_hotChannelMapName = hmap;
   }
 
+
+   void LoadAllPadPlanes();
+     private:
+    struct PadCentroid;
+      public:
+  const std::vector<std::vector<PadCentroid>>& GetCentroids() const
+  { return centroids_; }
+
  private:
+
   //  void populate_rectangular_phibins(const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void populate_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &phibin_pad_share);
   void populate_tbins(const double t, const std::array<double, 2> &cloud_sig_tt, std::vector<int> &adc_tbin, std::vector<double> &tbin_adc_share);
@@ -132,6 +142,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   TF1 *flangau[2][3][12] = {{{nullptr}}};
 
+
   hitMaskTpc m_deadChannelMap;
   hitMaskTpc m_hotChannelMap; 
 
@@ -139,6 +150,38 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   bool m_maskHotChannels = false;
   std::string m_deadChannelMapName; 
   std::string m_hotChannelMapName; 
+
+  struct Point { double x, y; };
+
+  // one pad’s name + centroid
+  struct PadCentroid {
+    std::string name;
+    double      cx, cy;
+  };
+
+  // a pad’s polygon
+  typedef std::vector<Point> PadVertices;
+
+  // hard‑coded list of input .brd files
+  static const std::vector<std::string> brdMaps_;
+
+  // parse one .brd into vertices+names
+  void getPadCoordinates(const std::string&         filename,
+                         std::vector<PadVertices>& allVertices,
+                         std::vector<std::string>& allNames);
+
+  // compute centroids from those raw vertices
+  std::vector<PadCentroid>
+    processPadVertices(const std::vector<PadVertices>& vertices,
+                       const std::vector<std::string>& names);
+
+  // drive everything: loop over brdMaps_, call getPadCoordinates+process…
+  std::vector<std::vector<PadCentroid>>
+    loadPadPlanes(const std::vector<std::string>& filenames);
+
+  // storage for the results
+  std::vector<std::vector<PadCentroid>> centroids_;
+
 };
 
 #endif
