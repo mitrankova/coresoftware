@@ -191,17 +191,25 @@ int PHG4TpcPadPlaneReadout::InitRun(PHCompositeNode *topNode)
 	}
     } 
     std::cout<<"!!!!!Before Load Maps"<<std::endl;
-  LoadAllPadPlanes();
+  loadPadPlanes();
 
   // 3) (optional) print a summary
-  const auto& all = GetCentroids();  
-    std::cout<<"!!!!!all.size() "<<all.size()<<std::endl;
-  for (size_t i = 0; i < all.size(); ++i)
+    
+
+  for (size_t i = 0; i < Pads.size(); ++i)
   {
     std::cout << "[PHG4TpcPadPlaneReadout] Module " << i 
-              << " has " << all[i].size() << " pads\n";
+              << " has " << Pads[i].size() << " pads\n";
   }
-
+  int check_pad = 0;
+  std::cout<<"Pad in module 0, pad 0: "
+           << Pads[0][check_pad].name << " at (" 
+           << Pads[0][check_pad].cx << ", " << Pads[0][check_pad].cy << ")\n";
+  for(size_t i = 0; i < Pads[0][check_pad].vertices.size(); i++)
+  {
+    std::cout<<"Vertex "<<i<<": ("<<Pads[0][check_pad].vertices[i].x<<", "
+             <<Pads[0][check_pad].vertices[i].y<<")\n";
+  }
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -213,68 +221,55 @@ const std::vector<std::string>
     "/sphenix/user/mitrankova/Simulation/PadPlane/AutoPad-R3-RevA.brd"
 };
 
-void PHG4TpcPadPlaneReadout::LoadAllPadPlanes()
-{
-      std::cout<<"!!!!!LoadAllPadPlanes"<<std::endl;
-      std::cout<<"!!!!!brdMaps_.size() "<<brdMaps_.size()<<std::endl;
-
-      for (size_t i=0;i < brdMaps_.size();i++)
-      {
-        std::cout<<"!!!!!brdMaps_["<<i<<"] "<<brdMaps_[i]<<std::endl;
-      }
-  centroids_ = loadPadPlanes(brdMaps_);
-}
 //_________________________________________________________
 
-void PHG4TpcPadPlaneReadout::getPadCoordinates(
-    const std::string&         filename,
-    std::vector<PadVertices>&  allVertices,
-    std::vector<std::string>&  allNames
-) {
-    std::ifstream in(filename.c_str());
+void PHG4TpcPadPlaneReadout::loadPadPlanes() {
+ for (size_t i = 0; i < brdMaps_.size(); ++i) {
+
+    std::ifstream in(brdMaps_[i].c_str());
     if (!in) {
-        std::cerr << "Cannot open " << filename << "\n";
+        std::cerr << "Cannot open " << brdMaps_[i] << "\n";
         return;
     }
-std::cout<<"!!!!!getPadCoordinates filename "<<filename<<std::endl;
+
+    //std::cout<<"!!!!!getPadCoordinates filename "<<brdMaps_[i]<<std::endl;
     std::string line;
     bool        inSignal  = false;
     bool        inPolygon = false;
     bool        keepSignal = false;
-    PadVertices currentVerts;
-    std::string currentName;
+    PadInfo p;
+    std::string pname_tmp;
+    int iter = 0;
+    double sumX = 0, sumY = 0;
 
     while (std::getline(in, line)) {
-        // trim leading whitespace
+
         size_t pos = line.find_first_not_of(" \t");
         if (pos != std::string::npos) line = line.substr(pos);
 
-        // 1) start of a pad definition?
+      
         if (!inSignal && line.find("<signal ") == 0) {
             inSignal = true;
-            currentName.clear();
-            currentVerts.clear();
-            // extract name="…"
+            
             size_t n1 = line.find("name=\"");
             if (n1 != std::string::npos) {
                 n1 += 6;
                 size_t n2 = line.find('"', n1);
-                currentName = line.substr(n1, n2 - n1);
-                std::cout<<"!!!!!currentName "<<currentName<<std::endl;
+                pname_tmp = line.substr(n1, n2 - n1);
+                //std::cout<<"!!!!!pname_tmp "<<pname_tmp<<std::endl;
                 
             }
-            keepSignal = (currentName.rfind("ZZ", 0) == 0);
+            keepSignal = (pname_tmp.rfind("ZZ", 0) == 0);
             continue;
         }
 
-        // 2) within a <signal> but haven't hit its <polygon> yet?
         if ( inSignal && keepSignal && !inPolygon && line.find("<polygon") == 0) {
+            p.name = pname_tmp;
             inPolygon = true;
-            currentVerts.clear();
+            sumX = 0, sumY = 0;
             continue;
         }
 
-        // 3) inside the polygon: only accept vertex lines
         if (inPolygon && line.find("<vertex") == 0) {
             size_t x1 = line.find("x=\"");
             size_t y1 = line.find("y=\"");
@@ -283,75 +278,34 @@ std::cout<<"!!!!!getPadCoordinates filename "<<filename<<std::endl;
                 y1 += 3; size_t y2 = line.find('"', y1);
                 double x = std::atof(line.substr(x1, x2-x1).c_str());
                 double y = std::atof(line.substr(y1, y2-y1).c_str());
-                currentVerts.push_back(Point{x,y});
+                p.vertices.push_back(Point{x,y});
+                sumX += x;
+                sumY += y;
             }
             continue;
         }
 
-        // 4) end of this polygon → save it
         if (inPolygon && line.find("</polygon>") == 0) {
-            allVertices.push_back(currentVerts);
-            allNames   .push_back(currentName);
             inPolygon = false;
+            p.cx = sumX / p.vertices.size();
+            p.cy = sumY / p.vertices.size();
+            p.id=iter;
+            iter++;
             continue;
         }
 
-        // 5) end of this signal
+
         if (inSignal && line.find("</signal>") == 0) {
             inSignal = false;
             keepSignal = false;
+            
+            Pads[i].push_back(p);
+            
             continue;
         }
 
-        // 6) anything else in the file is ignored
     }
 }
-
-
-std::vector<PHG4TpcPadPlaneReadout::PadCentroid>
-PHG4TpcPadPlaneReadout::processPadVertices(
-    const std::vector<PadVertices>& vertices,
-    const std::vector<std::string>& names
-) {
-    std::vector<PadCentroid> centroids;
-    centroids.reserve(vertices.size());
-
-    for (size_t i = 0; i < vertices.size(); ++i) {
-        double sumX = 0, sumY = 0;
-        for (size_t j = 0; j < vertices[i].size(); ++j) {
-            sumX += vertices[i][j].x;
-            sumY += vertices[i][j].y;
-        }
-        double cx = sumX / vertices[i].size();
-        double cy = sumY / vertices[i].size();
-        centroids.push_back(PadCentroid{ names[i], cx, cy });
-    }
-    return centroids;
-}
-
-std::vector<std::vector<PHG4TpcPadPlaneReadout::PadCentroid>>
-PHG4TpcPadPlaneReadout::loadPadPlanes(
-    const std::vector<std::string>& filenames
-) {
-  std::cout<<"!!!!!loadPadPlanes"<<std::endl;
-    std::vector<std::vector<PadCentroid>> allModules;
-    allModules.reserve(filenames.size());
-    std::cout<<"!!!!!filenames.size() "<<filenames.size()<<std::endl;
-    for (size_t i = 0; i < filenames.size(); ++i) {
-      std::cout<<"!!!!!filenames["<<i<<"] "<<filenames[i]<<std::endl;
-        std::vector<PadVertices> verts;
-        std::vector<std::string> names;
-        getPadCoordinates(filenames[i], verts, names);
-
-        std::vector<PadCentroid> module =
-           processPadVertices(verts, names);
-
-        std::cout << "Module " << i
-                  << ": Loaded " << module.size() << " pads\n";
-
-        allModules.push_back(module);
-    }
-    return allModules;
 }
 
 //_________________________________________________________
@@ -428,7 +382,7 @@ double PHG4TpcPadPlaneReadout::getSingleEGEMAmplification(TF1 *f)
   return nelec;
 }
 
-
+/*
 //_________________________________________________________
 inline void rotatePointToSector(double x, double y,
                                 double& xNew, double& yNew,
@@ -481,7 +435,7 @@ double gaussianIntegral1D(double a, double b, double mu, double sigma) {
 
 //_________________________________________________________
 
-
+*/
 
 
 
@@ -922,6 +876,7 @@ double PHG4TpcPadPlaneReadout::check_phi(const unsigned int side, const double p
 
   return new_phi;
 }
+/*
 void PHG4TpcPadPlaneReadout::build_serf_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &phibin_pad, std::vector<double> &phibin_pad_share)
 {
     const double radius = LayerGeom->get_radius();
@@ -941,7 +896,8 @@ void PHG4TpcPadPlaneReadout::build_serf_zigzag_phibins(const unsigned int side, 
 
     
 }
-
+*/
+/*
 void getZigzagPadFractions(
     double x0_mm,
     double y0_mm,
@@ -966,7 +922,7 @@ void getZigzagPadFractions(
     //for(auto& kv : pad_fractions) total += kv.second;
     //if(total>0) for(auto& kv : pad_fractions) kv.second /= total;
     
-}
+}*/
 
 void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &phibin_pad, std::vector<double> &phibin_pad_share)
 {

@@ -49,16 +49,13 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   void SetDefaultParameters() override;
   void UpdateInternalParameters() override;
-   void LoadAllPadPlanes();
-     private:
-    struct PadCentroid;
-      public:
-  const std::vector<std::vector<PadCentroid>>& GetCentroids() const
-  { return centroids_; }
+   
+
  private:
 
   //  void populate_rectangular_phibins(const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void populate_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
+  void build_serf_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void populate_tbins(const double t, const std::array<double, 2> &cloud_sig_tt, std::vector<int> &adc_tbin, std::vector<double> &adc_tbin_share);
 
   double check_phi(const unsigned int side, const double phi, const double radius);
@@ -125,34 +122,19 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   struct Point { double x, y; };
 
-  // one pad’s name + centroid
-  struct PadCentroid {
-    std::string name;
-    double      cx, cy;
+  struct PadInfo {
+    std::string          name;     // pad name
+    int                  id;       // pad id
+    double               cx, cy;   // centroid coords
+    std::vector<Point>   vertices; // pad polygon
   };
-
-  // a pad’s polygon
-  typedef std::vector<Point> PadVertices;
+  
+std::array<std::vector<PadInfo>,3> Pads;
 
   // hard‑coded list of input .brd files
   static const std::vector<std::string> brdMaps_;
+void loadPadPlanes();
 
-  // parse one .brd into vertices+names
-  void getPadCoordinates(const std::string&         filename,
-                         std::vector<PadVertices>& allVertices,
-                         std::vector<std::string>& allNames);
-
-  // compute centroids from those raw vertices
-  std::vector<PadCentroid>
-    processPadVertices(const std::vector<PadVertices>& vertices,
-                       const std::vector<std::string>& names);
-
-  // drive everything: loop over brdMaps_, call getPadCoordinates+process…
-  std::vector<std::vector<PadCentroid>>
-    loadPadPlanes(const std::vector<std::string>& filenames);
-
-  // storage for the results
-  std::vector<std::vector<PadCentroid>> centroids_;
 };
 
 #endif
