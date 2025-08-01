@@ -44,7 +44,7 @@ class PHSimpleKFProp : public SubsysReco
 {
  public:
   PHSimpleKFProp(const std::string& name = "PHSimpleKFProp");
-  ~PHSimpleKFProp() override = default;
+  ~PHSimpleKFProp() override;
 
   int InitRun(PHCompositeNode* topNode) override;
   int process_event(PHCompositeNode* topNode) override;
@@ -90,6 +90,9 @@ class PHSimpleKFProp : public SubsysReco
   void set_ghost_y_cut(double d) { _ghost_y_cut = d; }
   void set_ghost_z_cut(double d) { _ghost_z_cut = d; }
 
+  // number of threads
+  void set_num_threads(int value) { m_num_threads = value; }
+
  private:
   bool _use_truth_clusters = false;
   bool m_ghostrejection = true;
@@ -116,7 +119,9 @@ class PHSimpleKFProp : public SubsysReco
 
   TrackSeedContainer* _track_map = nullptr;
 
-  std::unique_ptr<PHField> _field_map = nullptr;
+  //! magnetic field map
+  PHField* _field_map = nullptr;
+  bool m_own_fieldmap = false;
 
   /// acts geometry
   ActsGeometry* m_tgeometry = nullptr;
@@ -200,7 +205,7 @@ class PHSimpleKFProp : public SubsysReco
 
   double get_Bz(double x, double y, double z) const;
 
-  void rejectAndPublishSeeds(std::vector<TrackSeed_v2>& seeds, const PositionMap& positions, std::vector<float>& trackChi2, PHTimer& timer);
+  void rejectAndPublishSeeds(std::vector<TrackSeed_v2>& seeds, const PositionMap& positions, std::vector<float>& trackChi2);
 
   void publishSeeds(const std::vector<TrackSeed_v2>&);
 
@@ -224,6 +229,16 @@ class PHSimpleKFProp : public SubsysReco
   double _ghost_x_cut = std::numeric_limits<double>::max();
   double _ghost_y_cut = std::numeric_limits<double>::max();
   double _ghost_z_cut = std::numeric_limits<double>::max();
+
+  // number of threads
+  /*
+   * default is 0. This corresponds to allocating as many threads as available on the host
+   * on CONDOR, by default, this results in only one thread allocated
+   * being allocated unless several cores are allocated to the job
+   * via request_cpus directive in the jdf
+   */
+  int m_num_threads = 0;
+
 };
 
 #endif
