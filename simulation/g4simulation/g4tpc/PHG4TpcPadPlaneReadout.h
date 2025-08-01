@@ -55,7 +55,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   //  void populate_rectangular_phibins(const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void populate_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
-  void build_serf_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
+  void SERF_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double rad_gem, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void populate_tbins(const double t, const std::array<double, 2> &cloud_sig_tt, std::vector<int> &adc_tbin, std::vector<double> &adc_tbin_share);
 
   double check_phi(const unsigned int side, const double phi, const double radius);
@@ -123,17 +123,41 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   struct Point { double x, y; };
 
   struct PadInfo {
-    std::string          name;     // pad name
-    int                  id;       // pad id
-    double               cx, cy;   // centroid coords
-    std::vector<Point>   vertices; // pad polygon
+    std::string          name;       // pad name
+    int                  pad_number; // pad number (number in module)
+    int                  pad_bin;    // pad phi bin (number according to get_phi_bin)
+    double               cx, cy;     // centroid coords
+    double               rad, phi;   // pad radius and phi
+    std::vector<Point>   vertices;   // pad polygon
+    bool                isedge = false; // whether to keep this pad signal
+    void clear() {
+      name.clear();
+      pad_number = -1;
+      pad_bin    = -1;
+      cx = cy = rad = phi = 0.0;
+      vertices.clear();
+      isedge = false;
+  }
   };
   
-std::array<std::vector<PadInfo>,3> Pads;
-
+std::array<std::vector<PadInfo>,3*16+7> Pads;
+  double integratedDensityOfCircleAndPad(double hitX,double hitY, double sigma, const std::vector<Point>& pad,double gridStep = 0.0);
   // hard‑coded list of input .brd files
   static const std::vector<std::string> brdMaps_;
 void loadPadPlanes();
+int ntpc_phibins_sector[3] = { 94, 128, 192 };
+bool pointInPolygon(double x, double y, std::vector<Point> poly);
+int findPadForPoint( double x, double y, int tpc_module);
+  const std::array<double, 5> Thickness =
+      {{
+          0.56598621677629212,
+          1.0206889851687158,
+          1.0970475085472556,
+          0.5630547309825637,
+          0.56891770257002054,
+      }};
+double min_radii_module[3]={314.9836110818037, 416.59202613529567, 589.1096495597712};
+double max_radii_module[3]={399.85222874031024, 569.695373910603, 753.6667758418596};
 
 };
 
