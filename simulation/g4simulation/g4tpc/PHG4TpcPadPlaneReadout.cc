@@ -215,7 +215,7 @@ int PHG4TpcPadPlaneReadout::InitRun(PHCompositeNode *topNode)
     std::cout << "[PHG4TpcPadPlaneReadout] Module " << i 
               << " has " << Pads[i].size() << " pads\n";
   }
-  int check_pad = 0;
+  int check_pad = 81;
   std::cout<<"Pad in module 0, pad 0: "
            << Pads[0][check_pad].name << " at (" 
            << Pads[0][check_pad].cx << ", " << Pads[0][check_pad].cy << ")\n";
@@ -251,10 +251,16 @@ void PHG4TpcPadPlaneReadout::loadPadPlanes() {
     bool        inSignal  = false;
     bool        inPolygon = false;
     bool        keepSignal = false;
-    PadInfo p;
+
     std::string pname_tmp;
     int iter = 0;
     double sumX = 0, sumY = 0;
+    PadInfo p;
+    int layer = -1, pad = -1;
+    p.clear();
+    p.isedge = false;
+    for(int l=0;l<7;l++)
+        Pads[l].push_back(p);
 
     while (std::getline(in, line)) {
 
@@ -278,7 +284,17 @@ void PHG4TpcPadPlaneReadout::loadPadPlanes() {
         }
 
         if ( inSignal && keepSignal && !inPolygon && line.find("<polygon") == 0) {
+            p.clear();
             p.name = pname_tmp;
+            layer = -1, pad = -1;
+            if (std::sscanf(pname_tmp.c_str(), "ZZ.%2d.%3d", &layer, &pad) == 2) {
+                p.pad_bin = pad;
+                if (p.pad_bin==0 || p.pad_bin==ntpc_phibins_sector[i]-1)
+                {
+                    p.isedge = true; // edge pads
+                }
+
+            } 
             inPolygon = true;
             sumX = 0, sumY = 0;
             continue;
@@ -290,8 +306,8 @@ void PHG4TpcPadPlaneReadout::loadPadPlanes() {
             if (x1!=std::string::npos && y1!=std::string::npos) {
                 x1 += 3; size_t x2 = line.find('"', x1);
                 y1 += 3; size_t y2 = line.find('"', y1);
-                double x = std::atof(line.substr(x1, x2-x1).c_str());
-                double y = std::atof(line.substr(y1, y2-y1).c_str());
+                double x = std::atof(line.substr(x1, x2-x1).c_str())/10.0;
+                double y = std::atof(line.substr(y1, y2-y1).c_str())/10.0;
                 p.vertices.push_back(Point{x,y});
                 sumX += x;
                 sumY += y;
@@ -303,7 +319,12 @@ void PHG4TpcPadPlaneReadout::loadPadPlanes() {
             inPolygon = false;
             p.cx = sumX / p.vertices.size();
             p.cy = sumY / p.vertices.size();
-            p.id=iter;
+            p.rad = get_r(p.cx, p.cy);
+            
+            p.phi = std::atan2(p.cy, p.cx);
+
+            p.pad_number=iter;
+         
             iter++;
             continue;
         }
@@ -312,8 +333,9 @@ void PHG4TpcPadPlaneReadout::loadPadPlanes() {
         if (inSignal && line.find("</signal>") == 0) {
             inSignal = false;
             keepSignal = false;
-            
-            Pads[i].push_back(p);
+            std::cout<<"Module "<<i<<" pad_number "<<p.pad_number<<" pad name "<<p.name<<" pad layer "<<7 + i * 16 + layer<<" pad_bin "<<p.pad_bin<<" ( "<<ntpc_phibins_sector[i] - p.pad_bin -1 <<" ) "<<" cx "<<p.cx<<" cy "<<p.cy  <<" rad "<<p.rad<<" phi "<<p.phi<<" Number of verticies "<<p.vertices.size()<<std::endl;
+
+            Pads[7 + i * 16 + layer].push_back(p);
             
             continue;
         }
@@ -396,7 +418,7 @@ double PHG4TpcPadPlaneReadout::getSingleEGEMAmplification(TF1 *f)
   return nelec;
 }
 
-/*
+
 //_________________________________________________________
 inline void rotatePointToSector(double x, double y,
                                 double& xNew, double& yNew,
@@ -425,6 +447,10 @@ inline void rotatePointToSector(double x, double y,
     xNew = R * std::cos(phiRot);
     yNew = R * std::sin(phiRot);
 }
+
+
+
+/*
 //_________________________________________________________
 std::vector<double> computeShaperKernel() {
     int NT = static_cast<int>(DetectorParams::window_ns / DetectorParams::adc_dt);
@@ -450,9 +476,50 @@ double gaussianIntegral1D(double a, double b, double mu, double sigma) {
 //_________________________________________________________
 
 */
+/*
+bool PHG4TpcPadPlaneReadout::pointInPolygon(
+    double x, double y,
+    const std::vector<Point>& poly
+) {
+    size_t n = poly.size();
+    if (n < 3) return false;  // no area → never inside
 
+    bool inside = false;
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        double xi = poly[i].x, yi = poly[i].y;
+        double xj = poly[j].x, yj = poly[j].y;
 
-
+        // does edge (j→i) straddle the horizontal ray at y?
+        bool cond = ((yi > y) != (yj > y));
+        if (cond) {
+                std::cout<<"Checking point ("<<x<<", "<<y<<") against polygon edge from ("
+               <<poly[i].x<<", "<<poly[i].y<<") to ("<<poly[j].x<<", "<<poly[j].y<<")"<<std::endl;
+            // compute intersection's X coordinate on the edge at height y
+            double x_intersect = xj + (xi - xj) * (y - yj) / (yi - yj);
+            if (x < x_intersect) {
+                inside = !inside;
+            }
+        }
+    }
+    return inside;
+}
+*/
+/*
+//------------------------------------------------------------------------------
+// 2) findPadForPoint: returns padNumber or −1 if none
+int PHG4TpcPadPlaneReadout::findPadForPoint( double x, double y, int tpc_module) {
+  
+    for (size_t i = 0; i < Pads[tpc_module].size(); ++i) {
+        if (pointInPolygon(x, y, Pads[tpc_module][i].vertices)) {
+            return  Pads[tpc_module][i].pad_bin;
+            std::cout<<"Center of the pad is ("<<Pads[tpc_module][i].cx<<", "
+                     <<Pads[tpc_module][i].cy<<")"<<std::endl;
+        }
+    }
+    return -1;
+}
+*/
+//------------------------------------------------------------------------------
 
 void PHG4TpcPadPlaneReadout::MapToPadPlane(
     TpcClusterBuilder &tpc_truth_clusterer,
@@ -646,20 +713,26 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
   // Distribute the charge between the pads in phi
   //====================================
 
-  if (Verbosity() > 200)
-  {
+ // if (Verbosity() > 200)
+ // {
     std::cout << "  populate phi bins for "
               << " layernum " << layernum
               << " phi " << phi
+              << " rad_gem " << rad_gem
               << " sigmaT " << sigmaT
               //<< " zigzag_pads " << zigzag_pads
               << std::endl;
-  }
+  //}
 
   std::vector<int> pad_phibin;
   std::vector<double> pad_phibin_share;
 
   populate_zigzag_phibins(side, layernum, phi, sigmaT, pad_phibin, pad_phibin_share);
+
+    std::vector<int> pad_phibin_serf;
+  std::vector<double> pad_phibin_share_serf;
+
+  SERF_zigzag_phibins(side, layernum, phi, rad_gem, sigmaT, pad_phibin_serf, pad_phibin_share_serf);
   /* if (pad_phibin.size() == 0) { */
   /* pass_data.neff_electrons = 0; */
   /* } else { */
@@ -930,39 +1003,167 @@ void PHG4TpcPadPlaneReadout::build_serf_zigzag_phibins(const unsigned int side, 
     
 }
 */
-/*
-void getZigzagPadFractions(
-    double x0_mm,
-    double y0_mm,
-    const unsigned int layer,
-    double sigma_r,
-    std::map<int,double> pad_fractions
- ) {
-    double r0 = std::hypot(x0_mm, y0_mm);
-    int module = (layer - 7)/16;
-    if(module < 0) return {{}, module};
-  
-    auto hit_pads = edgePadsHit(x0_mm, y0_mm, sigma_r, df, 100);
-    
-    for(int pad_id : hit_pads) {
-        const PadRow& row = *std::find_if(df.begin(), df.end(),
-            [&](const PadRow& pr){ return pr.PadNumber==pad_id; });
-        double fraction = integratedDensityOfCircleAndPad(
-            x0_mm, y0_mm, sigma_r, row.PadPath);
-        if(fraction > 1e-8) pad_fractions[pad_id] = fraction;
+double PHG4TpcPadPlaneReadout::integratedDensityOfCircleAndPad(
+    double hitX,
+    double hitY,
+    double sigma,
+    const std::vector<Point>& pad,
+    double gridStep
+) {
+    // sanity checks
+    if (sigma <= 0.0 || pad.empty()) return 0.0;
+
+    // constants
+    const int    nSigma       = 1;
+    double R                  = nSigma * sigma;
+    double gaussConst         = 1.0 / (2.0 * M_PI * sigma * sigma);
+    double expDenominator     = 2.0 * sigma * sigma;
+
+    // pick a default grid step if none provided
+    if (gridStep <= 0.0) {
+        gridStep = sigma / 50.0;
     }
-    //double total = 0;
-    //for(auto& kv : pad_fractions) total += kv.second;
-    //if(total>0) for(auto& kv : pad_fractions) kv.second /= total;
-    
-}*/
+
+    // 1) Compute pad bounding box
+    double minx = pad[0].x, maxx = pad[0].x;
+    double miny = pad[0].y, maxy = pad[0].y;
+    for (size_t i = 1; i < pad.size(); ++i) {
+        minx = std::min(minx, pad[i].x);
+        maxx = std::max(maxx, pad[i].x);
+        miny = std::min(miny, pad[i].y);
+        maxy = std::max(maxy, pad[i].y);
+    }
+
+    // 2) Intersect that box with the 3σ circle’s box
+    double x0 = std::max(minx, hitX - R);
+    double x1 = std::min(maxx, hitX + R);
+    double y0 = std::max(miny, hitY - R);
+    double y1 = std::min(maxy, hitY + R);
+
+    if (x1 <= x0 || y1 <= y0) {
+        // no overlap
+        return 0.0;
+    }
+
+    // 3) Determine grid dimensions
+    int nx = static_cast<int>(std::ceil((x1 - x0) / gridStep));
+    int ny = static_cast<int>(std::ceil((y1 - y0) / gridStep));
+    double total = 0.0;
+
+    // 4) Loop over cell centers
+    for (int ix = 0; ix < nx; ++ix) {
+        double x = x0 + (ix + 0.5) * gridStep;
+        for (int iy = 0; iy < ny; ++iy) {
+            double y = y0 + (iy + 0.5) * gridStep;
+            // skip outside the circle
+            double dx = x - hitX, dy = y - hitY;
+            if (dx*dx + dy*dy > R*R) continue;
+            // skip outside the pad polygon
+            if (!pointInPolygon(x, y, pad)) continue;
+            // accumulate Gaussian density
+            total += gaussConst * std::exp(-(dx*dx + dy*dy) / expDenominator);
+        }
+    }
+
+    // 5) multiply by cell area for the approximate integral
+    return total * (gridStep * gridStep);
+}
+
+void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(const unsigned int side, const unsigned int layernum,  const double phi, const double rad_gem,const double cloud_sig_rp, std::vector<int> &phibin_pad, std::vector<double> &phibin_pad_share)
+{
+  const double radius = LayerGeom->get_radius();
+  const double phistepsize = LayerGeom->get_phistep();
+  const auto phibins = LayerGeom->get_phibins();
+
+  int sector1 = 0;
+  double x = rad_gem * cos(phi);
+  double y = rad_gem * sin(phi);
+  double xNew = 0.0;
+  double yNew = 0.0;
+  double phiNew = std::atan2(yNew,xNew);
+  double rad_gem_new = get_r(xNew, yNew);
+  rotatePointToSector( x,  y,  xNew, yNew, sector1);
+  std::cout<<"PHG4TpcPadPlaneReadout::populate_zigzag_phibins: x = "<<x<<", y = "<<y<<", xNew = "<<xNew<<", yNew = "<<yNew<<std::endl;
+ int tpc_module = (int)(layernum - 7)/16;
+ int phi_bin = LayerGeom->get_phibin(phi, side);
+ int sector = 0;
+ for (int i=0;i<12;i++)
+  {
+    if (phi >= sector_min_Phi[side][i] && phi < sector_max_Phi[side][i])
+      {
+        sector = i;
+        break;
+      }
+  }
+
+std::cout<<"!!!!!! phi = "<<phi<<" radius = "<<rad_gem<<" layer radius = "<<radius<<" sector = "<<sector<<" layer = "<<layernum<<" tpc_module = "<< tpc_module <<" layer in module "<<((int)(layernum - 7)%16)<<" phi_bin = "<<phi_bin<<" cx = "<<Pads[layernum][ntpc_phibins_sector[tpc_module] -1 - phi_bin].cx<<" cy = "<<Pads[layernum][ntpc_phibins_sector[tpc_module] -1 - phi_bin].cy<<" Sector phi min "<<sector_min_Phi[side][sector]<<" sector phi max = "<<sector_max_Phi[side][sector]<<std::endl;
+
+  // make the charge distribution gaussian
+  double rphi = phi * radius;
+  if (Verbosity() > 100)
+  {
+    if (LayerGeom->get_layer() == print_layer)
+    {
+      std::cout << " !!!!!!! SERF for layer " << layernum << " with radius " << radius << " phi " << phi
+                << " rphi " << rphi << " phistepsize " << phistepsize << std::endl;
+      std::cout << " fcharge created: radius " << radius << " rphi " << rphi << " cloud_sig_rp " << cloud_sig_rp << std::endl;
+    }
+  }
+
+  const double philim_low_calc = phiNew - (_nsigmas * cloud_sig_rp / rad_gem_new) - phistepsize;
+  const double philim_high_calc = phiNew + (_nsigmas * cloud_sig_rp / rad_gem_new) + phistepsize;
+
+  // Find the pad range that covers this phi range
+  const double philim_low = check_phi(side, philim_low_calc, rad_gem_new);
+  const double philim_high = check_phi(side, philim_high_calc, rad_gem_new);
+  
+
+    int phibin_low = LayerGeom->get_phibin(philim_high, side);
+  int phibin_high = LayerGeom->get_phibin(philim_low, side);
+  int npads = phibin_high - phibin_low;
+/*
+  const double radlim_low_calc = rad_gem - (_nsigmas * cloud_sig_rp / radius) - phistepsize;
+  const double radlim_high_calc = rad_gem + (_nsigmas * cloud_sig_rp / radius) + phistepsize;
+
+  // Find the pad range that covers this phi range
+  const double radlim_low = check_phi(side, phi, radlim_low_calc);
+  const double radlim_high = check_phi(side, phi, radlim_high_calc);
+  if (radlim_low < (LayerGeom->get_radius() - LayerGeom->get_thickness() / 2.0))
+  {
+    std::cout << " radlim_low " << radlim_low << " is in the previous layer " <<layernum<<" with upper radius "<< LayerGeom->get_radius() - LayerGeom->get_thickness() / 2.0 << std::endl;
+  }
+  if (radlim_high > (LayerGeom->get_radius() + LayerGeom->get_thickness() / 2.0))
+  {
+    std::cout << " radlim_high " << radlim_high << " is in the next layer " <<layernum<<" with lower radius "<< LayerGeom->get_radius() + LayerGeom->get_thickness() / 2.0 << std::endl;
+  }
+*/
+      std::cout << "   SERF    zigzags: phi " << phi << " philim_low " << philim_low << " phibin_low " << phibin_low
+                << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads << std::endl;
+
+  for (int ipad = 0; ipad <= npads; ipad++)
+  {
+    int pad_now = phibin_low + ipad;
+    // if(phibin_low<0 && phibin_high<0) pad_now = phibin_high + ipad;
+    //  check that we do not exceed the maximum number of pads, wrap if necessary
+    if (pad_now >= phibins)
+    {
+      pad_now -= phibins;
+    }
+    auto  padinfo = Pads[layernum][pad_now - ntpc_phibins_sector[tpc_module]*sector];
+    double charge = integratedDensityOfCircleAndPad( xNew, yNew, cloud_sig_rp / rad_gem_new, padinfo.vertices);
+    phibin_pad.push_back(pad_now);
+    phibin_pad_share.push_back(charge);
+  }
+
+  return;
+}
+
 
 void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &phibin_pad, std::vector<double> &phibin_pad_share)
 {
   const double radius = LayerGeom->get_radius();
   const double phistepsize = LayerGeom->get_phistep();
   const auto phibins = LayerGeom->get_phibins();
-
   // make the charge distribution gaussian
   double rphi = phi * radius;
   if (Verbosity() > 100)
@@ -987,14 +1188,14 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
   int phibin_high = LayerGeom->get_phibin(philim_low, side);
   int npads = phibin_high - phibin_low;
 
-  if (Verbosity() > 1000)
-  {
-    if (layernum == print_layer)
-    {
+  //if (Verbosity() > 1000)
+ // {
+  //  if (layernum == print_layer)
+    //{
       std::cout << "           zigzags: phi " << phi << " philim_low " << philim_low << " phibin_low " << phibin_low
                 << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads << std::endl;
-    }
-  }
+   // }
+ // }
 
   if (npads < 0 || npads > 9)
   {
