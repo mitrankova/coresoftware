@@ -141,6 +141,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   };
   
 std::array<std::vector<PadInfo>,3*16+7> Pads;
+bool pointInPolygon( double x, double y,const std::vector<Point>& poly); 
   double integratedDensityOfCircleAndPad(double hitX,double hitY, double sigma, const std::vector<Point>& pad,double gridStep = 0.0);
   // hard‑coded list of input .brd files
   static const std::vector<std::string> brdMaps_;
