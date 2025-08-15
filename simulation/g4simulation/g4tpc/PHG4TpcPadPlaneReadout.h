@@ -45,7 +45,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   // otherwise warning of inconsistent overload since only one MapToPadPlane methow is overridden
   using PHG4TpcPadPlane::MapToPadPlane;
 
-  void MapToPadPlane(TpcClusterBuilder &tpc_clustbuilder, TrkrHitSetContainer *single_hitsetcontainer, TrkrHitSetContainer *hitsetcontainer, TrkrHitTruthAssoc * /*hittruthassoc*/, const double x_gem, const double y_gem, const double t_gem, const unsigned int side, PHG4HitContainer::ConstIterator hiter, TNtuple * /*ntpad*/, TNtuple * /*nthit*/) override;
+  void MapToPadPlane(TpcClusterBuilder &tpc_clustbuilder, TrkrHitSetContainer *single_hitsetcontainer, TrkrHitSetContainer *hitsetcontainer, TrkrHitTruthAssoc * /*hittruthassoc*/, const double x_gem, const double y_gem, const double t_gem, const unsigned int side, PHG4HitContainer::ConstIterator hiter, TNtuple * /*ntpad*/, TNtuple * /*nthit*/, TH2* h_adc_ref, TH2* h_adc_serf  ) override;
 
   void SetDefaultParameters() override;
   void UpdateInternalParameters() override;
@@ -159,6 +159,8 @@ int findPadForPoint( double x, double y, int tpc_module);
       }};
 double min_radii_module[3]={314.9836110818037, 416.59202613529567, 589.1096495597712};
 double max_radii_module[3]={399.85222874031024, 569.695373910603, 753.6667758418596};
+
+
 
 };
 

@@ -355,6 +355,8 @@ int PHG4TpcElectronDrift::InitRun(PHCompositeNode *topNode)
     se->registerHisto(nthit);
     se->registerHisto(ntpad);
   }
+  h_adc_ref = new TH2F("h_adc_ref", "ADC Map. Coresoftware; Pad;Number of pads in cluster;ADC", 7, 0, 7.0, 7,  0.0, 7.0);
+  h_adc_serf= new TH2F("h_adc_serf", "ADC Map. SERF; Pad;Number of pads in cluster;ADC", 7, 0, 7.0, 7,  0.0, 7.0);
 
   padplane->InitRun(topNode);
 
@@ -700,7 +702,7 @@ int PHG4TpcElectronDrift::process_event(PHCompositeNode *topNode)
       }
       padplane->MapToPadPlane(truth_clusterer, single_hitsetcontainer.get(),
                               temp_hitsetcontainer.get(), hittruthassoc, x_final, y_final, t_final,
-                              side, hiter, ntpad, nthit);
+                              side, hiter, ntpad, nthit, h_adc_ref,h_adc_serf);
     }  // end loop over electrons for this g4hit
 
     if (do_ElectronDriftQAHistos)
@@ -926,6 +928,12 @@ int PHG4TpcElectronDrift::End(PHCompositeNode * /*topNode*/)
     ratioElectronsRR->Write();
     EDrift_outf->Close();
   }
+
+  m_outf_adc.reset(new TFile("m_outf_adc.root", "recreate"));
+  m_outf_adc->cd();
+  h_adc_ref->Write();
+  h_adc_serf->Write();
+  m_outf_adc->Close();
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
