@@ -226,6 +226,8 @@ int PHG4TpcPadPlaneReadout::InitRun(PHCompositeNode *topNode)
 
   }
    }
+
+
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -529,7 +531,7 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
     TrkrHitSetContainer *hitsetcontainer,
     TrkrHitTruthAssoc * /*hittruthassoc*/,
     const double x_gem, const double y_gem, const double t_gem, const unsigned int side,
-    PHG4HitContainer::ConstIterator hiter, TNtuple * /*ntpad*/, TNtuple * /*nthit*/)
+    PHG4HitContainer::ConstIterator hiter, TNtuple * /*ntpad*/, TNtuple * /*nthit*/, TH2* h_adc_ref , TH2* h_adc_serf )
 {
   // One electron per call of this method
   // The x_gem and y_gem values have already been randomized within the transverse drift diffusion width
@@ -767,6 +769,8 @@ norm1 = 0.0;
   std::cout<<"--------------------------"<<std::endl;
     for (unsigned int iphi = 0; iphi < pad_phibin.size(); ++iphi)
   {
+    h_adc_ref->Fill(iphi, pad_phibin.size(), pad_phibin_share[iphi]);
+    h_adc_serf->Fill(iphi, pad_phibin_serf.size(), pad_phibin_share_serf[iphi]);
      std::cout<<" phibin ref "<<pad_phibin[iphi]<<" phibin serf "<<pad_phibin_serf[iphi]<<" charge ref "<< pad_phibin_share[iphi]<<" charge serf "<< pad_phibin_share_serf[iphi]<<std::endl;
   }
   std::cout<<"!!!!!!!!!!!!!!!!!!!!!!!!!!"<<std::endl;
@@ -1180,9 +1184,10 @@ std::cout<<"!!!!!! phi = "<<phi<<" radius = "<<rad_gem<<" layer radius = "<<radi
    
     int look_pad =  pad_now ;
     //std::cout<<"pad now = "<<pad_now<<" look_pad = "<<look_pad<<" sector = "<<sector<<" ntpc_phibins_sector[tpc_module] = "<<ntpc_phibins_sector[tpc_module];
-    int n = ntpc_phibins_sector[tpc_module];
-    look_pad = ( n - ( (look_pad % n) + n ) % n ) % n -1;
-   //std::cout<<"  look up pad = "<<look_pad<<std::endl;
+    int n = ntpc_phibins_sector[tpc_module]-1;
+    look_pad = ( n - ( (look_pad % n) + n ) % n ) % n;
+   std::cout<<"  look up pad = "<<look_pad<<" Pads[layernum] "<<Pads[layernum].size()<<std::endl;
+
 
     //std::cout<<"   SERF    zigzags: ipad " << ipad << " pad_now " << pad_now << " phibin_low " << phibin_low
          //     << " phibin_high " << phibin_high << " npads " << npads << "ntpc_phibins_sector[tpc_module] = "<<ntpc_phibins_sector[tpc_module]<<" pad look "<<ntpc_phibins_sector[tpc_module] - (pad_now - ntpc_phibins_sector[tpc_module]*sector) << std::endl;
