@@ -45,9 +45,9 @@
 
 TpcCombinedRawDataUnpacker::TpcCombinedRawDataUnpacker(std::string const& name, std::string const& outF)
   : SubsysReco(name)
-  , outfile_name(outF)
+  , outfile_name(name+outF)
 {
-  // Do nothing
+  
 }
 TpcCombinedRawDataUnpacker::~TpcCombinedRawDataUnpacker()
 {
@@ -179,6 +179,28 @@ int TpcCombinedRawDataUnpacker::InitRun(PHCompositeNode* topNode)
     m_ntup = new TNtuple("NT", "NT", "event:gtmbco:packid:ep:sector:side:fee:rx:entries:ped:width");
     m_ntup_hits = new TNtuple("NTH", "NTH", "event:gtmbco:packid:ep:sector:side:fee:chan:sampadd:sampch:phibin:tbin:layer:adc:ped:width");
     m_ntup_hits_corr = new TNtuple("NTC", "NTC", "event:gtmbco:packid:ep:sector:side:fee:chan:sampadd:sampch:phibin:tbin:layer:adc:ped:width:corr");
+    m_ntup_hits_tree = new TTree("NTH_tree","NTH tree");
+   
+    m_ntup_hits_tree->Branch("event",      &t_event,     "t_event/I");
+    m_ntup_hits_tree->Branch("gtmbco",     &t_gtmbco,    "t_gtmbco/l");   // unsigned 64-bit
+    m_ntup_hits_tree->Branch("packid",     &t_packid,    "t_packid/i");
+    m_ntup_hits_tree->Branch("sector",     &t_sector,    "t_sector/I");
+    m_ntup_hits_tree->Branch("side",       &t_side,      "t_side/I");
+    m_ntup_hits_tree->Branch("layer",      &t_layer,     "t_layer/I");
+    m_ntup_hits_tree->Branch("fee",        &t_fee,       "t_fee/I");
+    m_ntup_hits_tree->Branch("chan",       &t_chan,      "t_chan/I");
+    m_ntup_hits_tree->Branch("sampadd",    &t_sampadd,   "t_sampadd/s");  // unsigned 16-bit
+    m_ntup_hits_tree->Branch("sampch",     &t_sampch,    "t_sampch/s");
+    m_ntup_hits_tree->Branch("phi",        &t_phi,       "t_phi/F");
+    m_ntup_hits_tree->Branch("phi_center", &t_phi_center,"t_phi_center/F");
+    m_ntup_hits_tree->Branch("phibin",     &t_phibin,    "t_phibin/I");
+    m_ntup_hits_tree->Branch("tbin",       &t_tbin,      "t_tbin/I");
+    m_ntup_hits_tree->Branch("hitkey",     &t_hitkey,    "t_hitkey/i");   // unsigned 32-bit
+    m_ntup_hits_tree->Branch("adc",        &t_adc,       "t_adc/F");
+    m_ntup_hits_tree->Branch("ped",        &t_ped,       "t_ped/F");
+    m_ntup_hits_tree->Branch("width",      &t_width,     "t_width/F");
+
+
     if (m_doChanHitsCut)
     {
       m_HitChanDis = new TH2F("HitChanDis", "HitChanDis", 451, -0.5, 450.5, 256, -0.5, 255.5);
@@ -446,9 +468,32 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
           hit->setAdc(float(adc) - hpedestal);
           hit_set_container_itr->second->addHitSpecificKey(hit_key, hit);
         }
-
+   // std::cout<<"                            ::(float(adc) - hpedestal) = "<<(float(adc) - hpedestal)<<"  side = "<<side<<" layer = "<<layer<<" sector = "<<sector<<" ( "<<sector % 12<<" ) "<<" phi = "<<phi<<" phibin = "<<phibin<<" phi_center = "<<layergeom->get_phicenter(phibin, side)<<" (phi - phi_center) = "<<phi - layergeom->get_phicenter(phibin, side)<<std::endl;
+ 
         if (m_writeTree)
         {
+
+          t_event =  _ievent - 1;
+          t_gtmbco = gtm_bco;
+          t_packid = packet_id;
+          t_sector = mc_sectors[sector % 12];
+          t_side = side;
+          t_fee = fee; 
+          t_chan = channel;
+          t_sampadd = sampadd;
+          t_sampch = sampch;
+          t_layer = layer;
+          t_hitkey = hit_key; 
+          t_phi = phi;
+          t_phi_center =  layergeom->get_phicenter(phibin, side);
+          t_phibin = phibin;
+          t_tbin = t;
+          t_adc = (float(adc) - hpedestal);
+          t_ped = hpedestal;
+          t_width = hpedwidth;
+          m_ntup_hits_tree->Fill();
+
+          
           float fXh[18];
           int nh = 0;
 
@@ -687,6 +732,7 @@ int TpcCombinedRawDataUnpacker::End(PHCompositeNode* /*topNode*/)
     m_ntup->Write();
     m_ntup_hits->Write();
     m_ntup_hits_corr->Write();
+    m_ntup_hits_tree->Write();
     if (m_doChanHitsCut)
     {
       m_HitsinChan->Write();
