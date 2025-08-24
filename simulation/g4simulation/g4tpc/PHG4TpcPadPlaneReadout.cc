@@ -196,16 +196,9 @@ int PHG4TpcPadPlaneReadout::InitRun(PHCompositeNode *topNode)
   // 3) (optional) print a summary
     
 
-  for (size_t i = 0; i < Pads.size(); ++i)
-  {
-    std::cout << "[PHG4TpcPadPlaneReadout] Module " << i 
-              << " has " << Pads[i].size() << " pads\n";
-  }
-  int check_pad = 81;
-  std::cout<<"Pad in module 0, pad 0: "
-           << Pads[0][check_pad].name << " at (" 
-           << Pads[0][check_pad].cx << ", " << Pads[0][check_pad].cy << ")\n";
-   for (int j=0; j<7+16*3;j++){
+
+
+  /* for (int j=0; j<7+16*3;j++){
   for(size_t i = 0; i < Pads[j].size(); i++)
   {
     std::cout<<"Module "<<(j-7)/16<<" layer = "<<j<<" pad_number "<<i<<" pad name "<<Pads[j][i].name<<" pad_bin "<<Pads[j][i].pad_bin<<" ( "<<ntpc_phibins_sector[(j-7)/16] - Pads[j][i].pad_bin -1 <<" ) "<<" cx "<<Pads[j][i].cx<<" cy "<<Pads[j][i].cy  <<" rad "<<Pads[j][i].rad<<" phi "<<Pads[j][i].phi<<" Number of verticies "<<Pads[j][i].vertices.size()<<std::endl;
@@ -213,7 +206,7 @@ int PHG4TpcPadPlaneReadout::InitRun(PHCompositeNode *topNode)
   }
    }
 
-
+*/
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -323,7 +316,7 @@ void PHG4TpcPadPlaneReadout::loadPadPlanes() {
         if (inSignal && line.find("</signal>") == 0) {
             inSignal = false;
             keepSignal = false;
-            //std::cout<<"Module "<<i<<" pad_number "<<p.pad_number<<" pad name "<<p.name<<" pad layer "<<7 + i * 16 + layer<<" pad_bin "<<p.pad_bin<<" ( "<<ntpc_phibins_sector[i] - p.pad_bin -1 <<" ) "<<" cx "<<p.cx<<" cy "<<p.cy  <<" rad "<<p.rad<<" phi "<<p.phi<<" Number of verticies "<<p.vertices.size()<<std::endl;
+          //  std::cout<<"Module "<<i<<" pad_number "<<p.pad_number <<" pad name "<<p.name<<" pad layer "<<7 + i * 16 + layer<<" pad_bin "<<p.pad_bin<<" ( "<<ntpc_phibins_sector[i] - p.pad_bin -1 <<" ) "<<" cx "<<p.cx<<" cy "<<p.cy  <<" rad "<<p.rad<<" phi "<<p.phi<<" Number of verticies "<<p.vertices.size()<<std::endl;
 
             Pads[7 + i * 16 + layer].push_back(p);
             
@@ -510,14 +503,14 @@ int PHG4TpcPadPlaneReadout::findPadForPoint( double x, double y, int tpc_module)
 }
 */
 //------------------------------------------------------------------------------
-
+//, TH2* h_adc_ref , TH2* h_adc_serf
 void PHG4TpcPadPlaneReadout::MapToPadPlane(
     TpcClusterBuilder &tpc_truth_clusterer,
     TrkrHitSetContainer *single_hitsetcontainer,
     TrkrHitSetContainer *hitsetcontainer,
     TrkrHitTruthAssoc * /*hittruthassoc*/,
     const double x_gem, const double y_gem, const double t_gem, const unsigned int side,
-    PHG4HitContainer::ConstIterator hiter, TNtuple * /*ntpad*/, TNtuple * /*nthit*/, TH2* h_adc_ref , TH2* h_adc_serf )
+    PHG4HitContainer::ConstIterator hiter, TNtuple * /*ntpad*/, TNtuple * /*nthit*/ )
 {
   // One electron per call of this method
   // The x_gem and y_gem values have already been randomized within the transverse drift diffusion width
@@ -559,7 +552,7 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
       }
     }
   }
-
+//std::cout<<" phi = "<<phi<<" rad_gem = "<<rad_gem<<std::endl;
    
   unsigned int layernum = 0;
   /* TpcClusterBuilder pass_data {}; */
@@ -573,7 +566,7 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
   {
     double rad_low = layeriter->second->get_radius() - layeriter->second->get_thickness() / 2.0;
     double rad_high = layeriter->second->get_radius() + layeriter->second->get_thickness() / 2.0;
-
+//std::cout<<" rad_low "<<rad_low<<" rad_high = "<<rad_high<<std::endl;
     if (rad_gem > rad_low && rad_gem < rad_high)
     {
       // capture the layer where this electron hits the gem stack
@@ -704,8 +697,8 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
   // Distribute the charge between the pads in phi
   //====================================
 
- // if (Verbosity() > 200)
- // {
+  if (Verbosity() > 200)
+  {
     std::cout << "  populate phi bins for "
               << " layernum " << layernum
               << " phi " << phi
@@ -713,17 +706,24 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
               << " sigmaT " << sigmaT
               //<< " zigzag_pads " << zigzag_pads
               << std::endl;
-  //}
+  }
+
+
 
   std::vector<int> pad_phibin;
   std::vector<double> pad_phibin_share;
 
+  //std::vector<int> pad_phibin_ref;
+  //std::vector<double> pad_phibin_share_ref;
+  //std::vector<int> pad_phibin_serf;
+  //std::vector<double> pad_phibin_share_serf;
+
+ // populate_zigzag_phibins(side, layernum, phi, sigmaT, pad_phibin_ref, pad_phibin_share_ref);
+
+
   populate_zigzag_phibins(side, layernum, phi, sigmaT, pad_phibin, pad_phibin_share);
 
-    std::vector<int> pad_phibin_serf;
-  std::vector<double> pad_phibin_share_serf;
-
-  SERF_zigzag_phibins(side, layernum, phi, rad_gem, sigmaT, pad_phibin_serf, pad_phibin_share_serf);
+  //SERF_zigzag_phibins(side, layernum, phi, rad_gem, sigmaT, pad_phibin, pad_phibin_share);
   /* if (pad_phibin.size() == 0) { */
   /* pass_data.neff_electrons = 0; */
   /* } else { */
@@ -732,17 +732,6 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
 
   // Normalize the shares so they add up to 1
   double norm1 = 0.0;
-  for (unsigned int ipad = 0; ipad < pad_phibin_serf.size(); ++ipad)
-  {
-    double pad_share = pad_phibin_share_serf[ipad];
-    norm1 += pad_share;
-  }
-  for (unsigned int iphi = 0; iphi < pad_phibin_serf.size(); ++iphi)
-  {
-    pad_phibin_share_serf[iphi] /= norm1;
-  }
-
-norm1 = 0.0;
   for (unsigned int ipad = 0; ipad < pad_phibin.size(); ++ipad)
   {
     double pad_share = pad_phibin_share[ipad];
@@ -752,15 +741,26 @@ norm1 = 0.0;
   {
     pad_phibin_share[iphi] /= norm1;
   }
+/*
+norm1 = 0.0;
+  for (unsigned int ipad = 0; ipad < pad_phibin_ref.size(); ++ipad)
+  {
+    double pad_share = pad_phibin_share_ref[ipad];
+    norm1 += pad_share;
+  }
+  for (unsigned int iphi = 0; iphi < pad_phibin_ref.size(); ++iphi)
+  {
+    pad_phibin_share_ref[iphi] /= norm1;
+  }*/
 
-  std::cout<<"--------------------------"<<std::endl;
+  /*std::cout<<"--------------------------"<<std::endl;
     for (unsigned int iphi = 0; iphi < pad_phibin.size(); ++iphi)
   {
-    h_adc_ref->Fill(iphi, pad_phibin.size(), pad_phibin_share[iphi]);
-    h_adc_serf->Fill(iphi, pad_phibin_serf.size(), pad_phibin_share_serf[iphi]);
-     std::cout<<" phibin ref "<<pad_phibin[iphi]<<" phibin serf "<<pad_phibin_serf[iphi]<<" charge ref "<< pad_phibin_share[iphi]<<" charge serf "<< pad_phibin_share_serf[iphi]<<std::endl;
+   //  std::cout<<" phibin ref "<<pad_phibin[iphi]<<" phibin serf "<<pad_phibin_serf[iphi]<<" charge ref "<< pad_phibin_share[iphi]<<" charge serf "<< pad_phibin_share_serf[iphi]<<std::endl;
+    std::cout<<" phibin ref "<<pad_phibin_ref[iphi]<<" phibin serf "<<pad_phibin[iphi]<<" charge ref "<< pad_phibin_share_ref[iphi]<<" charge serf "<< pad_phibin_share[iphi]<<std::endl;
+
   }
-  std::cout<<"!!!!!!!!!!!!!!!!!!!!!!!!!!"<<std::endl;
+  std::cout<<"!!!!!!!!!!!!!!!!!!!!!!!!!!"<<std::endl;*/
   // Distribute the charge between the pads in t
   //====================================
   if (Verbosity() > 100 && layernum == print_layer)
@@ -1079,11 +1079,11 @@ void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(const unsigned int side, const 
   double yNew = 0.0;
 
   rotatePointToSector( x,  y,  xNew, yNew, sector1);
-    double phiNew = std::atan2(yNew,xNew);
-  double rad_gem_new = std::sqrt(xNew*xNew+ yNew*yNew);
-  std::cout<<"PHG4TpcPadPlaneReadout::SERF_zigzag_phibins: x = "<<x<<", y = "<<y<<", xNew = "<<xNew<<", yNew = "<<yNew<<" phiNew = "<<phiNew<<" rad_gem_new = "<<rad_gem_new<<std::endl;
+  //  double phiNew = std::atan2(yNew,xNew);
+  //double rad_gem_new = std::sqrt(xNew*xNew+ yNew*yNew);
+ // std::cout<<"PHG4TpcPadPlaneReadout::SERF_zigzag_phibins: x = "<<x<<", y = "<<y<<", xNew = "<<xNew<<", yNew = "<<yNew<<" phiNew = "<<phiNew<<" rad_gem_new = "<<rad_gem_new<<std::endl;
  int tpc_module = (int)(layernum - 7)/16;
- int phi_bin = LayerGeom->get_phibin(phi, side);
+/* int phi_bin = LayerGeom->get_phibin(phi, side);
  int sector = 0;
  for (int i=0;i<12;i++)
   {
@@ -1093,8 +1093,8 @@ void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(const unsigned int side, const 
         break;
       }
   }
-
-std::cout<<"!!!!!! phi = "<<phi<<" radius = "<<rad_gem<<" layer radius = "<<radius<<" sector = "<<sector<<" layer = "<<layernum<<" tpc_module = "<< tpc_module <<" phibins = "<<phibins<<" layer in module "<<((int)(layernum - 7)%16)<<" phi_bin = "<<phi_bin<<" cx = "<<Pads[layernum][ntpc_phibins_sector[tpc_module] -1 - phi_bin].cx<<" cy = "<<Pads[layernum][ntpc_phibins_sector[tpc_module] -1 - phi_bin].cy<<" Sector phi min "<<sector_min_Phi[side][sector]<<" sector phi max = "<<sector_max_Phi[side][sector]<<std::endl;
+*/
+//std::cout<<"!!!!!! phi = "<<phi<<" radius = "<<rad_gem<<" layer radius = "<<radius<<" sector = "<<sector<<" layer = "<<layernum<<" tpc_module = "<< tpc_module <<" phibins = "<<phibins<<" layer in module "<<((int)(layernum - 7)%16)<<" phi_bin = "<<phi_bin<<" cx = "<<Pads[layernum][ntpc_phibins_sector[tpc_module] -1 - phi_bin].cx<<" cy = "<<Pads[layernum][ntpc_phibins_sector[tpc_module] -1 - phi_bin].cy<<" Sector phi min "<<sector_min_Phi[side][sector]<<" sector phi max = "<<sector_max_Phi[side][sector]<<std::endl;
 
   // make the charge distribution gaussian
   double rphi = phi * radius;
@@ -1136,8 +1136,7 @@ std::cout<<"!!!!!! phi = "<<phi<<" radius = "<<rad_gem<<" layer radius = "<<radi
     std::cout << " radlim_high " << radlim_high << " is in the next layer " <<layernum<<" with lower radius "<< LayerGeom->get_radius() + LayerGeom->get_thickness() / 2.0 << std::endl;
   }
 */
-      std::cout << "   SERF    zigzags: phi " << phi << " philim_low " << philim_low << " phibin_low " << phibin_low
-                << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads << std::endl;
+    //  std::cout << "   SERF    zigzags: phi " << phi << " philim_low " << philim_low << " phibin_low " << phibin_low << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads << std::endl;
 
   for (int ipad = 0; ipad <= npads; ipad++)
   {
@@ -1150,10 +1149,17 @@ std::cout<<"!!!!!! phi = "<<phi<<" radius = "<<rad_gem<<" layer radius = "<<radi
     }
    
     int look_pad =  pad_now ;
-    //std::cout<<"pad now = "<<pad_now<<" look_pad = "<<look_pad<<" sector = "<<sector<<" ntpc_phibins_sector[tpc_module] = "<<ntpc_phibins_sector[tpc_module];
-    int n = ntpc_phibins_sector[tpc_module]-1;
-    look_pad = ( n - ( (look_pad % n) + n ) % n ) % n;
-   std::cout<<"  look up pad = "<<look_pad<<" Pads[layernum] "<<Pads[layernum].size()<<std::endl;
+  //  int n = ntpc_phibins_sector[tpc_module];
+    //look_pad = ( n - ( (look_pad % n) + n ) % n ) % n ;
+   while(look_pad>= ntpc_phibins_sector[tpc_module]){
+    look_pad-=ntpc_phibins_sector[tpc_module];
+   }
+
+    look_pad = ntpc_phibins_sector[tpc_module] - look_pad -1;
+    
+   // std::cout<<"pad now = "<<pad_now<<" look_pad = "<<look_pad<<" ntpc_phibins_sector[tpc_module] = "<<ntpc_phibins_sector[tpc_module];
+
+   //std::cout<<"layernum = "<<layernum<<" n = ntpc_phibins_sector[tpc_module] = "<<ntpc_phibins_sector[tpc_module]<<" pad now "<<pad_now<<"  look up pad = "<<look_pad<<" Pads[layernum] "<<Pads[layernum].size()<<std::endl;
 
 
     //std::cout<<"   SERF    zigzags: ipad " << ipad << " pad_now " << pad_now << " phibin_low " << phibin_low
@@ -1161,12 +1167,15 @@ std::cout<<"!!!!!! phi = "<<phi<<" radius = "<<rad_gem<<" layer radius = "<<radi
     auto  padinfo = Pads[layernum][look_pad];
   // std::cout<<"Calculate charge for pad with cx = "<<padinfo.cx<<", cy = "<<padinfo.cy<<" phi from Pads = "<<padinfo.phi<<", phi center(get pad now) = "
  //  <<LayerGeom->get_phicenter(pad_now, side)<<", phi center(get look_pad) = "<<LayerGeom->get_phicenter(look_pad, side)<< "sigma = "<<cloud_sig_rp<< "sigma/r = "<<cloud_sig_rp/rad_gem <<" pad look "<<look_pad<<" number of vert = "<<padinfo.vertices.size()<<std::endl;
+  //std::cout<<"n = ntpc_phibins_sector[tpc_module]-1 = "<<n<<"  look up pad = "<<look_pad<<" Pads[layernum] "<<Pads[layernum].size()<<" xNew = "<<xNew<<" yNew = "<<yNew<<std::endl;
+
     double charge = integratedDensityOfCircleAndPad( xNew, yNew, cloud_sig_rp , padinfo.vertices);
     phibin_pad.push_back(pad_now);
     phibin_pad_share.push_back(charge);
-    std::cout<<"   SERF    zigzags: ipad " << ipad << " pad_now " << pad_now << " charge " << charge<<" look_pad "<<look_pad<<" ntpc_phibins_sector[tpc_module] "<<ntpc_phibins_sector[tpc_module]
+ /*   std::cout<<"   SERF    zigzags: ipad " << ipad << " pad_now " << pad_now << " charge " << charge<<" look_pad "<<look_pad<<" ntpc_phibins_sector[tpc_module] "<<ntpc_phibins_sector[tpc_module]
               << " pad cx " << padinfo.cx << " cy " << padinfo.cy
               << " phi center " << LayerGeom->get_phicenter(pad_now, side) <<" pad phi center  "<<padinfo.phi<< std::endl;
+*/
   }
 
   return;
@@ -1201,15 +1210,24 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
   int phibin_low = LayerGeom->get_phibin(philim_high, side);
   int phibin_high = LayerGeom->get_phibin(philim_low, side);
   int npads = phibin_high - phibin_low;
+ int sector = 0;
+ for (int i=0;i<12;i++)
+  {
+    if (phi >= sector_min_Phi[side][i] && phi < sector_max_Phi[side][i])
+      {
+        sector = i;
+        break;
+      }
+  }
 
-  //if (Verbosity() > 1000)
- // {
-  //  if (layernum == print_layer)
-    //{
+  if (Verbosity() > 1000)
+  {
+    if (layernum == print_layer)
+    {
       std::cout << "    REF       zigzags: phi " << phi << " philim_low " << philim_low << " phibin_low " << phibin_low
-                << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads << std::endl;
-   // }
- // }
+                << " philim_high " << philim_high << " phibin_high " << phibin_high << " npads " << npads <<" sector "<<sector<< std::endl;
+    }
+  }
 
   if (npads < 0 || npads > 9)
   {
