@@ -30,6 +30,8 @@ class TrkrHitSetContainer;
 class PHG4TpcCylinderGeomContainer;
 class PHG4CylinderGeomContainer;
 class TpcDistortionCorrectionContainer;
+class TrkrClusterHitAssoc;
+class TrkrClusterCrossingAssoc; 
 class TrackResiduals : public SubsysReco
 {
  public:
@@ -72,7 +74,7 @@ class TrackResiduals : public SubsysReco
   void createBranches();
   static float convertTimeToZ(ActsGeometry *geometry, TrkrDefs::cluskey cluster_key, TrkrCluster *cluster);
   void fillEventTree(PHCompositeNode *topNode);
-  void fillClusterTree(TrkrClusterContainer *clusters, ActsGeometry *geometry);
+  void fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrClusterContainer *clusters, TrkrClusterCrossingAssoc *clustercrossingassoc, ActsGeometry *geometry);
   void fillHitTree(TrkrHitSetContainer *hitmap, ActsGeometry *geometry,
                    PHG4TpcCylinderGeomContainer *tpcGeom, PHG4CylinderGeomContainer *mvtxGeom,
                    PHG4CylinderGeomContainer *inttGeom, PHG4CylinderGeomContainer *mmGeom);
@@ -221,9 +223,11 @@ class TrackResiduals : public SubsysReco
 
   //! hit tree info
   uint32_t m_hitsetkey = std::numeric_limits<uint32_t>::quiet_NaN();
+  TrkrDefs::hitkey m_hitkey = std::numeric_limits<uint32_t>::max(); 
   float m_hitgx = std::numeric_limits<float>::quiet_NaN();
   float m_hitgy = std::numeric_limits<float>::quiet_NaN();
   float m_hitgz = std::numeric_limits<float>::quiet_NaN();
+  float m_hit_phi = std::numeric_limits<float>::quiet_NaN(); 
   int m_hitlayer = std::numeric_limits<int>::quiet_NaN();
   int m_sector = std::numeric_limits<int>::quiet_NaN();
   int m_hitpad = std::numeric_limits<int>::quiet_NaN();
@@ -239,6 +243,9 @@ class TrackResiduals : public SubsysReco
   int m_nvertices = std::numeric_limits<int>::quiet_NaN();
 
   //! cluster tree info
+  TrkrDefs::cluskey m_scluskey;
+  std::vector<TrkrDefs::hitkey> m_clust_hitkeys;
+  uint32_t m_clustHitsetkey = std::numeric_limits<uint32_t>::max(); 
   float m_sclusgr = std::numeric_limits<float>::quiet_NaN();
   float m_sclusphi = std::numeric_limits<float>::quiet_NaN();
   float m_scluseta = std::numeric_limits<float>::quiet_NaN();
@@ -246,6 +253,7 @@ class TrackResiduals : public SubsysReco
   float m_clusmaxadc = std::numeric_limits<float>::quiet_NaN();
   int m_phisize = std::numeric_limits<int>::quiet_NaN();
   int m_zsize = std::numeric_limits<int>::quiet_NaN();
+  int m_aclussize = std::numeric_limits<int>::quiet_NaN(); 
   float m_scluslx = std::numeric_limits<float>::quiet_NaN();
   float m_scluslz = std::numeric_limits<float>::quiet_NaN();
   float m_sclusgx = std::numeric_limits<float>::quiet_NaN();
@@ -282,11 +290,13 @@ class TrackResiduals : public SubsysReco
   std::vector<int> m_clsector;
   std::vector<int> m_clside;
   std::vector<int> m_cluslayer;
+  std::vector<int> m_clussize; 
   std::vector<int> m_clusphisize;
   std::vector<int> m_cluszsize;
   std::vector<int> m_clusedge;
   std::vector<int> m_clusoverlap;
   std::vector<uint64_t> m_cluskeys;
+  std::vector<uint32_t> m_clushitsetkey; 
   std::vector<float> m_idealsurfcenterx;
   std::vector<float> m_idealsurfcentery;
   std::vector<float> m_idealsurfcenterz;
@@ -308,7 +318,8 @@ class TrackResiduals : public SubsysReco
   std::vector<float> m_missurfalpha;
   std::vector<float> m_missurfbeta;
   std::vector<float> m_missurfgamma;
-
+  std::vector<short int> m_clust_crossings;
+  
   //! states on track information
   std::vector<float> m_statelx;
   std::vector<float> m_statelz;
