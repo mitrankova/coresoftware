@@ -737,7 +737,7 @@ void SvtxTruthEval::G4ClusterSize(TrkrDefs::cluskey ckey, unsigned int layer, co
   double avge_z = (outer_z + inner_z) / 2.0;
 
   unsigned int side = 0;
-  if (avge_z < 0)
+  if (avge_z > 0)
   {
     side = 1;
   } 
