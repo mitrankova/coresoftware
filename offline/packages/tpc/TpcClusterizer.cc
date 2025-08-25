@@ -683,6 +683,48 @@ namespace
     // std::cout << "done transform" << std::endl;
     //  we need the cluster key and all associated hit keys (note: the cluster key includes the hitset key)
 
+
+pthread_mutex_lock(&mythreadlock);
+
+std::cout << "Cluster side = " << my_data.side
+          << " layer = " << my_data.layer
+          << " sector = " << my_data.sector
+          << " tpcHitSetKey = " << tpcHitSetKey
+          << " subsurfkey = " << subsurfkey
+          << " clusx = " << clusx
+          << " clusy = " << clusy
+          << " clusz = " << clusz
+          << " local X = " << local(0)
+          << " local Y = " << clust
+          << " center iphibin = " << clusiphi
+          << " center phi = " << clusphi
+          << ", made from hits: " << std::endl;
+
+for (auto const& hit : ihit_list)
+{
+  double hitphi = my_data.layergeom->get_phi(hit.iphi + my_data.phioffset);
+  std::cout << hitphi << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Hit pad bins = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  std::cout << hit.iphi + my_data.phioffset << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Diff: clusphi - hitphi = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  double diff = clusphi - my_data.layergeom->get_phi(hit.iphi + my_data.phioffset);
+  std::cout << diff << " ";
+}
+std::cout << std::endl;
+
+pthread_mutex_unlock(&mythreadlock);
+
+
     TrkrCluster *clus_base = nullptr;
     bool b_made_cluster{false};
 
