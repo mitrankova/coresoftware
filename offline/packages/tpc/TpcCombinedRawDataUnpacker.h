@@ -144,7 +144,7 @@ class TpcCombinedRawDataUnpacker : public SubsysReco
     uint16_t    t_sampch=std::numeric_limits<uint16_t>::quiet_NaN();
 
 
-  bool m_writeTree{true};
+  bool m_writeTree{false};
   bool m_do_baseline_corr{false};
   int m_baseline_nsigma{2};
   bool m_do_zs_emulation{false};
