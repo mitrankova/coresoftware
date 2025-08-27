@@ -683,9 +683,9 @@ namespace
     // std::cout << "done transform" << std::endl;
     //  we need the cluster key and all associated hit keys (note: the cluster key includes the hitset key)
 
-/*
-pthread_mutex_lock(&mythreadlock);
 
+pthread_mutex_lock(&mythreadlock);
+std::cout << "==============================================" << std::endl;
 std::cout << "Cluster side = " << my_data.side
           << " layer = " << my_data.layer
           << " sector = " << my_data.sector
@@ -696,13 +696,44 @@ std::cout << "Cluster side = " << my_data.side
           << " clusz = " << clusz
           << " local X = " << local(0)
           << " local Y = " << clust
+          << " cluster ADC = " << adc_sum
+          << " center iphibin = " << clusiphi
           << " center phi = " << clusphi
-          << ", made from hits: " << std::endl;
+          << " " << std::endl;
+std::cout << "-----------------------------------------------" << std::endl;
+std::cout << " Sector min phi = " << my_data.layergeom->get_sector_min_phi()[my_data.side][my_data.sector]
+          <<"  Sector max phi = " << my_data.layergeom->get_sector_max_phi()[my_data.side][my_data.sector]
+          <<"  Sector bin width = " << my_data.layergeom->get_phistep()
+          <<"  nphibins = "<<my_data.layergeom->get_phibins()
+          << std::endl;
+std::cout << "-----------------------------------------------" << std::endl;
 
+std::cout << "Hit pad bins = " << std::endl;
 for (auto const& hit : ihit_list)
 {
   double hitphi = my_data.layergeom->get_phi(hit.iphi + my_data.phioffset);
   std::cout << hitphi << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Hit pad bins = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  std::cout << hit.iphi + my_data.phioffset << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Hitkeys = " << std::endl;
+for (size_t i=0; i<hitkeyvec.size(); i++)
+{
+  std::cout << hitkeyvec[i] << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Hit ADC = " << std::endl;
+for (auto hit : ihit_list)
+{
+  std::cout << hit.adc << " ";
 }
 std::cout << std::endl;
 
@@ -713,9 +744,9 @@ for (auto const& hit : ihit_list)
   std::cout << diff << " ";
 }
 std::cout << std::endl;
-
+std::cout << "==============================================" << std::endl;
 pthread_mutex_unlock(&mythreadlock);
-*/
+
     TrkrCluster *clus_base = nullptr;
     bool b_made_cluster{false};
 
