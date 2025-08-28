@@ -302,7 +302,10 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
     unsigned int phibin = layergeom->get_phibin(phi, side);
     //std::cout<<"TpcCombinedRawDataUnpacker:: side = "<<side<<" layer = "<<layer<<" sector = "<<sector<<" ( "<<sector % 12<<" ) "<<" phi = "<<phi<<" phibin = "<<phibin<<" phi_center = "<<layergeom->get_phicenter(phibin, side)<<" (phi - phi_center) = "<<phi - layergeom->get_phicenter(phibin, side)<<std::endl;
-
+    /*std::cout<<"TpcCombinedRawDataUnpacker:: side = "<<side<<" layer = "<<layer<<" sector = "<<sector<<" ( "<<sector % 12<<" ) "
+                <<" phi = "<<phi<<" phibin = "<<phibin<<" phi_center = "<<layergeom->get_phicenter(phibin)<<" (phi - phi_center) = "<<phi - layergeom->get_phicenter(phibin)
+                <<" get_phi = "<<layergeom->get_phi((float)phibin)<<"  (phi_center - get_phi) = "<<layergeom->get_phicenter(phibin) - layergeom->get_phi((float)phibin)<<std::endl;
+*/
     hit_set_key = TpcDefs::genHitSetKey(layer, (mc_sectors[sector % 12]), side);
     hit_set_container_itr = trkr_hit_set_container->findOrAddHitSet(hit_set_key);
 
