@@ -701,17 +701,25 @@ std::cout << "Cluster side = " << my_data.side
           << " center phi = " << clusphi
           << " " << std::endl;
 std::cout << "-----------------------------------------------" << std::endl;
-std::cout << " Sector min phi = " << my_data.layergeom->get_sector_min_phi()[my_data.side][my_data.sector]
+/*std::cout << " Sector min phi = " << my_data.layergeom->get_sector_min_phi()[my_data.side][my_data.sector]
           <<"  Sector max phi = " << my_data.layergeom->get_sector_max_phi()[my_data.side][my_data.sector]
           <<"  Sector bin width = " << my_data.layergeom->get_phistep()
           <<"  nphibins = "<<my_data.layergeom->get_phibins()
           << std::endl;
 std::cout << "-----------------------------------------------" << std::endl;
 
-std::cout << "Hit pad bins = " << std::endl;
+std::cout << "Hit pad get_phi = " << std::endl;
 for (auto const& hit : ihit_list)
 {
-  double hitphi = my_data.layergeom->get_phi(hit.iphi + my_data.phioffset);
+  double hitphi = my_data.layergeom->get_phi(hit.iphi + my_data.phioffset, my_data.side);
+  std::cout << hitphi << " ";
+}
+std::cout << std::endl;
+*/
+std::cout << "Hit pad get_phicenter = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  double hitphi = my_data.layergeom->get_phicenter(hit.iphi + my_data.phioffset, my_data.side);
   std::cout << hitphi << " ";
 }
 std::cout << std::endl;
@@ -740,7 +748,7 @@ std::cout << std::endl;
 std::cout << "Diff: clusphi - hitphi = " << std::endl;
 for (auto const& hit : ihit_list)
 {
-  double diff = clusphi - my_data.layergeom->get_phi(hit.iphi + my_data.phioffset);
+  double diff = clusphi - my_data.layergeom->get_phicenter(hit.iphi + my_data.phioffset);
   std::cout << diff << " ";
 }
 std::cout << std::endl;
