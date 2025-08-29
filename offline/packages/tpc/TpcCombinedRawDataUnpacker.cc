@@ -304,10 +304,10 @@ int TpcCombinedRawDataUnpacker::process_event(PHCompositeNode* topNode)
     double phi = -1 * pow(-1, side) * m_cdbttree->GetDoubleValue(key, varname) + (sector % 12) * M_PI / 6;
     PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
     unsigned int phibin = layergeom->get_phibin(phi);
-    std::cout<<"TpcCombinedRawDataUnpacker:: side = "<<side<<" layer = "<<layer<<" sector = "<<sector<<" ( "<<sector % 12<<" ) "
+    /*std::cout<<"TpcCombinedRawDataUnpacker:: side = "<<side<<" layer = "<<layer<<" sector = "<<sector<<" ( "<<sector % 12<<" ) "
              <<" phi = "<<phi<<" phibin = "<<phibin<<" phi_center = "<<layergeom->get_phicenter(phibin)<<" (phi - phi_center) = "<<phi - layergeom->get_phicenter(phibin)
              <<" get_phi = "<<layergeom->get_phi((float)phibin)<<"  (phi_center - get_phi) = "<<layergeom->get_phicenter(phibin) - layergeom->get_phi((float)phibin)<<std::endl;
-
+*/
 
     uint16_t sampadd = tpchit->get_sampaaddress();
     uint16_t sampch = tpchit->get_sampachannel();

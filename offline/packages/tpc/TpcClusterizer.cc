@@ -683,7 +683,7 @@ namespace
     // std::cout << "done transform" << std::endl;
     //  we need the cluster key and all associated hit keys (note: the cluster key includes the hitset key)
 
-/*
+
 pthread_mutex_lock(&mythreadlock);
 
 std::cout << "==============================================" << std::endl;
@@ -710,7 +710,7 @@ std::cout << " Sector min phi = " << my_data.layergeom->get_sector_min_phi()[my_
 std::cout << "-----------------------------------------------" << std::endl;
 
 
-std::cout << "Hit pad bins = " << std::endl;
+std::cout << "Hit pad get_phicenter = " << std::endl;
 for (auto const& hit : ihit_list)
 {
   double hitphi = my_data.layergeom->get_phicenter(hit.iphi + my_data.phioffset);
@@ -749,7 +749,7 @@ std::cout << std::endl;
 std::cout << "==============================================" << std::endl;
 
 pthread_mutex_unlock(&mythreadlock);
-*/
+
 
     TrkrCluster *clus_base = nullptr;
     bool b_made_cluster{false};
