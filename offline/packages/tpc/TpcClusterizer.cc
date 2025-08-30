@@ -683,6 +683,77 @@ namespace
     // std::cout << "done transform" << std::endl;
     //  we need the cluster key and all associated hit keys (note: the cluster key includes the hitset key)
 
+pthread_mutex_lock(&mythreadlock);
+std::cout << "==============================================" << std::endl;
+std::cout << "Cluster side = " << my_data.side
+          << " layer = " << my_data.layer
+          << " sector = " << my_data.sector
+          << " tpcHitSetKey = " << tpcHitSetKey
+          << " subsurfkey = " << subsurfkey
+          << " clusx = " << clusx
+          << " clusy = " << clusy
+          << " clusz = " << clusz
+          << " local X = " << local(0)
+          << " local Y = " << clust
+          << " cluster ADC = " << adc_sum
+          << " center iphibin = " << clusiphi
+          << " center phi = " << clusphi
+          << " " << std::endl;
+std::cout << "-----------------------------------------------" << std::endl;
+/*std::cout << " Sector min phi = " << my_data.layergeom->get_sector_min_phi()[my_data.side][my_data.sector]
+          <<"  Sector max phi = " << my_data.layergeom->get_sector_max_phi()[my_data.side][my_data.sector]
+          <<"  Sector bin width = " << my_data.layergeom->get_phistep()
+          <<"  nphibins = "<<my_data.layergeom->get_phibins()
+          << std::endl;
+std::cout << "-----------------------------------------------" << std::endl;
+
+std::cout << "Hit pad get_phi = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  double hitphi = my_data.layergeom->get_phi(hit.iphi + my_data.phioffset, my_data.side);
+  std::cout << hitphi << " ";
+}
+std::cout << std::endl;
+*/
+std::cout << "Hit pad get_phicenter = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  double hitphi = my_data.layergeom->get_phicenter(hit.iphi + my_data.phioffset, my_data.side);
+  std::cout << hitphi << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Hit pad bins = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  std::cout << hit.iphi + my_data.phioffset << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Hitkeys = " << std::endl;
+for (size_t i=0; i<hitkeyvec.size(); i++)
+{
+  std::cout << hitkeyvec[i] << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Hit ADC = " << std::endl;
+for (auto hit : ihit_list)
+{
+  std::cout << hit.adc << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Diff: clusphi - hitphi = " << std::endl;
+for (auto const& hit : ihit_list)
+{
+  double diff = clusphi - my_data.layergeom->get_phicenter(hit.iphi + my_data.phioffset);
+  std::cout << diff << " ";
+}
+std::cout << std::endl;
+std::cout << "==============================================" << std::endl;
+pthread_mutex_unlock(&mythreadlock);
+
     TrkrCluster *clus_base = nullptr;
     bool b_made_cluster{false};
 
