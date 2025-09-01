@@ -747,7 +747,7 @@ std::cout << std::endl;
 std::cout << "Diff: clusphi - hitphi = " << std::endl;
 for (auto const& hit : ihit_list)
 {
-  double diff = clusphi - my_data.layergeom->get_phicenter(hit.iphi + my_data.phioffset);
+  double diff = clusphi - my_data.layergeom->get_phicenter(hit.iphi + my_data.phioffset, my_data.side);
   std::cout << diff << " ";
 }
 std::cout << std::endl;
