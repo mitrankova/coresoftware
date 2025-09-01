@@ -571,16 +571,16 @@ namespace
       double phiHigh_RLow = -999.0;
       if(ceil(result.Parameter(2)) < layergeomLow->get_phibins())
       {
-        phiHigh_RLow = layergeomLow->get_phi(ceil(result.Parameter(2)));
+        phiHigh_RLow = layergeomLow->get_phi(ceil(result.Parameter(2)),my_data.side);
       }
       double phiHigh_RHigh = -999.0;
       if(ceil(result.Parameter(2)) < layergeomHigh->get_phibins())
       {
-        phiHigh_RHigh = layergeomHigh->get_phi(ceil(result.Parameter(2)));
+        phiHigh_RHigh = layergeomHigh->get_phi(ceil(result.Parameter(2)),my_data.side);
       }
 
-      double phiLow_RLow = layergeomLow->get_phi(floor(result.Parameter(2)));
-      double phiLow_RHigh = layergeomHigh->get_phi(floor(result.Parameter(2)));
+      double phiLow_RLow = layergeomLow->get_phi(floor(result.Parameter(2)),my_data.side);
+      double phiLow_RHigh = layergeomHigh->get_phi(floor(result.Parameter(2)),my_data.side);
 
       double meanR = (result.Parameter(1) - floor(result.Parameter(1))) * (RHigh - RLow) + RLow;
 

@@ -619,7 +619,7 @@ int TrkrNtuplizer::InitRun(PHCompositeNode* topNode)
         unsigned int phibin = layergeom->get_phibin(phi);
         // get global coords
         double radius = layergeom->get_radius();  // returns center of layer
-        double chanphi = layergeom->get_phi(phibin);
+        double chanphi = layergeom->get_phi(phibin, side);
         float chanx = radius * cos(chanphi);
         float chany = radius * sin(chanphi);
 
