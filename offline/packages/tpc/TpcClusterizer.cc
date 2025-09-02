@@ -683,7 +683,7 @@ namespace
     // std::cout << "done transform" << std::endl;
     //  we need the cluster key and all associated hit keys (note: the cluster key includes the hitset key)
 
-
+/*
 pthread_mutex_lock(&mythreadlock);
 
 std::cout << "==============================================" << std::endl;
@@ -750,7 +750,7 @@ std::cout << "==============================================" << std::endl;
 
 pthread_mutex_unlock(&mythreadlock);
 
-
+*/
     TrkrCluster *clus_base = nullptr;
     bool b_made_cluster{false};
 
