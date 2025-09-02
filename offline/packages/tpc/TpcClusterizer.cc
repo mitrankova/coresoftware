@@ -682,7 +682,7 @@ namespace
     local /= Acts::UnitConstants::cm;
     // std::cout << "done transform" << std::endl;
     //  we need the cluster key and all associated hit keys (note: the cluster key includes the hitset key)
-
+/*
 pthread_mutex_lock(&mythreadlock);
 std::cout << "==============================================" << std::endl;
 std::cout << "Cluster side = " << my_data.side
@@ -700,7 +700,7 @@ std::cout << "Cluster side = " << my_data.side
           << " center phi = " << clusphi
           << " " << std::endl;
 std::cout << "-----------------------------------------------" << std::endl;
-/*std::cout << " Sector min phi = " << my_data.layergeom->get_sector_min_phi()[my_data.side][my_data.sector]
+std::cout << " Sector min phi = " << my_data.layergeom->get_sector_min_phi()[my_data.side][my_data.sector]
           <<"  Sector max phi = " << my_data.layergeom->get_sector_max_phi()[my_data.side][my_data.sector]
           <<"  Sector bin width = " << my_data.layergeom->get_phistep()
           <<"  nphibins = "<<my_data.layergeom->get_phibins()
@@ -714,7 +714,7 @@ for (auto const& hit : ihit_list)
   std::cout << hitphi << " ";
 }
 std::cout << std::endl;
-*/
+
 std::cout << "Hit pad get_phicenter = " << std::endl;
 for (auto const& hit : ihit_list)
 {
@@ -753,6 +753,7 @@ for (auto const& hit : ihit_list)
 std::cout << std::endl;
 std::cout << "==============================================" << std::endl;
 pthread_mutex_unlock(&mythreadlock);
+*/
 
     TrkrCluster *clus_base = nullptr;
     bool b_made_cluster{false};
