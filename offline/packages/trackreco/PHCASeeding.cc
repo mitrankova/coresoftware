@@ -31,6 +31,7 @@
 #include <trackbase/TrkrClusterHitAssoc.h>
 #include <trackbase/TrkrClusterIterationMapv1.h>
 #include <trackbase/TrkrDefs.h>  // for getLayer, clu...
+#include <trackbase/TpcDefs.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 
 // ROOT includes for debugging
@@ -276,6 +277,7 @@ std::pair<PHCASeeding::PositionMap, PHCASeeding::keyListPerLayer> PHCASeeding::F
       const Acts::Vector3 globalpos_d = getGlobalPosition(ckey, cluster);
       const Acts::Vector3 globalpos = {globalpos_d.x(), globalpos_d.y(), globalpos_d.z()};
       cachedPositions.insert(std::make_pair(ckey, globalpos));
+            std::cout<<"PHCASeeding:: Cluster ckey "<<ckey<<" side = "<<(unsigned int)TpcDefs::getSide(ckey)<<" layer = "<<layer<<" clusx = "<<globalpos_d.x()<<" clusy = "<<globalpos_d.y()<<" clusz = "<<globalpos_d.z()<<std::endl;
 
       ckeys[layer - _FIRST_LAYER_TPC].push_back(ckey);
       fill_tuple(_tupclus_all, 0, ckey, cachedPositions.at(ckey));
