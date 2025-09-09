@@ -17,6 +17,9 @@
 #include <g4detectors/PHG4TpcCylinderGeomContainer.h>
 #include <trackbase/TrkrClusterHitAssocv3.h>
 #include <trackbase/TrkrClusterCrossingAssocv1.h>
+#include "trackbase/TrkrHitTruthAssoc.h"
+#include <g4main/PHG4Hit.h>
+#include <g4main/PHG4HitContainer.h>
 
 #include <globalvertex/MbdVertex.h>
 #include <globalvertex/MbdVertexMap.h>
@@ -238,6 +241,18 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
 
   std::cout << "TRKR_CLUSTERHITASSOC size: " << clusterhitassocmap->size() << std::endl;
 
+  auto truthClustersmap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_TRUTHCLUSTERCONTAINER");
+  if (!truthClustersmap) {
+    std::cout << Name() << ": WARNING no TRKR_TRUTHCLUSTERCONTAINER; will use fallback if enabled.\n";
+  }
+
+
+  auto hitTruthAssocmap = findNode::getClass<TrkrHitTruthAssoc>(topNode, "TRKR_HITTRUTHASSOC");
+  auto g4hitTPCmap      = findNode::getClass<PHG4HitContainer>(topNode, "G4HIT_TPC");
+std::cout << "TRKR_TRUTHCLUSTERCONTAINER size: " << truthClustersmap->size() << std::endl;
+ // std::cout << "TRKR_HITTRUTHASSOC size: " << hitTruthAssocmap->size() << std::endl;
+    std::cout << "G4HIT_TPC size: " << g4hitTPCmap->size() << std::endl;
+
   m_vx = m_vy = m_vz = std::numeric_limits<float>::quiet_NaN();
 
   if (!mmGeom)
@@ -330,7 +345,7 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
 
   if (m_doClusters)
   {
-    fillClusterTree(clusterhitassocmap, clustermap, clustercrossingassoc, geometry);
+    fillClusterTree(clusterhitassocmap, clustermap, clustercrossingassoc, geometry, truthClustersmap, hitTruthAssocmap, g4hitTPCmap);
   }
 
   if (m_convertSeeds)
@@ -650,8 +665,10 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
 }
 
 void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrClusterContainer *clusters,
-                                     TrkrClusterCrossingAssoc *clustercrossingassoc, ActsGeometry *geometry)
+                                     TrkrClusterCrossingAssoc *clustercrossingassoc, ActsGeometry *geometry, TrkrClusterContainer* truthClustersmap,
+                                     TrkrHitTruthAssoc* hitTruthAssocmap, PHG4HitContainer* g4hitTPCmap)
 {
+  std::cout << "!!!!!!!!!!!!!!!!!!!!Filling cluster tree" << std::endl;
   if (clusters->size() < m_min_cluster_size)
   {
     return;
@@ -702,6 +719,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
         m_aclussize = cluster->getSize();
         m_scluselx = std::sqrt(para_errors.first);
         m_scluselz = std::sqrt(para_errors.second);
+        //std::cout<<" m_sclusgx = "<<m_sclusgx<<" m_sclusgy = "<<m_sclusgy<<" m_sclusgz = "<<m_sclusgz<<std::endl;
 
         m_clust_crossings.clear();
         auto crossingRange = clustercrossingassoc->getCrossings(key);
@@ -711,6 +729,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
           m_clust_crossings.push_back(crossing_number);
         }
         //! Fill relevant geom info that is specific to subsystem
+        std::cout<<"TrkrDefs::TrkrId = "<<TrkrDefs::getTrkrId(key)<<std::endl;
         switch (det)
         {
         case TrkrDefs::TrkrId::mvtxId:
@@ -740,18 +759,129 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
           m_tileid = std::numeric_limits<int>::quiet_NaN();
           break;
         case TrkrDefs::TrkrId::tpcId:
+        {
+            float m_tpcZ = 105.0f;
           m_clussector = TpcDefs::getSectorId(key);
-          m_side = TpcDefs::getSide(key);
+          m_side       = TpcDefs::getSide(key);
 
-          m_staveid = std::numeric_limits<int>::quiet_NaN();
-          m_chipid = std::numeric_limits<int>::quiet_NaN();
-          m_strobeid = std::numeric_limits<int>::quiet_NaN();
-          m_ladderzid = std::numeric_limits<int>::quiet_NaN();
+          const TrkrDefs::hitsetkey hskey = TrkrDefs::getHitSetKeyFromClusKey(key);
+
+          // --------------------
+          std::cout<<" Before truth cluster "<<std::endl;
+          if (truthClustersmap)
+          {
+            auto tr_range = truthClustersmap->getClusters(hskey); // same hitset indexing
+            float best_metric = std::numeric_limits<float>::max();
+            const TrkrCluster* best = nullptr;
+
+            const float r_reco   = m_sclusgr;
+            const float phi_reco = m_sclusphi;
+            const float z_reco   = m_sclusgz;
+            std::cout<<" loop over truth clusters"<<std::endl;
+            for (auto it = tr_range.first; it != tr_range.second; ++it)
+            {
+              const TrkrCluster* tclus = it->second;
+              if (!tclus) continue;
+
+              const float tx = tclus->getX();
+              const float ty = tclus->getY();
+              const float tz = tclus->getZ();
+
+              const float phi_truth = std::atan2(ty, tx);
+              float dphi = std::remainder(phi_reco - phi_truth, 2.f * static_cast<float>(M_PI));
+              const float metric = std::hypot(z_reco - tz, r_reco * dphi);
+              std::cout<<"tx = "<<tx<<" ty = "<<ty<<" tz = "<<tz<<" m_sclusgx = "<<m_sclusgx<<" m_sclusgy = "<<m_sclusgy<<" m_sclusgz = "<<m_sclusgz<<" metric = "<<metric<<" best_metric = "<<best_metric<<std::endl;
+              if (metric < best_metric) { best_metric = metric; best = tclus; }
+            }
+
+            if (best)
+            {
+              m_tclusx = best->getX();
+              m_tclusy = best->getY();
+              m_tclusz = best->getZ();
+            }
+          }
+
+          if (g4hitTPCmap) {
+            m_g4id2hit.clear();
+            PHG4HitContainer::ConstRange r = g4hitTPCmap->getHits();
+            for (auto it = r.first; it != r.second; ++it) if (auto* h = it->second) m_g4id2hit[h->get_hit_id()] = h;
+          }
+
+          // --------------------
+          if (clusterhitassoc && hitTruthAssocmap && !m_g4id2hit.empty())
+          {
+            auto hit_range = clusterhitassoc->getHits(key); // hits belonging to THIS cluster
+
+            std::vector<unsigned int> g4ids;
+            g4ids.reserve(16);
+            std::cout<<"loop over cluster hits"<<std::endl;
+            for (auto it = hit_range.first; it != hit_range.second; ++it)
+            {
+              const TrkrDefs::hitkey hkey = it->second;
+
+              // getG4Hits expects an "MMap" output parameter
+              TrkrHitTruthAssoc::MMap temp_map;
+              hitTruthAssocmap->getG4Hits(hskey, static_cast<unsigned int>(hkey), temp_map);
+
+              for (const auto& kv : temp_map)
+              {
+                const unsigned int g4id = kv.first;      // key = G4HitID
+                // const float weight = kv.second;       // (not needed here)
+                g4ids.push_back(g4id);
+              }
+            }
+
+            if (!g4ids.empty())
+            {
+              std::sort(g4ids.begin(), g4ids.end());
+              g4ids.erase(std::unique(g4ids.begin(), g4ids.end()), g4ids.end());
+
+              double sx = 0.0, sy = 0.0, sumw = 0.0;
+              for (auto gid : g4ids)
+              {
+                auto f = m_g4id2hit.find(gid);
+                if (f == m_g4id2hit.end()) continue;
+                PHG4Hit* h = f->second;
+                if (!h) continue;
+
+                const double w  = h->get_edep();
+                const double mx = 0.5 * (h->get_x(0) + h->get_x(1));
+                const double my = 0.5 * (h->get_y(0) + h->get_y(1));
+
+                sx += w * mx;
+                sy += w * my;
+                sumw += w;
+              }
+ std::cout<<"sumw = "<<sumw<<std::endl;
+              if (sumw > 0.0)
+              {
+                const double ecx = sx / sumw;
+                const double ecy = sy / sumw;
+                const double ecz = (m_sclusgz >= 0.f) ? +m_tpcZ : -m_tpcZ;  // use member m_tpcZ
+
+                m_eclusx = static_cast<float>(ecx);
+                m_eclusy = static_cast<float>(ecy);
+                m_eclusz = static_cast<float>(ecz);
+                 std::cout<<"ecx = "<<ecx<<" ecy = "<<ecy<<" ecz = "<<ecz<<" m_sclusgx = "<<m_sclusgx<<" m_sclusgy = "<<m_sclusgy<<" m_sclusgz = "<<m_sclusgz<<std::endl;
+
+              }
+            }
+          }
+
+          // clear non-TPC subsystem IDs
+          m_staveid     = std::numeric_limits<int>::quiet_NaN();
+          m_chipid      = std::numeric_limits<int>::quiet_NaN();
+          m_strobeid    = std::numeric_limits<int>::quiet_NaN();
+          m_ladderzid   = std::numeric_limits<int>::quiet_NaN();
           m_ladderphiid = std::numeric_limits<int>::quiet_NaN();
-          m_timebucket = std::numeric_limits<int>::quiet_NaN();
-          m_segtype = std::numeric_limits<int>::quiet_NaN();
-          m_tileid = std::numeric_limits<int>::quiet_NaN();
+          m_timebucket  = std::numeric_limits<int>::quiet_NaN();
+          m_segtype     = std::numeric_limits<int>::quiet_NaN();
+          m_tileid      = std::numeric_limits<int>::quiet_NaN();
           break;
+        }
+
+    
         case TrkrDefs::TrkrId::micromegasId:
           m_segtype = (int) MicromegasDefs::getSegmentationType(key);
           m_tileid = MicromegasDefs::getTileId(key);
@@ -1758,6 +1888,13 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("segtype", &m_segtype, "m_segtype/I");
   m_clustree->Branch("tile", &m_tileid, "m_tileid/I");
   m_clustree->Branch("clust_crossings", &m_clust_crossings);
+  m_clustree->Branch("tclusx", &m_tclusx, "tclusx/F");
+  m_clustree->Branch("tclusy", &m_tclusy, "tclusy/F");
+  m_clustree->Branch("tclusz", &m_tclusz, "tclusz/F");
+  m_clustree->Branch("eclusx", &m_eclusx, "eclusx/F");
+  m_clustree->Branch("eclusy", &m_eclusy, "eclusy/F");
+  m_clustree->Branch("eclusz", &m_eclusz, "eclusz/F");
+
 
   m_tree = new TTree("residualtree", "A tree with track, cluster, and state info");
   m_tree->Branch("run", &m_runnumber, "m_runnumber/I");

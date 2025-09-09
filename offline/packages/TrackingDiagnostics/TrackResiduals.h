@@ -9,6 +9,7 @@
 #include <trackbase/ClusterErrorPara.h>
 #include <trackbase/TrkrDefs.h>
 
+
 #include <fun4all/SubsysReco.h>
 
 #include <TFile.h>
@@ -32,6 +33,10 @@ class PHG4CylinderGeomContainer;
 class TpcDistortionCorrectionContainer;
 class TrkrClusterHitAssoc;
 class TrkrClusterCrossingAssoc; 
+class TrkrHitTruthAssoc;
+class PHG4Hit;
+class PHG4HitContainer;
+
 class TrackResiduals : public SubsysReco
 {
  public:
@@ -74,7 +79,8 @@ class TrackResiduals : public SubsysReco
   void createBranches();
   static float convertTimeToZ(ActsGeometry *geometry, TrkrDefs::cluskey cluster_key, TrkrCluster *cluster);
   void fillEventTree(PHCompositeNode *topNode);
-  void fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrClusterContainer *clusters, TrkrClusterCrossingAssoc *clustercrossingassoc, ActsGeometry *geometry);
+  void fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrClusterContainer *clusters, TrkrClusterCrossingAssoc *clustercrossingassoc, ActsGeometry *geometry, TrkrClusterContainer* truthClustersmap,
+                                     TrkrHitTruthAssoc* hitTruthAssocmap, PHG4HitContainer* g4hitTPCmap);
   void fillHitTree(TrkrHitSetContainer *hitmap, ActsGeometry *geometry,
                    PHG4TpcCylinderGeomContainer *tpcGeom, PHG4CylinderGeomContainer *mvtxGeom,
                    PHG4CylinderGeomContainer *inttGeom, PHG4CylinderGeomContainer *mmGeom);
@@ -272,6 +278,14 @@ class TrackResiduals : public SubsysReco
   int m_timebucket = std::numeric_limits<int>::quiet_NaN();
   int m_segtype = std::numeric_limits<int>::quiet_NaN();
   int m_tileid = std::numeric_limits<int>::quiet_NaN();
+
+  std::unordered_map<unsigned int, PHG4Hit*> m_g4id2hit;
+  float m_tclusx = std::numeric_limits<float>::quiet_NaN();
+  float m_tclusy = std::numeric_limits<float>::quiet_NaN();
+  float m_tclusz = std::numeric_limits<float>::quiet_NaN();
+  float m_eclusx = std::numeric_limits<float>::quiet_NaN();
+  float m_eclusy = std::numeric_limits<float>::quiet_NaN();
+  float m_eclusz = std::numeric_limits<float>::quiet_NaN();
 
   //! clusters on track information
   std::vector<float> m_clusAdc;
