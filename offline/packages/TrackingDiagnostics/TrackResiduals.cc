@@ -764,7 +764,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
           m_clussector = TpcDefs::getSectorId(key);
           m_side       = TpcDefs::getSide(key);
 
-          const TrkrDefs::hitsetkey hskey = TrkrDefs::getHitSetKeyFromClusKey(key);
+           TrkrDefs::hitsetkey hskey = TrkrDefs::getHitSetKeyFromClusKey(key);
 
           // --------------------
           std::cout<<" Before truth cluster "<<std::endl;
@@ -772,33 +772,37 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
           {
             auto tr_range = truthClustersmap->getClusters(hskey); // same hitset indexing
             float best_metric = std::numeric_limits<float>::max();
-            const TrkrCluster* best = nullptr;
+             TrkrCluster* best = nullptr;
+            Acts::Vector3 best_glob = Acts::Vector3::Zero();
 
-            const float r_reco   = m_sclusgr;
-            const float phi_reco = m_sclusphi;
-            const float z_reco   = m_sclusgz;
-            std::cout<<" loop over truth clusters"<<std::endl;
+             float r_reco   = m_sclusgr;
+             float phi_reco = m_sclusphi;
+             float z_reco   = m_sclusgz;
+
             for (auto it = tr_range.first; it != tr_range.second; ++it)
             {
-              const TrkrCluster* tclus = it->second;
+               TrkrDefs::cluskey tckey = it->first;     // <-- need the key for geometry
+               TrkrCluster* tclus = it->second;
               if (!tclus) continue;
 
-              const float tx = tclus->getX();
-              const float ty = tclus->getY();
-              const float tz = tclus->getZ();
-
-              const float phi_truth = std::atan2(ty, tx);
+              // DO NOT use tclus->getX/Y/Z (deprecated/NaN) — transform to global with geometry:
+               Acts::Vector3 tglob = geometry->getGlobalPosition(tckey, tclus);
+               float tx = tglob.x();
+               float ty = tglob.y();
+               float tz = tglob.z();
+              std::cout<<" tclusx = "<<tx<<" tclusy = "<<ty<<" tclusz = "<<tz<<std::endl;
+               float phi_truth = std::atan2(ty, tx);
               float dphi = std::remainder(phi_reco - phi_truth, 2.f * static_cast<float>(M_PI));
-              const float metric = std::hypot(z_reco - tz, r_reco * dphi);
-              std::cout<<"tx = "<<tx<<" ty = "<<ty<<" tz = "<<tz<<" m_sclusgx = "<<m_sclusgx<<" m_sclusgy = "<<m_sclusgy<<" m_sclusgz = "<<m_sclusgz<<" metric = "<<metric<<" best_metric = "<<best_metric<<std::endl;
-              if (metric < best_metric) { best_metric = metric; best = tclus; }
+               float metric = std::hypot(z_reco - tz, r_reco * dphi);
+              
+              if (metric < best_metric) { best_metric = metric; best = tclus; best_glob = tglob; }
             }
 
             if (best)
             {
-              m_tclusx = best->getX();
-              m_tclusy = best->getY();
-              m_tclusz = best->getZ();
+              m_tclusx = static_cast<float>(best_glob.x());
+              m_tclusy = static_cast<float>(best_glob.y());
+              m_tclusz = static_cast<float>(best_glob.z());
             }
           }
 
@@ -822,7 +826,8 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
 
               // getG4Hits expects an "MMap" output parameter
               TrkrHitTruthAssoc::MMap temp_map;
-              hitTruthAssocmap->getG4Hits(hskey, static_cast<unsigned int>(hkey), temp_map);
+              const unsigned int hidx = static_cast<unsigned int>(hkey);
+              hitTruthAssocmap->getG4Hits(hskey, hidx, temp_map); 
 
               for (const auto& kv : temp_map)
               {
