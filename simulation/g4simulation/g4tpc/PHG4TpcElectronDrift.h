@@ -151,10 +151,6 @@ class PHG4TpcElectronDrift : public SubsysReco, public PHParameterInterface
   std::unique_ptr<TFile> m_outf;
   std::unique_ptr<TFile> EDrift_outf;
 
-  //std::unique_ptr<TFile> m_outf_adc;
-  //TH2 *h_adc_ref= nullptr;
-  //TH2 *h_adc_serf= nullptr;
-
   std::string detector;
   std::string hitnodename;
   std::string seggeonodename;

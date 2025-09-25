@@ -17,12 +17,11 @@ class TFile;
 class TH1;
 class TH2;
 class TNtuple;
-class TTree;
 
 class TpcCombinedRawDataUnpacker : public SubsysReco
 {
  public:
-  TpcCombinedRawDataUnpacker(std::string const &name = "TpcCombinedRawDataUnpacker", std::string const &outF = ".root");//TpcCombinedRawDataUnpackerOutput.root
+  TpcCombinedRawDataUnpacker(std::string const &name = "TpcCombinedRawDataUnpacker", std::string const &outF = "TpcCombinedRawDataUnpackerOutput.root");
   ~TpcCombinedRawDataUnpacker() override;
   int Init(PHCompositeNode *topNode) override;
   int InitRun(PHCompositeNode *) override;
@@ -96,8 +95,7 @@ class TpcCombinedRawDataUnpacker : public SubsysReco
   TNtuple *m_ntup{nullptr};
   TNtuple *m_ntup_hits{nullptr};
   TNtuple *m_ntup_hits_corr{nullptr};
-  TTree *m_ntup_hits_tree = nullptr;
-  TFile *m_file = nullptr;
+  TFile *m_file{nullptr};
   CDBTTree *m_cdbttree{nullptr};
   CDBInterface *m_cdb{nullptr};
 
@@ -112,32 +110,10 @@ class TpcCombinedRawDataUnpacker : public SubsysReco
 
   TH2 *m_HitChanDis{nullptr};
   TH1 *m_HitsinChan{nullptr};
-  
   bool m_doChanHitsCut{false};
   int m_ChanHitsCut{9999};
 
   float m_ped_sig_cut{4.0};
-
-    int  t_event= std::numeric_limits<int>::quiet_NaN();
-    int  t_sector= std::numeric_limits<int>::quiet_NaN();
-    int  t_side= std::numeric_limits<int>::quiet_NaN();
-    int  t_layer= std::numeric_limits<int>::quiet_NaN();
-    int t_fee= std::numeric_limits<int>::quiet_NaN();
-    int t_chan= std::numeric_limits<int>::quiet_NaN();
-    int t_phibin= std::numeric_limits<int>::quiet_NaN();
-    int t_tbin= std::numeric_limits<int>::quiet_NaN();
-    float t_phi=std::numeric_limits<float>::quiet_NaN();
-    float t_phi_center=std::numeric_limits<float>::quiet_NaN();
-    float t_adc=std::numeric_limits<float>::quiet_NaN();
-    float t_ped=std::numeric_limits<float>::quiet_NaN();
-    float t_width=std::numeric_limits<float>::quiet_NaN();
-
-    uint32_t    t_hitkey=std::numeric_limits<uint32_t>::quiet_NaN(); 
-    uint64_t    t_gtmbco=std::numeric_limits<uint64_t>::quiet_NaN();
-    int32_t     t_packid=std::numeric_limits<uint32_t>::quiet_NaN(); 
-    uint16_t    t_sampadd=std::numeric_limits<uint16_t>::quiet_NaN();
-    uint16_t    t_sampch=std::numeric_limits<uint16_t>::quiet_NaN();
-
 
   bool m_writeTree{false};
   bool m_do_baseline_corr{false};
