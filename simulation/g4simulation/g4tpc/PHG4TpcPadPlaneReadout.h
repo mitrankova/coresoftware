@@ -42,6 +42,12 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   void SetUsePolyaGEMGain(const int flagPolya) { m_usePolya = flagPolya; }
   void SetUseLangauGEMGain(const int flagLangau) { m_useLangau = flagLangau; }
   void SetLangauParsFileName(const std::string &name) { m_tpc_langau_pars_file = name; }
+   // Pad-sharing method selection: true → SERF polygon overlap; false → analytic triangle
+  void UseSerfPadSharing(bool use_serf) { m_use_serf_padsharing = use_serf; }
+  // If true and SERF polygons are unavailable, abort InitRun with an error
+  void RequireSerfPadSharing(bool require) { m_require_serf = require; }
+  // If true, also require polygons for all readout layers (partial coverage aborts)
+  void RequireSerfFullCoverage(bool require) { m_require_serf_full = require; }
 
   void SetDriftVelocity(double vd) override { drift_velocity = vd; }
   void SetReadoutTime(float t) override { extended_readout_time = t; }
@@ -84,6 +90,16 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   double check_phi(const unsigned int side, const double phi, const double radius);
 
   void makeChannelMask(hitMaskTpc& aMask, const std::string& dbName, const std::string& totalChannelsToMask);
+
+
+  // utility: pick layers whose annulus intersects a radial window around rad
+  std::vector<unsigned int> layersInRadialWindow(double rad, double sigma, double nsig) const;
+
+  // utility: find geometry for a given layer
+  PHG4TpcCylinderGeom* getGeomForLayer(unsigned int layer) const;
+
+  // utility: determine sector for (x,y) and rotate to a canonical frame
+  void rotatePointToSector(double x, double y, unsigned int side, int& sectorFound, double& xNew, double& yNew);
 
   PHG4TpcCylinderGeomContainer *GeomContainer = nullptr;
   PHG4TpcCylinderGeom *LayerGeom = nullptr;
@@ -180,7 +196,7 @@ bool pointInPolygon( double x, double y,const std::vector<Point>& poly);
   static const std::vector<std::string> brdMaps_;
 void loadPadPlanes();
 int ntpc_phibins_sector[3] = { 94, 128, 192 };
-bool pointInPolygon(double x, double y, std::vector<Point> poly);
+
 int findPadForPoint( double x, double y, int tpc_module);
   const std::array<double, 5> Thickness =
       {{
@@ -193,6 +209,12 @@ int findPadForPoint( double x, double y, int tpc_module);
 double min_radii_module[3]={314.9836110818037, 416.59202613529567, 589.1096495597712};
 double max_radii_module[3]={399.85222874031024, 569.695373910603, 753.6667758418596};
 
+  // choose between SERF polygon overlap (default) and triangle response
+  bool m_use_serf_padsharing = true;
+  bool m_require_serf = false;
+  bool m_require_serf_full = false;
+  bool m_serf_polygons_present = false; // summarized availability after InitRun
+  bool m_warned_serf_fallback = false;  // printed once if per-hit fallback occurs
 
 };
 
