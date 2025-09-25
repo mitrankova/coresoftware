@@ -53,7 +53,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   void SetDefaultParameters() override;
   void UpdateInternalParameters() override;
-<<<<<<< HEAD
+
 
   void SetDeadChannelMapName(const std::string& dcmap) 
   {
@@ -66,14 +66,14 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
     m_hotChannelMapName = hmap;
   }
 
-=======
+
    void LoadAllPadPlanes();
      private:
     struct PadCentroid;
       public:
   const std::vector<std::vector<PadCentroid>>& GetCentroids() const
   { return centroids_; }
->>>>>>> 7e0fa1764 (SERF first attempts. Brd is read)
+
  private:
 
   //  void populate_rectangular_phibins(const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
