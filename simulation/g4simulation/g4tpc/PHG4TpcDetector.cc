@@ -534,8 +534,9 @@ void PHG4TpcDetector::add_geometry_node()
 
   m_cdb = CDBInterface::instance();
   std::string calibdir = m_cdb->getUrl("TPC_FEE_CHANNEL_MAP");
-
-  if (!calibdir.empty())
+ // std::string calibdir = "/sphenix/user/mitrankova/PadPlane_Readout/map/TPCPadPlaneCDBTTree.root"; 
+  
+  if (! calibdir.empty())
   {
     m_cdbttree = new CDBTTree(calibdir);
     m_cdbttree->LoadCalibrations();
