@@ -879,6 +879,12 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
   // std::cout<<"PHG4TpcPadPlaneReadout::MapToPadPlane gain_weight = "<<gain_weight<<std::endl;
   /* pass_data.neff_electrons = nelec; */
 
+  // NOTE: we no longer compute single-layer pad sharing here. Instead, we
+  // compute per-layer pad shares inside the candidate-layers loop below
+  // (using SERF_zigzag_phibins) to avoid double counting and to include
+  // all pads within 5σ radially across layers. 
+
+
   // Distribute the charge between the pads in phi
   //====================================
 
@@ -1001,8 +1007,29 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
           const double tshare = adc_tbin_share[itb];
           const float neffelectrons_bin = nelec * pad_fraction * tshare;
           if (neffelectrons_bin < neffelectrons_threshold) continue;
+          TrkrDefs::hitkey hitkey;
+     
+          if (m_maskDeadChannels)
+          {
+            hitkey = TpcDefs::genHitKey((unsigned int) pad_num, 0);
+            if (m_deadChannelMap.find(hitsetkey) != m_deadChannelMap.end() && 
+                std::find(m_deadChannelMap[hitsetkey].begin(), m_deadChannelMap[hitsetkey].end(), hitkey) != m_deadChannelMap[hitsetkey].end())
+            {
+              continue;
+            }
+          }
+          if (m_maskHotChannels)
+          {
+            hitkey = TpcDefs::genHitKey((unsigned int) pad_num, 0);
+            if (m_hotChannelMap.find(hitsetkey) != m_hotChannelMap.end() && 
+                std::find(m_hotChannelMap[hitsetkey].begin(), m_hotChannelMap[hitsetkey].end(), hitkey) != m_hotChannelMap[hitsetkey].end())
+            {
+              continue;
+            }
+          }
+          // generate the key for this hit, requires tbin and phibin
 
-          TrkrDefs::hitkey hitkey = TpcDefs::genHitKey(static_cast<unsigned>(pad_num), static_cast<unsigned>(tbin_num));
+          hitkey = TpcDefs::genHitKey(static_cast<unsigned>(pad_num), static_cast<unsigned>(tbin_num));
           TrkrHit* hit = hitsetit->second->getHit(hitkey);
           if (!hit) { hit = new TrkrHitv2(); hitsetit->second->addHitSpecificKey(hitkey, hit); }
           hit->addEnergy(neffelectrons_bin);
@@ -1101,7 +1128,29 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
           const float neffelectrons_bin = nelec * pad_fraction * tshare;
           if (neffelectrons_bin < neffelectrons_threshold) continue;
 
-          TrkrDefs::hitkey hitkey = TpcDefs::genHitKey(static_cast<unsigned>(pad_num), static_cast<unsigned>(tbin_num));
+          TrkrDefs::hitkey hitkey;
+     
+          if (m_maskDeadChannels)
+          {
+            hitkey = TpcDefs::genHitKey((unsigned int) pad_num, 0);
+            if (m_deadChannelMap.find(hitsetkey) != m_deadChannelMap.end() && 
+                std::find(m_deadChannelMap[hitsetkey].begin(), m_deadChannelMap[hitsetkey].end(), hitkey) != m_deadChannelMap[hitsetkey].end())
+            {
+              continue;
+            }
+          }
+          if (m_maskHotChannels)
+          {
+            hitkey = TpcDefs::genHitKey((unsigned int) pad_num, 0);
+            if (m_hotChannelMap.find(hitsetkey) != m_hotChannelMap.end() && 
+                std::find(m_hotChannelMap[hitsetkey].begin(), m_hotChannelMap[hitsetkey].end(), hitkey) != m_hotChannelMap[hitsetkey].end())
+            {
+              continue;
+            }
+          }
+          // generate the key for this hit, requires tbin and phibin
+
+          hitkey = TpcDefs::genHitKey(static_cast<unsigned>(pad_num), static_cast<unsigned>(tbin_num));
           TrkrHit* hit = hitsetit->second->getHit(hitkey);
           if (!hit) { hit = new TrkrHitv2(); hitsetit->second->addHitSpecificKey(hitkey, hit); }
           hit->addEnergy(neffelectrons_bin);

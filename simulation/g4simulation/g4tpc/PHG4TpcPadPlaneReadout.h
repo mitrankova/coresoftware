@@ -72,14 +72,6 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
     m_hotChannelMapName = hmap;
   }
 
-
-   void LoadAllPadPlanes();
-     private:
-    struct PadCentroid;
-      public:
-  const std::vector<std::vector<PadCentroid>>& GetCentroids() const
-  { return centroids_; }
-
  private:
 
   //  void populate_rectangular_phibins(const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
