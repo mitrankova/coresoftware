@@ -80,7 +80,7 @@ class TrackResiduals : public SubsysReco
   static float convertTimeToZ(ActsGeometry *geometry, TrkrDefs::cluskey cluster_key, TrkrCluster *cluster);
   void fillEventTree(PHCompositeNode *topNode);
   void fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrClusterContainer *clusters, TrkrClusterCrossingAssoc *clustercrossingassoc, ActsGeometry *geometry, TrkrClusterContainer* truthClustersmap,
-                                     TrkrHitTruthAssoc* hitTruthAssocmap, PHG4HitContainer* g4hitTPCmap);
+                                      PHG4HitContainer* g4hitTPCmap);
   void fillHitTree(TrkrHitSetContainer *hitmap, ActsGeometry *geometry,
                    PHG4TpcCylinderGeomContainer *tpcGeom, PHG4CylinderGeomContainer *mvtxGeom,
                    PHG4CylinderGeomContainer *inttGeom, PHG4CylinderGeomContainer *mmGeom);
@@ -283,9 +283,9 @@ class TrackResiduals : public SubsysReco
   float m_tclusx = std::numeric_limits<float>::quiet_NaN();
   float m_tclusy = std::numeric_limits<float>::quiet_NaN();
   float m_tclusz = std::numeric_limits<float>::quiet_NaN();
-  float m_eclusx = std::numeric_limits<float>::quiet_NaN();
-  float m_eclusy = std::numeric_limits<float>::quiet_NaN();
-  float m_eclusz = std::numeric_limits<float>::quiet_NaN();
+  //float m_eclusx = std::numeric_limits<float>::quiet_NaN();
+  //float m_eclusy = std::numeric_limits<float>::quiet_NaN();
+  //float m_eclusz = std::numeric_limits<float>::quiet_NaN();
 
   //! clusters on track information
   std::vector<float> m_clusAdc;

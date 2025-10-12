@@ -247,7 +247,7 @@ int TrackResiduals::process_event(PHCompositeNode* topNode)
   }
 
 
-  auto hitTruthAssocmap = findNode::getClass<TrkrHitTruthAssoc>(topNode, "TRKR_HITTRUTHASSOC");
+ // auto hitTruthAssocmap = findNode::getClass<TrkrHitTruthAssoc>(topNode, "TRKR_HITTRUTHASSOC");
   auto g4hitTPCmap      = findNode::getClass<PHG4HitContainer>(topNode, "G4HIT_TPC");
 std::cout << "TRKR_TRUTHCLUSTERCONTAINER size: " << truthClustersmap->size() << std::endl;
  // std::cout << "TRKR_HITTRUTHASSOC size: " << hitTruthAssocmap->size() << std::endl;
@@ -345,7 +345,7 @@ std::cout << "TRKR_TRUTHCLUSTERCONTAINER size: " << truthClustersmap->size() << 
 
   if (m_doClusters)
   {
-    fillClusterTree(clusterhitassocmap, clustermap, clustercrossingassoc, geometry, truthClustersmap, hitTruthAssocmap, g4hitTPCmap);
+    fillClusterTree(clusterhitassocmap, clustermap, clustercrossingassoc, geometry, truthClustersmap, g4hitTPCmap);
   }
 
   if (m_convertSeeds)
@@ -666,7 +666,7 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
 
 void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrClusterContainer *clusters,
                                      TrkrClusterCrossingAssoc *clustercrossingassoc, ActsGeometry *geometry, TrkrClusterContainer* truthClustersmap,
-                                     TrkrHitTruthAssoc* hitTruthAssocmap, PHG4HitContainer* g4hitTPCmap)
+                                     PHG4HitContainer* g4hitTPCmap)
 {
   std::cout << "!!!!!!!!!!!!!!!!!!!!Filling cluster tree" << std::endl;
   if (clusters->size() < m_min_cluster_size)
@@ -729,7 +729,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
           m_clust_crossings.push_back(crossing_number);
         }
         //! Fill relevant geom info that is specific to subsystem
-        std::cout<<"TrkrDefs::TrkrId = "<<TrkrDefs::getTrkrId(key)<<std::endl;
+        //std::cout<<"TrkrDefs::TrkrId = "<<TrkrDefs::getTrkrId(key)<<std::endl;
         switch (det)
         {
         case TrkrDefs::TrkrId::mvtxId:
@@ -760,14 +760,14 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
           break;
         case TrkrDefs::TrkrId::tpcId:
         {
-            float m_tpcZ = 105.0f;
+          //  float m_tpcZ = 105.0f;
           m_clussector = TpcDefs::getSectorId(key);
           m_side       = TpcDefs::getSide(key);
 
            TrkrDefs::hitsetkey hskey = TrkrDefs::getHitSetKeyFromClusKey(key);
 
           // --------------------
-          std::cout<<" Before truth cluster "<<std::endl;
+        //  std::cout<<" Before truth cluster "<<std::endl;
           if (truthClustersmap)
           {
             auto tr_range = truthClustersmap->getClusters(hskey); // same hitset indexing
@@ -790,7 +790,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
                float tx = tglob.x();
                float ty = tglob.y();
                float tz = tglob.z();
-              std::cout<<" tclusx = "<<tx<<" tclusy = "<<ty<<" tclusz = "<<tz<<std::endl;
+            //  std::cout<<" tclusx = "<<tx<<" tclusy = "<<ty<<" tclusz = "<<tz<<std::endl;
                float phi_truth = std::atan2(ty, tx);
               float dphi = std::remainder(phi_reco - phi_truth, 2.f * static_cast<float>(M_PI));
                float metric = std::hypot(z_reco - tz, r_reco * dphi);
@@ -811,7 +811,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
             PHG4HitContainer::ConstRange r = g4hitTPCmap->getHits();
             for (auto it = r.first; it != r.second; ++it) if (auto* h = it->second) m_g4id2hit[h->get_hit_id()] = h;
           }
-
+/*
           // --------------------
           if (clusterhitassoc && hitTruthAssocmap && !m_g4id2hit.empty())
           {
@@ -873,6 +873,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterHitAssoc *clusterhitassoc, TrkrC
               }
             }
           }
+          */
 
           // clear non-TPC subsystem IDs
           m_staveid     = std::numeric_limits<int>::quiet_NaN();
@@ -1896,9 +1897,9 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("tclusx", &m_tclusx, "tclusx/F");
   m_clustree->Branch("tclusy", &m_tclusy, "tclusy/F");
   m_clustree->Branch("tclusz", &m_tclusz, "tclusz/F");
-  m_clustree->Branch("eclusx", &m_eclusx, "eclusx/F");
-  m_clustree->Branch("eclusy", &m_eclusy, "eclusy/F");
-  m_clustree->Branch("eclusz", &m_eclusz, "eclusz/F");
+  //m_clustree->Branch("eclusx", &m_eclusx, "eclusx/F");
+  //m_clustree->Branch("eclusy", &m_eclusy, "eclusy/F");
+  //m_clustree->Branch("eclusz", &m_eclusz, "eclusz/F");
 
 
   m_tree = new TTree("residualtree", "A tree with track, cluster, and state info");

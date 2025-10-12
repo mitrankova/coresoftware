@@ -67,11 +67,11 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
 
    void LoadAllPadPlanes();
-     private:
-    struct PadCentroid;
-      public:
-  const std::vector<std::vector<PadCentroid>>& GetCentroids() const
-  { return centroids_; }
+//     private:
+//    struct PadCentroid;
+//      public:
+ // const std::vector<std::vector<PadCentroid>>& GetCentroids() const
+ // { return centroids_; }
 
  private:
 
@@ -175,8 +175,11 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 std::array<std::vector<PadInfo>,3*16+7> Pads;
 bool pointInPolygon( double x, double y,const std::vector<Point>& poly); 
   double integratedDensityOfCircleAndPad(double hitX,double hitY, double sigma, const std::vector<Point>& pad,double gridStep = 0.0);
-  // hard‑coded list of input .brd files
-  static const std::vector<std::string> brdMaps_;
+const std::vector<std::string> brdMaps_ = {
+    "/sphenix/user/mitrankova/Simulation/PadPlane/AutoPad-R1-RevA.brd",
+    "/sphenix/user/mitrankova/Simulation/PadPlane/AutoPad-R2-RevA-Pads.brd",
+    "/sphenix/user/mitrankova/Simulation/PadPlane/AutoPad-R3-RevA.brd"
+};
 void loadPadPlanes();
 int ntpc_phibins_sector[3] = { 94, 128, 192 };
 bool pointInPolygon(double x, double y, std::vector<Point> poly);
