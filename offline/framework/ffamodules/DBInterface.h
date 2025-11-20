@@ -8,44 +8,41 @@
 
 namespace odbc
 {
-  class  Connection;
-}
+  class Connection;
+  class Statement;
+}  // namespace odbc
 
 class DBInterface : public SubsysReco
 {
  public:
   static DBInterface *instance();
 
-  ~DBInterface() override = default;
+  ~DBInterface() override;
+
+  int process_event(PHCompositeNode *) override;
 
   /// Called at the end of all processing.
-  int InitRun(PHCompositeNode *topNode) override;
+  int End(PHCompositeNode *) override;
 
-  /// Called at the end of all processing.
-  int End(PHCompositeNode *topNode) override;
+  void Print(const std::string & /*what*/ = "ALL") const override;
 
-  double getDVal(const std::string &name);
-  static odbc::Connection *getDBConnection(const std::string &dbname, int verbosity = 0);
-  int getRunTime(int runnumber);
-
-private:
-  union u_value
-  {
-    uint64_t uidata;
-    int64_t idata;
-    double ddata;
-  u_value(uint64_t in): uidata(in) {}
-  u_value(int64_t in): idata(in) {}
-  u_value(double in): ddata(in) {}
-  };
+  odbc::Connection *getDBConnection(const std::string &dbname);
+  odbc::Statement *getStatement(const std::string &dbname);
   
+ private:
+
   DBInterface(const std::string &name = "DBInterface");
   static DBInterface *__instance;
+  int m_ConnectionTries {0};
+  int m_SleepMS {0};
   static constexpr int m_MAX_NUM_RETRIES = 3000;
-  static constexpr int m_MIN_SLEEP_DUR =  200; // milliseconds
-  static constexpr int m_MAX_SLEEP_DUR = 3000; // milliseconds
+  static constexpr int m_MIN_SLEEP_DUR = 200;   // milliseconds
+  static constexpr int m_MAX_SLEEP_DUR = 3000;  // milliseconds
 
-  std::map<std::string, uint64_t> m_ValueMap;
+  std::map<std::string, odbc::Connection *> m_OdbcConnectionMap;
+  std::map<std::string, odbc::Statement *> m_OdbcStatementMap;
+  std::map<std::string, int> m_NumConnection;
+  std::map<std::string, int> m_NumStatementUse;
 };
 
 #endif

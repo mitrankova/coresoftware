@@ -18,8 +18,8 @@
 typedef std::map<TrkrDefs::hitsetkey, std::vector<TrkrDefs::hitkey>> hitMaskTpc;
 
 class PHCompositeNode;
-class PHG4TpcCylinderGeomContainer;
-class PHG4TpcCylinderGeom;
+class PHG4TpcGeomContainer;
+class PHG4TpcGeom;
 class TH2;
 class TF1;
 class TNtuple;
@@ -50,7 +50,11 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   void SetDefaultParameters() override;
   void UpdateInternalParameters() override;
-
+ 
+  void SetMaskChannelsFromFile() 
+  {
+    m_maskFromFile = true;
+  } 
   void SetDeadChannelMapName(const std::string& dcmap) 
   {
     m_maskDeadChannels = true;
@@ -75,8 +79,8 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   void makeChannelMask(hitMaskTpc& aMask, const std::string& dbName, const std::string& totalChannelsToMask);
 
-  PHG4TpcCylinderGeomContainer *GeomContainer {nullptr};
-  PHG4TpcCylinderGeom *LayerGeom {nullptr};
+  PHG4TpcGeomContainer *GeomContainer = nullptr;
+  PHG4TpcGeom *LayerGeom = nullptr;
 
   double neffelectrons_threshold {std::numeric_limits<double>::quiet_NaN()};
 
@@ -140,6 +144,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
 
   bool m_maskDeadChannels {false};
   bool m_maskHotChannels {false};
+  bool m_maskFromFile {false};
   std::string m_deadChannelMapName; 
   std::string m_hotChannelMapName; 
   void loadPadPlanes();

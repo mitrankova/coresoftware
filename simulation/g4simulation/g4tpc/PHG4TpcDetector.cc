@@ -3,8 +3,8 @@
 #include "PHG4TpcDisplayAction.h"
 
 #include <g4detectors/PHG4CellDefs.h>
-#include <g4detectors/PHG4TpcCylinderGeom.h>
-#include <g4detectors/PHG4TpcCylinderGeomContainer.h>
+#include <g4detectors/PHG4TpcGeomv1.h>
+#include <g4detectors/PHG4TpcGeomContainer.h>
 
 #include <phparameter/PHParameters.h>
 
@@ -520,16 +520,23 @@ void PHG4TpcDetector::CreateCompositeMaterial(
 //_______________________________________________________________
 void PHG4TpcDetector::add_geometry_node()
 {
-  // create PHG4TpcCylinderGeomContainer and put on node tree
-  const std::string geonode_name = "CYLINDERCELLGEOM_SVTX";
-  auto *geonode = findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode(), geonode_name);
+  // create PHG4TpcGeomContainer and put on node tree
+  const std::string geonode_name = "TPCGEOMCONTAINER";
+  auto *geonode = findNode::getClass<PHG4TpcGeomContainer>(topNode(), geonode_name);
   if (!geonode)
   {
-    geonode = new PHG4TpcCylinderGeomContainer;
+    geonode = new PHG4TpcGeomContainer;
     PHNodeIterator iter(topNode());
     auto *runNode = dynamic_cast<PHCompositeNode *>(iter.findFirst("PHCompositeNode", "RUN"));
+    PHNodeIterator runiter(runNode);
+    PHCompositeNode *geomNode = dynamic_cast<PHCompositeNode *>(runiter.findFirst("PHCompositeNode", "RECO_TRACKING_GEOMETRY"));
+    if(!geomNode)
+      {
+        geomNode = new PHCompositeNode("RECO_TRACKING_GEOMETRY");
+        runNode->addNode(geomNode);
+      }
     auto *newNode = new PHIODataNode<PHObject>(geonode, geonode_name, "PHObject");
-    runNode->addNode(newNode);
+    geomNode->addNode(newNode);
   }
 
   m_cdb = CDBInterface::instance();
@@ -688,7 +695,7 @@ void PHG4TpcDetector::add_geometry_node()
                   << " phibins " << NPhiBins[iregion] << " phistep " << phi_bin_width_cdb[layer] << std::endl;
       }
 
-      auto *layerseggeo = new PHG4TpcCylinderGeom;
+      auto *layerseggeo = new PHG4TpcGeomv1;
       layerseggeo->set_layer(layer);
 
       double r_length = Thickness[iregion];

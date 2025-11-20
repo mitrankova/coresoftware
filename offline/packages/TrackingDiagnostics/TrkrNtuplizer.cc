@@ -33,8 +33,8 @@
 
 #include <micromegas/MicromegasDefs.h>
 
-#include <g4detectors/PHG4TpcCylinderGeom.h>
-#include <g4detectors/PHG4TpcCylinderGeomContainer.h>
+#include <g4detectors/PHG4TpcGeom.h>
+#include <g4detectors/PHG4TpcGeomContainer.h>
 
 #include <trackermillepedealignment/HelicalFitter.h>
 
@@ -334,7 +334,7 @@ int TrkrNtuplizer::Init(PHCompositeNode* /*unused*/)
   std::string str_cluster = {"locx:locy:x:y:z:r:phi:eta:theta:phibin:tbin:fee:chan:sampa:ex:ey:ez:ephi:pez:pephi:e:adc:maxadc:thick:afac:bfac:dcal:layer:phielem:zelem:size:phisize:zsize:pedge:redge:ovlp:trackID:niter"};
   std::string str_seed = {"seedID:siter:spt:sptot:seta:sphi:syxint:srzint:sxyslope:srzslope:sX0:sY0:sdZ0:sR0:scharge:sdedx:spidedx:skdedx:sprdedx:sn1pix:snsil:sntpc:snhits"};
   std::string str_residual = {"alpha:beta:resphio:resphi:resz"};
-  std::string str_track = {"trackID:crossing:px:py:pz:pt:eta:phi:deltapt:deltaeta:deltaphi:charge:quality:chisq:ndf:nhits:nmaps:nintt:ntpc:nmms:ntpc1:ntpc11:ntpc2:ntpc3:dedx:pidedx:kdedx:prdedx:nlmaps:nlintt:nltpc:nlmms:layers:vertexID:vx:vy:vz:dca2d:dca2dsigma:dca3dxy:dca3dxysigma:dca3dz:dca3dzsigma:pcax:pcay:pcaz:hlxpt:hlxeta:hlxphi:hlxX0:hlxY0:hlxZ0:hlxcharge"};
+  std::string str_track = {"trackID:crossing:px:py:pz:pt:eta:phi:deltapt:deltaeta:deltaphi:charge:quality:chisq:ndf:nhits:nmaps:nintt:ntpc:nmms:ntpc1:ntpc11:ntpc2:ntpc3:dedx:pidedx:kdedx:prdedx:vertexID:vx:vy:vz:dca2d:dca2dsigma:dca3dxy:dca3dxysigma:dca3dz:dca3dzsigma:pcax:pcay:pcaz:hlxpt:hlxeta:hlxphi:hlxX0:hlxY0:hlxZ0:hlxcharge"};
   std::string str_info = {"occ11:occ116:occ21:occ216:occ31:occ316:rawzdc:livezdc:scaledzdc:rawmbd:livembd:scaledmbd:rawmbdv10:livembdv10:scaledmbdv10:rawzdc1:livezdc1:scaledzdc1:rawmbd1:livembd1:scaledmbd1:rawmbdv101:livembdv101:scaledmbdv101:rzdc:rmbd:rmbdv10:bco1:bco:bcotr:bcotr1:ntrk:ntpcseed:nsiseed:nhitmvtx:nhitintt:nhittpot:nhittpcall:nhittpcin:nhittpcmid:nhittpcout:nclusall:nclustpc:nclustpcpos:nclustpcneg:nclusintt:nclusmaps:nclusmms"};
   if (_do_info_eval)
   {
@@ -552,20 +552,20 @@ int TrkrNtuplizer::Init(PHCompositeNode* /*unused*/)
 int TrkrNtuplizer::InitRun(PHCompositeNode* topNode)
 {
   auto* geom =
-      findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode, "CYLINDERCELLGEOM_SVTX");
+      findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
   if (!geom)
   {
-    std::cout << PHWHERE << "ERROR: Can't find node CYLINDERCELLGEOM_SVTX" << std::endl;
+    std::cout << PHWHERE << "ERROR: Can't find node TPCGEOMCONTAINER" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
   AdcClockPeriod = geom->GetFirstLayerCellGeom()->get_zstep();
 
   // Create Fee Map
-  auto* geom_container = findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode, "CYLINDERCELLGEOM_SVTX");
+  auto* geom_container = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
   {
     if (!geom_container)
     {
-      std::cout << PHWHERE << "ERROR: Can't find node CYLINDERCELLGEOM_SVTX" << std::endl;
+      std::cout << PHWHERE << "ERROR: Can't find node TPCGEOMCONTAINER" << std::endl;
       return Fun4AllReturnCodes::ABORTEVENT;
     }
   }
@@ -610,7 +610,7 @@ int TrkrNtuplizer::InitRun(PHCompositeNode* topNode)
 	}
 	varname = "phi";  // + std::to_string(key);
 	double phi = ((side == 1 ? 1 : -1) * (m_cdbttree->GetDoubleValue(key, varname) - M_PI / 2.)) + ((sector % 12) * M_PI / 6);
-	PHG4TpcCylinderGeom* layergeom = geom_container->GetLayerCellGeom(layer);
+	PHG4TpcGeom* layergeom = geom_container->GetLayerCellGeom(layer);
 	unsigned int phibin = layergeom->get_phibin(phi, side);
 	//get global coords
 	double radius = layergeom->get_radius();  // returns center of layer
@@ -811,11 +811,11 @@ int TrkrNtuplizer::process_event(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::ABORTEVENT;
   }
 
-  _geom_container = findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode, "CYLINDERCELLGEOM_SVTX");
+  _geom_container = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
   {
     if (!_geom_container)
     {
-      std::cout << PHWHERE << "ERROR: Can't find node CYLINDERCELLGEOM_SVTX" << std::endl;
+      std::cout << PHWHERE << "ERROR: Can't find node TPCGEOMCONTAINER" << std::endl;
       return Fun4AllReturnCodes::ABORTEVENT;
     }
   }
@@ -1067,7 +1067,7 @@ void TrkrNtuplizer::printOutputInfo(PHCompositeNode* topNode)
 
     for (unsigned int ilayer = 0; ilayer < _nlayers_maps + _nlayers_intt + _nlayers_tpc; ++ilayer)
     {
-      PHG4TpcCylinderGeom* GeoLayer = _geom_container->GetLayerCellGeom(ilayer);
+      PHG4TpcGeom* GeoLayer = _geom_container->GetLayerCellGeom(ilayer);
 
       std::cout << "layer " << ilayer
                 << " => nHits = " << nhits[ilayer]
@@ -1169,13 +1169,13 @@ void TrkrNtuplizer::fillOutputNtuples(PHCompositeNode* topNode)
       }
     }
 
-    _geom_container = findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode, "CYLINDERCELLGEOM_SVTX");
+    _geom_container = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
     if (!_geom_container)
     {
-      std::cout << PHWHERE << "ERROR: Can't find node CYLINDERCELLGEOM_SVTX" << std::endl;
+      std::cout << PHWHERE << "ERROR: Can't find node TPCGEOMCONTAINER" << std::endl;
       return;
     }
-    PHG4TpcCylinderGeom* GeoLayer;
+    PHG4TpcGeom* GeoLayer;
     int layer = _nlayers_maps + _nlayers_intt;
     GeoLayer = _geom_container->GetLayerCellGeom(layer);
     int nbins = GeoLayer->get_phibins() * GeoLayer->get_zbins();
@@ -1499,7 +1499,7 @@ void TrkrNtuplizer::fillOutputNtuples(PHCompositeNode* topNode)
 
           if (layer_local >= _nlayers_maps + _nlayers_intt && layer_local < _nlayers_maps + _nlayers_intt + _nlayers_tpc)
           {
-            PHG4TpcCylinderGeom* GeoLayer_local = _geom_container->GetLayerCellGeom(layer_local);
+            PHG4TpcGeom* GeoLayer_local = _geom_container->GetLayerCellGeom(layer_local);
             double radius = GeoLayer_local->get_radius();
             fx_hit[n_hit::nhitphibin] = (float) TpcDefs::getPad(hit_key);
             fx_hit[n_hit::nhittbin] = (float) TpcDefs::getTBin(hit_key);
@@ -1780,7 +1780,7 @@ void TrkrNtuplizer::fillOutputNtuples(PHCompositeNode* topNode)
           float fx_cluster[n_cluster::clusize];
           if (layer_local >= 7 && layer_local < 55)
           {
-            PHG4TpcCylinderGeom* GeoLayer_local = _geom_container->GetLayerCellGeom(layer_local);
+            PHG4TpcGeom* GeoLayer_local = _geom_container->GetLayerCellGeom(layer_local);
             float thick = GeoLayer_local->get_thickness();
 
             float alphacorr = std::cos(alpha);
@@ -2131,7 +2131,7 @@ void TrkrNtuplizer::FillCluster(float fXcluster[n_cluster::clusize], TrkrDefs::c
   if (layer_local >= _nlayers_maps + _nlayers_intt && layer_local < _nlayers_maps + _nlayers_intt + _nlayers_tpc)
   {
     int side_tpc = TpcDefs::getSide(cluster_key);
-    PHG4TpcCylinderGeom* GeoLayer_local = _geom_container->GetLayerCellGeom(layer_local);
+    PHG4TpcGeom* GeoLayer_local = _geom_container->GetLayerCellGeom(layer_local);
     // NOLINTNEXTLINE(bugprone-incorrect-roundings)
     phibin = (unsigned int) GeoLayer_local->get_pad_float(phi, side_tpc) + 0.5;
     tbin = GeoLayer_local->get_tbin_float(locy - 39.6);
