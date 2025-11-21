@@ -66,10 +66,23 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
     m_hotChannelMapName = hmap;
   }
   void LoadAllPadPlanes(); 
+    // Debug printing helpers
+  // If set >= 0, limit PadHit prints to a single layer number; otherwise prints for all layers.
+ // void SetDebugPadHitLayer(int layer) { m_dbg_pad_hit_layer = layer; }
+  // Enable a one-shot visualization of a single avalanche cloud overlap with zigzag pads.
+  // Passing target_side/target_layer < 0 matches the first cloud encountered.
+  // grid_step <= 0 defaults to sigma/30 sampling.
+  void EnableSingleCloudVisualization(bool enable,
+                                      const std::string &output_file = "AvalancheCloudOverlap.png",
+                                      int target_side = -1,
+                                      int target_layer = -1,
+                                      double grid_step = -1.0);
+  void SetVisualizationDumpFile(const std::string &file);
+  void SetVisualizeAllClouds(bool enable);
 
  private:
   //  void populate_rectangular_phibins(const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
-  void SERF_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double rad_gem, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
+  void SERF_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double rad_gem, const double cloud_sig_rp, std::vector<unsigned int>& pad_layer, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void populate_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &phibin_pad, std::vector<double> &phibin_pad_share);
 
   void sampaTimeDistribution(double tzero,  std::vector<int> &adc_tbin, std::vector<double> &adc_tbin_share);
@@ -167,11 +180,21 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
       isedge = false;
   }
   };
+
+    struct DebugSample
+  {
+    double x = 0.0;
+    double y = 0.0;
+    double density = 0.0;
+  };
+
   
-bool pointInPolygon(double x, double y, std::vector<Point> poly);
+
 int findPadForPoint( double x, double y, int tpc_module);
 bool pointInPolygon( double x, double y,const std::vector<Point>& poly); 
-double integratedDensityOfCircleAndPad(double hitX,double hitY, double sigma, const std::vector<Point>& pad,double gridStep = 0.0);
+//double integratedDensityOfCircleAndPad(double hitX,double hitY, double sigma, const std::vector<Point>& pad,double gridStep = 0.0);
+  double integratedDensityOfCircleAndPad(double hitX,double hitY, double sigma, const std::vector<Point>& pad,double gridStep = 0.0, std::vector<DebugSample>* debug_samples = nullptr);
+
 const std::vector<std::string> brdMaps_ = {
     "/sphenix/user/mitrankova/Simulation/PadPlane/AutoPad-R1-RevA.brd",
     "/sphenix/user/mitrankova/Simulation/PadPlane/AutoPad-R2-RevA-Pads.brd",
@@ -191,6 +214,44 @@ int ntpc_phibins_sector[3] = { 94, 128, 192 };
 double min_radii_module[3]={314.9836110818037, 416.59202613529567, 589.1096495597712};
 double max_radii_module[3]={399.85222874031024, 569.695373910603, 753.6667758418596};
 
+  struct DebugPadContribution
+  {
+    int pad_bin = -1;
+    double charge = 0.0;
+    std::vector<Point> polygon;
+    double pad_phi = 0.0;
+  };
+  struct VisualizationCircle
+  {
+    double x = 0.0;
+    double y = 0.0;
+    double radius = 0.0;
+  };
+
+  void maybeVisualizeAvalanche(unsigned int side,
+                               unsigned int layernum,
+                               double phi,
+                               double rad_gem,
+                               double cloud_sig_rp,
+                               double x_center,
+                               double y_center,
+                               const std::vector<DebugPadContribution> &contribs,
+                               const std::vector<DebugSample> &samples,
+                               const std::vector<VisualizationCircle> &circles);
+
+  bool m_visualize_single_cloud = false;
+  bool m_visualization_done = false;
+  int  m_visualization_target_layer = -1;
+  int  m_visualization_target_side = -1;
+  std::string m_visualization_output = "AvalancheCloudOverlap.png";
+  double m_visualization_grid_step = -1.0;
+  bool m_visualize_all_matches = false;
+  std::string m_visualization_dump_file;
+  unsigned long m_visualization_dump_index = 0;
+  unsigned long m_visualization_cloud_counter = 0;
+  std::vector<DebugSample> m_visualization_aggregate_samples;
+  std::vector<VisualizationCircle> m_visualization_circles;
+  std::map<int, DebugPadContribution> m_visualization_pad_union;
 
 };
 

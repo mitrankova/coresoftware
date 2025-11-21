@@ -34,6 +34,16 @@
 #include <TH2.h>
 #include <TSystem.h>
 
+
+#include <TCanvas.h>
+#include <TGraph.h>
+#include <TMarker.h>
+#include <TPad.h>
+#include <TEllipse.h>
+#include <TColor.h>
+#include <TNtuple.h>
+
+
 #include <gsl/gsl_randist.h>
 #include <gsl/gsl_rng.h>  // for gsl_rng_alloc
 
@@ -461,8 +471,8 @@ bool PHG4TpcPadPlaneReadout::pointInPolygon(
         // does edge (j→i) straddle the horizontal ray at y?
         bool cond = ((yi > y) != (yj > y));
         if (cond) {
-                std::cout<<"Checking point ("<<x<<", "<<y<<") against polygon edge from ("
-               <<poly[i].x<<", "<<poly[i].y<<") to ("<<poly[j].x<<", "<<poly[j].y<<")"<<std::endl;
+              //  std::cout<<"Checking point ("<<x<<", "<<y<<") against polygon edge from ("
+              // <<poly[i].x<<", "<<poly[i].y<<") to ("<<poly[j].x<<", "<<poly[j].y<<")"<<std::endl;
             // compute intersection's X coordinate on the edge at height y
             double x_intersect = xj + (xi - xj) * (y - yj) / (yi - yj);
             if (x < x_intersect) {
@@ -472,6 +482,8 @@ bool PHG4TpcPadPlaneReadout::pointInPolygon(
     }
     return inside;
 }
+
+
 //_________________________________________________________
 void PHG4TpcPadPlaneReadout::MapToPadPlane(
     TpcClusterBuilder &tpc_truth_clusterer,
@@ -675,11 +687,12 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
               << std::endl;
   }
 
+  std::vector<unsigned int> pad_layer;
   std::vector<int> pad_phibin;
   std::vector<double> pad_phibin_share;
 
  // populate_zigzag_phibins(side, layernum, phi, sigmaT, pad_phibin, pad_phibin_share);
-  SERF_zigzag_phibins(side, layernum, phi, rad_gem, sigmaT, pad_phibin, pad_phibin_share); 
+  SERF_zigzag_phibins(side, layernum, phi, rad_gem, sigmaT, pad_layer, pad_phibin, pad_phibin_share); 
   /* if (pad_phibin.size() == 0) { */
   /* pass_data.neff_electrons = 0; */
   /* } else { */
@@ -750,6 +763,7 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
   {
     int pad_num = pad_phibin[ipad];
     double pad_share = pad_phibin_share[ipad];
+      const unsigned int layer_i = pad_layer[ipad];  
 
     for (unsigned int it = 0; it < adc_tbin.size(); ++it)
     {
@@ -797,7 +811,7 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
       // get the Tpc readout sector - there are 12 sectors with how many pads each?
       unsigned int pads_per_sector = phibins / 12;
       unsigned int sector = pad_num / pads_per_sector;
-      TrkrDefs::hitsetkey hitsetkey = TpcDefs::genHitSetKey(layernum, sector, side);
+      TrkrDefs::hitsetkey hitsetkey = TpcDefs::genHitSetKey(layer_i, sector, side);
       // Use existing hitset or add new one if needed
       TrkrHitSetContainer::Iterator hitsetit = hitsetcontainer->findOrAddHitSet(hitsetkey);
       TrkrHitSetContainer::Iterator single_hitsetit = single_hitsetcontainer->findOrAddHitSet(hitsetkey);
@@ -941,6 +955,49 @@ double PHG4TpcPadPlaneReadout::check_phi(const unsigned int side, const double p
 
   return new_phi;
 }
+
+
+void PHG4TpcPadPlaneReadout::EnableSingleCloudVisualization(bool enable,
+                                                            const std::string &output_file,
+                                                            int target_side,
+                                                            int target_layer,
+                                                            double grid_step)
+{
+  m_visualize_single_cloud = enable;
+  m_visualization_output = output_file;
+  m_visualization_target_side = target_side;
+  m_visualization_target_layer = target_layer;
+  m_visualization_grid_step = grid_step;
+  m_visualization_done = false;
+  std::cout<<" EnableSingleCloudVisualization to "<<m_visualization_output<<" for side "<<m_visualization_target_side<<" layer "<<m_visualization_target_layer<<std::endl;
+  if (enable)
+  {
+    m_visualization_dump_index = 0;
+    m_visualization_cloud_counter = 0;
+    m_visualization_aggregate_samples.clear();
+    m_visualization_circles.clear();
+    m_visualization_pad_union.clear();
+  }
+}
+
+
+void PHG4TpcPadPlaneReadout::SetVisualizationDumpFile(const std::string &file)
+{
+  m_visualization_dump_file = file;
+  m_visualization_dump_index = 0;
+  std::cout<<" SetVisualizationDumpFile to "<<m_visualization_dump_file<<std::endl;
+}
+
+void PHG4TpcPadPlaneReadout::SetVisualizeAllClouds(bool enable)
+{
+  m_visualize_all_matches = enable;
+  m_visualization_cloud_counter = 0;
+  m_visualization_aggregate_samples.clear();
+  m_visualization_circles.clear();
+  m_visualization_pad_union.clear();
+}
+
+/*
 double PHG4TpcPadPlaneReadout::integratedDensityOfCircleAndPad(
     double hitX,
     double hitY,
@@ -1013,10 +1070,376 @@ double PHG4TpcPadPlaneReadout::integratedDensityOfCircleAndPad(
     // 5) multiply by cell area for the approximate integral
     return total * (gridStep * gridStep);
 }
+*/
+
+double PHG4TpcPadPlaneReadout::integratedDensityOfCircleAndPad(
+    double hitX,
+    double hitY,
+    double sigma,
+    const std::vector<Point>& pad,
+    double gridStep,
+    std::vector<DebugSample>* debug_samples
+) {
+    // sanity checks
+    if (sigma <= 0.0 || pad.empty()) return 0.0;
+
+    // constants
+    const double    nSigma       = _nsigmas;
+    double R                  = nSigma * sigma;
+    double gaussConst         = 1.0 / (2.0 * M_PI * sigma * sigma);
+    double expDenominator     = 2.0 * sigma * sigma;
+
+    // pick a default grid step if none provided
+    if (gridStep <= 0.0) {
+        gridStep = sigma / 50.0;
+    }
+
+    // 1) Compute pad bounding box
+    // Initialize min/max from the same first vertex to ensure both extremas consider index 0
+    double minx = pad[0].x, maxx = pad[0].x;
+    double miny = pad[0].y, maxy = pad[0].y;
+    for (size_t i = 1; i < pad.size(); ++i) {
+        minx = std::min(minx, pad[i].x);
+        maxx = std::max(maxx, pad[i].x);
+        miny = std::min(miny, pad[i].y);
+        maxy = std::max(maxy, pad[i].y);
+     //  std::cout<<"Pad point "<<i<<" x = "<<pad[i].x<<", y = "<<pad[i].y<<std::endl;
+    }
+//std::cout<<"Pad 0: ( "<<pad[0].x<<" ; "<<pad[0].y<<" ) - ( "<<pad.back().x<<" ; "<<pad.back().y<<" );  Pad box "<<" minx = "<<minx<<", maxx = "<<maxx<<", miny = "<<miny<<", maxy = "<<maxy<<std::endl;
+    // 2) Intersect that box with the nσ circle’s box (n = _nsigmas)
+    double x0 = std::max(minx, hitX - R);
+    double x1 = std::min(maxx, hitX + R);
+    double y0 = std::max(miny, hitY - R);
+    double y1 = std::min(maxy, hitY + R);
+//std::cout<<"Circle box "<<" x0 = "<<x0<<", x1 = "<<x1<<", y0 = "<<y0<<", y1 = "<<y1<<std::endl;
+
+    if (x1 <= x0 || y1 <= y0) {
+        // no overlap
+        return 0.0;
+    }
+
+    // 3) Determine grid dimensions
+    int nx = static_cast<int>(std::ceil((x1 - x0) / gridStep));
+    int ny = static_cast<int>(std::ceil((y1 - y0) / gridStep));
+    //std::cout<<"Grid dimensions: nx = "<<nx<<", ny = "<<ny<<" gridStep = "<<gridStep<<" gridStep^2 = "<<gridStep*gridStep<<" gaussConst = "<<gaussConst<<" expDenominator = "<<expDenominator<<std::endl;
+    double total = 0.0;
+
+    // 4) Loop over cell centers
+    for (int ix = 0; ix < nx; ++ix) {
+        double x = x0 + (ix + 0.5) * gridStep;
+        for (int iy = 0; iy < ny; ++iy) {
+            double y = y0 + (iy + 0.5) * gridStep;
+            // skip outside the circle
+            double dx = x - hitX, dy = y - hitY;
+            
+            if (dx*dx + dy*dy > R*R) continue;
+            // skip outside the pad polygon
+            if (!pointInPolygon(x, y, pad)) continue;
+            // accumulate Gaussian density
+            const double density = gaussConst * std::exp(-(dx*dx + dy*dy) / expDenominator);
+            total += density;
+            if (debug_samples)
+            {
+              debug_samples->push_back({x, y, density});
+            }
+           // std::cout<<" dx = "<<dx<<" dy = "<<dy<<" exp = "<<std::exp(-(dx*dx + dy*dy))<<std::endl;
+            // std::cout<<"Cell center ("<<x<<", "<<y<<") contributes to integral with density = "
+            //    <<gaussConst * std::exp(-(dx*dx + dy*dy) / expDenominator)<<std::endl;
+        }
+    }
+   //std::cout<<"  total = "<<total<<std::endl;
+    // 5) multiply by cell area for the approximate integral
+    return total * (gridStep * gridStep);
+}
+//_________________________________________________________
+
+void PHG4TpcPadPlaneReadout::maybeVisualizeAvalanche(
+    unsigned int side,
+    unsigned int layernum,
+    double phi,
+    double rad_gem,
+    double cloud_sig_rp,
+    double x_center,
+    double y_center,
+    const std::vector<DebugPadContribution> &contribs,
+    const std::vector<DebugSample> &samples,
+    const std::vector<VisualizationCircle> &circles)
+{
+  if (!m_visualize_single_cloud) return;
+  if (m_visualization_done && !m_visualize_all_matches) return;
+  if (contribs.empty()) return;
+  if (cloud_sig_rp <= 0.0) return;
+  if (m_visualization_target_layer >= 0 &&
+      static_cast<int>(layernum) != m_visualization_target_layer) return;
+  if (m_visualization_target_side >= 0 &&
+      static_cast<int>(side) != m_visualization_target_side) return;
+
+  if (samples.empty()) return;
+
+  double xmin = std::numeric_limits<double>::max();
+  double xmax = std::numeric_limits<double>::lowest();
+  double ymin = std::numeric_limits<double>::max();
+  double ymax = std::numeric_limits<double>::lowest();
+  for (const auto &sample : samples)
+  {
+    xmin = std::min(xmin, sample.x);
+    xmax = std::max(xmax, sample.x);
+    ymin = std::min(ymin, sample.y);
+    ymax = std::max(ymax, sample.y);
+  }
+
+  double max_circle_radius = 0.0;
+  for (const auto &circle : circles) max_circle_radius = std::max(max_circle_radius, circle.radius);
+  for (const auto &pad : contribs)
+  {
+    for (const auto &v : pad.polygon)
+    {
+      xmin = std::min(xmin, v.x);
+      xmax = std::max(xmax, v.x);
+      ymin = std::min(ymin, v.y);
+      ymax = std::max(ymax, v.y);
+    }
+  }
+  for (const auto &circle : circles)
+  {
+    xmin = std::min(xmin, circle.x - circle.radius);
+    xmax = std::max(xmax, circle.x + circle.radius);
+    ymin = std::min(ymin, circle.y - circle.radius);
+    ymax = std::max(ymax, circle.y + circle.radius);
+  }
+
+  const double margin = std::max(max_circle_radius * 0.1, 0.1);
+  xmin -= margin;
+  xmax += margin;
+  ymin -= margin;
+  ymax += margin;
+
+  double grid_step = m_visualization_grid_step;
+  if (grid_step <= 0.0)
+  {
+    grid_step = cloud_sig_rp / 50.0;
+  }
+  grid_step = std::max(grid_step, cloud_sig_rp / 200.0);
+
+  const int raw_nx = std::max(20, static_cast<int>(std::ceil((xmax - xmin) / grid_step)));
+  const int raw_ny = std::max(20, static_cast<int>(std::ceil((ymax - ymin) / grid_step)));
+  const int max_bins = 600;
+  const int nx = std::min(max_bins, raw_nx);
+  const int ny = std::min(max_bins, raw_ny);
+
+  const std::string hname = "h_cloud_side" + std::to_string(side) + "_layer" + std::to_string(layernum);
+  TH2F *hist = new TH2F(hname.c_str(), "", nx, xmin, xmax, ny, ymin, ymax);
+  hist->GetXaxis()->SetTitle("sector frame x [cm]");
+  hist->GetYaxis()->SetTitle("sector frame y [cm]");
+  hist->SetStats(false);
+
+  assert(!samples.empty());
+  for (const auto &sample : samples)
+  {
+    hist->Fill(sample.x, sample.y, sample.density);
+  }
+
+  double total_mass = 0.0;
+  double max_bin = 0.0;
+  double min_positive = std::numeric_limits<double>::max();
+  int nonzero_bins = 0;
+  for (int ix = 1; ix <= nx; ++ix)
+  {
+    for (int iy = 1; iy <= ny; ++iy)
+    {
+      const double val = hist->GetBinContent(ix, iy);
+      total_mass += val;
+      if (val > 0.0)
+      {
+        ++nonzero_bins;
+        if (val > max_bin) max_bin = val;
+        if (val < min_positive) min_positive = val;
+      }
+    }
+  }
+  double floor_fill = 0.0;
+  if (nonzero_bins > 0)
+  {
+    floor_fill = std::min(min_positive * 0.5, max_bin);
+    for (int ix = 1; ix <= nx; ++ix)
+    {
+      for (int iy = 1; iy <= ny; ++iy)
+      {
+        if (hist->GetBinContent(ix, iy) <= 0.0)
+        {
+          hist->SetBinContent(ix, iy, floor_fill);
+        }
+      }
+    }
+    if (floor_fill > 0.0) min_positive = floor_fill;
+  }
+  if (Verbosity() > 0)
+  {
+    std::cout << "test_1_PHG4TpcPadPlaneReadout: histogram summary for visualization "
+              << "(side " << side << ", layer " << layernum << "): total mass = "
+              << total_mass << ", non-zero bins = " << nonzero_bins;
+    if (nonzero_bins > 0)
+    {
+      std::cout << ", min(bin) = " << min_positive << ", max(bin) = " << max_bin;
+    }
+    std::cout << std::endl;
+  }
+
+  const std::string cname = "c_cloud_side" + std::to_string(side) + "_layer" + std::to_string(layernum);
+  TCanvas *canvas = new TCanvas(cname.c_str(), "Avalanche cloud vs zigzag pads", 900, 800);
+  canvas->cd();
+  gPad->SetRightMargin(0.15);
+  hist->SetTitle(("Avalanche overlap (side " + std::to_string(side) +
+                  ", layer " + std::to_string(layernum) + ")").c_str());
+  hist->SetDirectory(nullptr);
+  if (nonzero_bins > 0)
+  {
+    const double min_disp = std::max(0.8 * min_positive, 1e-9);
+    hist->SetMinimum(min_disp);
+    hist->SetMaximum(1.1 * max_bin);
+  }
+  else
+  {
+    hist->SetMinimum(1e-9);
+    hist->SetMaximum(1.0);
+  }
+  hist->SetContour(255);
+  hist->Draw("COLZ");
+
+  const std::vector<DebugPadContribution>* pads_to_draw = &contribs;
+  std::vector<DebugPadContribution> pad_aggregated;
+  if (m_visualize_all_matches)
+  {
+    pad_aggregated.reserve(m_visualization_pad_union.size());
+    for (const auto &kv : m_visualization_pad_union) pad_aggregated.push_back(kv.second);
+    pads_to_draw = &pad_aggregated;
+  }
+
+  std::vector<TGraph *> pad_graphs;
+  pad_graphs.reserve(pads_to_draw->size());
+  const int center_color = kBlack;
+  const auto faint_color = TColor::GetColor(180, 180, 190);
+  double max_pad_charge = 0.0;
+  for (const auto &pad : *pads_to_draw) max_pad_charge = std::max(max_pad_charge, pad.charge);
+  for (const auto &pad : *pads_to_draw)
+  {
+    if (pad.polygon.empty())
+    {
+      continue;
+    }
+    const size_t npts = pad.polygon.size();
+    std::vector<double> xs(npts + 1);
+    std::vector<double> ys(npts + 1);
+    for (size_t i = 0; i < npts; ++i)
+    {
+      xs[i] = pad.polygon[i].x;
+      ys[i] = pad.polygon[i].y;
+    }
+    xs[npts] = pad.polygon.front().x;
+    ys[npts] = pad.polygon.front().y;
+
+    TGraph *outline = new TGraph(static_cast<int>(xs.size()), xs.data(), ys.data());
+    const bool highlight = (max_pad_charge > 0.0 && std::fabs(pad.charge - max_pad_charge) < 1e-12);
+    if (highlight)
+    {
+      outline->SetLineColor(center_color);
+      outline->SetLineWidth(1);
+    }
+    else
+    {
+      outline->SetLineColorAlpha(faint_color, 0.35);
+      outline->SetLineWidth(1);
+    }
+    outline->SetFillStyle(0);
+    outline->Draw("L SAME");
+    pad_graphs.push_back(outline);
+  }
+
+  std::vector<TGraph *> center_markers;
+  center_markers.reserve(circles.size());
+  for (size_t ic = 0; ic < circles.size(); ++ic)
+  {
+    const auto &circle = circles[ic];
+    double center_x[1] = {circle.x};
+    double center_y[1] = {circle.y};
+    TGraph *center = new TGraph(1, center_x, center_y);
+    center->SetMarkerStyle(29);
+    //center->SetMarkerSize(ic + 1 == circles.size() ? 1.8 : 1.2);
+    center->SetMarkerSize(1.6);
+    center->SetMarkerColor(kBlack);
+    center->Draw("P SAME");
+    center_markers.push_back(center);
+  }
+std::cout<<" m_visualization_dump_file "<<m_visualization_dump_file<<std::endl; 
+  if (!m_visualization_dump_file.empty())
+  {
+    TFile dumpFile(m_visualization_dump_file.c_str(), "UPDATE");
+    if (!dumpFile.IsOpen())
+    {
+      std::cout << "PHG4TpcPadPlaneReadout: unable to open "
+                << m_visualization_dump_file
+                << " for visualization dump." << std::endl;
+    }
+    else
+    {
+      const std::string hname_save =
+          "cloudHist_" + std::to_string(m_visualization_dump_index) +
+          "_side" + std::to_string(side) +
+          "_layer" + std::to_string(layernum);
+      TH2F histOut(*hist);
+      histOut.SetName(hname_save.c_str());
+      histOut.SetTitle(hist->GetTitle());
+      histOut.SetDirectory(&dumpFile);
+      histOut.Write(hname_save.c_str(), TObject::kOverwrite);
+
+      TNtuple *meta = dynamic_cast<TNtuple *>(dumpFile.Get("cloud_meta"));
+      if (!meta)
+      {
+        meta = new TNtuple("cloud_meta",
+                           "SERF cloud metadata",
+                           "index:side:layer:centerX:centerY:phi:radius:sigma:floor:minBin:maxBin:totalMass:nonZero");
+      }
+      meta->SetDirectory(&dumpFile);
+      const float minBinOut = (nonzero_bins > 0) ? static_cast<float>(min_positive) : 0.F;
+      const float floorOut = static_cast<float>(floor_fill);
+      meta->Fill(static_cast<float>(m_visualization_dump_index),
+                 static_cast<float>(side),
+                 static_cast<float>(layernum),
+                 static_cast<float>(x_center),
+                 static_cast<float>(y_center),
+                 static_cast<float>(phi),
+                 static_cast<float>(rad_gem),
+                 static_cast<float>(cloud_sig_rp),
+                 floorOut,
+                 minBinOut,
+                 static_cast<float>(max_bin),
+                 static_cast<float>(total_mass),
+                 static_cast<float>(nonzero_bins));
+      meta->Write("", TObject::kOverwrite);
+      dumpFile.Close();
+      ++m_visualization_dump_index;
+    }
+  }
+
+  canvas->Update();
+  canvas->SaveAs(m_visualization_output.c_str());
+  std::cout << "PHG4TpcPadPlaneReadout: saved single cloud visualization to "
+            << m_visualization_output
+            << " (side " << side << ", layer " << layernum
+            << ", phi " << phi << ", radius " << rad_gem << ")" << std::endl;
+
+  m_visualization_done = !m_visualize_all_matches;
+
+  for (TGraph *c : center_markers) delete c;
+  for (TGraph *g : pad_graphs) delete g;
+  delete canvas;
+  delete hist;
+}
+
 
 //_________________________________________________________
 
-void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(const unsigned int side, const unsigned int layernum,  const double phi, const double rad_gem,const double cloud_sig_rp, std::vector<int> &phibin_pad, std::vector<double> &phibin_pad_share)
+void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(const unsigned int side, const unsigned int layernum,  const double phi, const double rad_gem,const double cloud_sig_rp, std::vector<unsigned int>& pad_layer, std::vector<int> &phibin_pad, std::vector<double> &phibin_pad_share)
 {
   const double radius = LayerGeom->get_radius();
   const double phistepsize = LayerGeom->get_phistep();
@@ -1030,6 +1453,29 @@ void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(const unsigned int side, const 
 
   rotatePointToSector( x,  y,  xNew, yNew, sector1);
   int tpc_module = (int)(layernum - 7)/16;
+
+
+
+  const bool matches_target =
+      (m_visualization_target_layer < 0 || static_cast<int>(layernum) == m_visualization_target_layer) &&
+      (m_visualization_target_side < 0 || static_cast<int>(side) == m_visualization_target_side);
+  const bool capture_debug = m_visualize_single_cloud &&
+                             matches_target &&
+                             (!m_visualization_done || m_visualize_all_matches);
+ if(capture_debug==true) std::cout<<" m_visualize_single_cloud "<<m_visualize_single_cloud<<" capture_debug "<<capture_debug<<" matches_target "<<matches_target<<"  m_visualization_done "<<m_visualization_done<<" m_visualize_all_matches "<<m_visualize_all_matches<<std::endl;
+  
+  std::vector<DebugPadContribution> debug_contribs;
+  std::vector<DebugSample> debug_samples_storage;
+  std::vector<DebugSample>* debug_samples = nullptr;
+  const bool need_samples = capture_debug;
+  if (need_samples)
+  {
+    debug_samples_storage.reserve(7000);
+
+    debug_samples = &debug_samples_storage;
+  }
+
+
 
   // make the charge distribution gaussian
   double rphi = phi * radius;
@@ -1054,32 +1500,87 @@ void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(const unsigned int side, const 
   int phibin_high = LayerGeom->get_phibin(philim_low, side);
   int npads = phibin_high - phibin_low;
 
-  for (int ipad = 0; ipad <= npads; ipad++)
+    if (capture_debug)
   {
-    int pad_now = phibin_low + ipad;
-    // if(phibin_low<0 && phibin_high<0) pad_now = phibin_high + ipad;
-    //  check that we do not exceed the maximum number of pads, wrap if necessary
-    if (pad_now >= phibins)
-    {
-      pad_now -= phibins;
-    }
-   
-    int look_pad =  pad_now ;
-    while(look_pad>= ntpc_phibins_sector[tpc_module]){
-      look_pad-=ntpc_phibins_sector[tpc_module];
+    const int reserve_count = (npads >= 0) ? (npads + 2) : 2;
+    debug_contribs.reserve(static_cast<size_t>(reserve_count));
+  }
+
+
+  for (int dL = -1; dL <= +1; ++dL) {
+    int otherLayer = static_cast<int>(layernum) + dL;
+    if (otherLayer < 7) continue;
+    if (otherLayer >= static_cast<int>(Pads.size())) continue;
+
+
+    const int module_for_other =
+        static_cast<int>((otherLayer - 7) / 16);
+    if (module_for_other != tpc_module) {
+      continue;
     }
 
-    look_pad = ntpc_phibins_sector[tpc_module] - look_pad -1;
-    
-    auto  padinfo = Pads[layernum][look_pad];
-    
-    double charge = integratedDensityOfCircleAndPad( xNew, yNew, cloud_sig_rp , padinfo.vertices);
-    phibin_pad.push_back(pad_now);
-    phibin_pad_share.push_back(charge);
-    /*std::cout<<"   SERF    zigzags: ipad " << ipad << " pad_now " << pad_now << " charge " << charge<<" look_pad "<<look_pad<<" ntpc_phibins_sector[tpc_module] "<<ntpc_phibins_sector[tpc_module]
-              << " pad cx " << padinfo.cx << " cy " << padinfo.cy
-              << " phi center " << LayerGeom->get_phicenter(pad_now, side) <<" pad phi center  "<<padinfo.phi<< std::endl;
-     */
+      for (int ipad = 0; ipad <= npads; ipad++)
+      {
+        int pad_now = phibin_low + ipad;
+        // if(phibin_low<0 && phibin_high<0) pad_now = phibin_high + ipad;
+        //  check that we do not exceed the maximum number of pads, wrap if necessary
+        if (pad_now >= phibins)
+        {
+          pad_now -= phibins;
+        }
+      
+        int look_pad =  pad_now ;
+        while(look_pad>= ntpc_phibins_sector[tpc_module]){
+          look_pad-=ntpc_phibins_sector[tpc_module];
+        }
+
+        look_pad = ntpc_phibins_sector[tpc_module] - look_pad -1;
+        
+        auto  padinfo = Pads[layernum][look_pad];
+        
+      //  double charge = integratedDensityOfCircleAndPad( xNew, yNew, cloud_sig_rp , padinfo.vertices);
+
+    double charge = integratedDensityOfCircleAndPad( xNew, yNew, cloud_sig_rp , padinfo.vertices, 0.0, debug_samples);
+            if (capture_debug && charge > 0.0)
+    {
+      DebugPadContribution dbg;
+      dbg.pad_bin = pad_now;
+      dbg.charge = charge;
+      dbg.pad_phi = LayerGeom->get_phicenter(pad_now, side);
+      dbg.polygon = padinfo.vertices;
+      debug_contribs.push_back(std::move(dbg));
+    }
+        pad_layer.push_back(static_cast<unsigned int>(otherLayer));
+        phibin_pad.push_back(pad_now);
+        phibin_pad_share.push_back(charge);
+        /*std::cout<<"   SERF    zigzags: ipad " << ipad << " pad_now " << pad_now << " charge " << charge<<" look_pad "<<look_pad<<" ntpc_phibins_sector[tpc_module] "<<ntpc_phibins_sector[tpc_module]
+                  << " pad cx " << padinfo.cx << " cy " << padinfo.cy
+                  << " phi center " << LayerGeom->get_phicenter(pad_now, side) <<" pad phi center  "<<padinfo.phi<< std::endl;
+        */
+      }
+  }
+//std::cout<<" capture_debug "<<capture_debug<<" debug_contribs size "<<debug_contribs.size()<<std::endl;
+    if (capture_debug && debug_samples && !debug_contribs.empty())
+  {
+    VisualizationCircle this_circle{xNew, yNew, _nsigmas * cloud_sig_rp};
+    if (m_visualize_all_matches)
+    {
+      m_visualization_aggregate_samples.insert(m_visualization_aggregate_samples.end(),
+                                               debug_samples->begin(), debug_samples->end());
+      m_visualization_circles.push_back(this_circle);
+      for (const auto &pad : debug_contribs) m_visualization_pad_union[pad.pad_bin] = pad;
+
+      maybeVisualizeAvalanche(side, layernum, phi, rad_gem, cloud_sig_rp, xNew, yNew, debug_contribs,
+                              m_visualization_aggregate_samples, m_visualization_circles);
+    }
+    else
+    {
+      std::vector<VisualizationCircle> single_circle{this_circle};
+      maybeVisualizeAvalanche(side, layernum, phi, rad_gem, cloud_sig_rp, xNew, yNew, debug_contribs,
+                              *debug_samples, single_circle);
+      m_visualization_done = true;
+    }
+    ++m_visualization_cloud_counter;
   }
 
   return;
