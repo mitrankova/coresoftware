@@ -300,6 +300,10 @@ int PHG4TpcElectronDrift::InitRun(PHCompositeNode *topNode)
 
   electrons_per_gev = (Tpc_NTot / Tpc_dEdx) * 1e6;
 
+  std::cout<<"PHG4ElectronDrift:: "<<std::endl;
+  std::cout<<"         TPC gas mixture: Ne " << Ne_frac*100 << "%, Ar " << Ar_frac*100 << "%, CF4 " << CF4_frac*100 << "%, N2 " << N2_frac*100 << "%, isobutane " << isobutane_frac*100 << "%" << std::endl;
+  std::cout << std::format("        TPC ionization: dE/dx = {:.3f} keV/cm, Ntot = {:.1f} number/cm, electrons/GeV = {:.1f}", Tpc_dEdx, Tpc_NTot, electrons_per_gev) << std::endl;
+
   // min_time to max_time is the time window for accepting drifted electrons after the trigger
   min_time = 0.0;
   max_time = layergeom->get_max_driftlength() / layergeom->get_drift_velocity_sim() + layergeom->get_extended_readout_time();
