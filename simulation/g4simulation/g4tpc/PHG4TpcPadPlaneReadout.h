@@ -227,7 +227,9 @@ double max_radii_module[3]={399.85222874031024, 569.695373910603, 753.6667758418
     double y = 0.0;
     double radius = 0.0;
   };
-
+ size_t g_map_call_count = 0;
+ size_t g_zigzag_call_count = 0;
+ size_t g_integration_call_count = 0;
   void maybeVisualizeAvalanche(unsigned int side,
                                unsigned int layernum,
                                double phi,
@@ -238,6 +240,7 @@ double max_radii_module[3]={399.85222874031024, 569.695373910603, 753.6667758418
                                const std::vector<DebugPadContribution> &contribs,
                                const std::vector<DebugSample> &samples,
                                const std::vector<VisualizationCircle> &circles);
+    std::vector<int> getLayersToCheck(unsigned int layernum, double rad_gem,  double cloud_sig_rp) const;
 
   bool m_visualize_single_cloud = false;
   bool m_visualization_done = false;
