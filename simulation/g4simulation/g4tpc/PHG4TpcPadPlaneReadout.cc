@@ -1133,7 +1133,7 @@ double PHG4TpcPadPlaneReadout::integratedDensityOfCircleAndPad(
             // OPTIMIZATION 9: Only do expensive polygon test if needed
             // For non-debug mode, we could even skip polygon checks if pad is convex
             // and use a faster bounding check
-            //if (!pointInPolygon(x, y, pad)) continue;
+            if (!pointInPolygon(x, y, pad)) continue;
             
             const double density = gaussConst * std::exp(-r_sq / expDenominator);
             total += density;
