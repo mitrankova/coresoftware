@@ -32,9 +32,11 @@
 void AlignmentTransformation::createMap(PHCompositeNode* topNode)
 {
   localVerbosity = 0;
+  use_module_tilt_always = true;
   // The default is to use translation parameters that are in global coordinates
   std::cout << "AlignmentTransformation: use INTT survey geometry = " << use_intt_survey_geometry << std::endl;
   std::cout << "AlignmentTransformation: localVerbosity = " << localVerbosity << std::endl;
+  std::cout << "AlignmentTransformation: use_module_tilt_always = " << use_module_tilt_always << std::endl;
 
   getNodes(topNode);
 
@@ -78,7 +80,7 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
   if (datafile.is_open())
   {
     std::cout << "AlignmentTransformation: Reading alignment parameters from disk file: "
-              << alignmentParamsFile << " localVerbosity = " << localVerbosity << std::endl;
+              << alignmentParamsFile << " localVerbosity = " << localVerbosity << " use_module_tilt_always = " << use_module_tilt_always << std::endl;
   }
   else
   {
