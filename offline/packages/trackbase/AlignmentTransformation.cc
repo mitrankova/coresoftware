@@ -641,6 +641,7 @@ void AlignmentTransformation::extractModuleCenterPositions()
         double mod_radius = (surf_rad_in + surf_rad_out) / 2.0;
 
         TpcModuleRadii[iside][isector][iregion] = mod_radius;
+        cout << "TPC module center radius side " << iside << " sector " << isector << " region " << iregion << " radius " << mod_radius << std::endl;
 
         if (localVerbosity)
         {
