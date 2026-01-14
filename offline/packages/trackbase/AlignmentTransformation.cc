@@ -32,7 +32,7 @@
 void AlignmentTransformation::createMap(PHCompositeNode* topNode)
 {
   localVerbosity = 0;
-  use_module_tilt_always = true;
+  //use_module_tilt_always = true;
   // The default is to use translation parameters that are in global coordinates
   std::cout << "AlignmentTransformation: use INTT survey geometry = " << use_intt_survey_geometry << std::endl;
   std::cout << "AlignmentTransformation: localVerbosity = " << localVerbosity << std::endl;
@@ -247,7 +247,7 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
       unsigned int nlayers = 1;
       unsigned int test_layer = TrkrDefs::getLayer(hitsetkey);
       unsigned int layer_begin = test_layer;
-      if (test_layer < 3)
+      if (use_module_tilt_always == true && test_layer < 3)
       {
         // This is a TPC module hitsetkey ("test_layer" will be 0, 1, 2)
         nlayers = 16;
@@ -263,7 +263,7 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
       {
         TrkrDefs::hitsetkey this_hitsetkey = TpcDefs::genHitSetKey(this_layer, sector, side);
 
-        //  std::cout << " *** module hitsetkey " << hitsetkey << " this_hitsetkey " << this_hitsetkey << " this layer " << this_layer << " side " << side << " sector " << sector << std::endl;
+          std::cout << " *** module hitsetkey " << hitsetkey << " this_hitsetkey " << this_hitsetkey << " this layer " << this_layer << " side " << side << " sector " << sector << std::endl;
 
         // is this correct??????
         int subsurfkey_min = (1 - side) * 144 + (144 - sector * 12) - 12 - 6;
@@ -279,7 +279,7 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
           surf = surfMaps.getTpcSurface(this_hitsetkey, (unsigned int) sskey);
 
           Eigen::Vector3d localFrameTranslation(0, 0, 0);
-          if (test_layer < 4 || use_module_tilt_always)
+          if (test_layer < 4 && use_module_tilt_always)
           {
             // get the local frame translation that puts the local surface center at the tilted position after the local rotations are applied
             unsigned int this_region = (this_layer - 7) / 16;                                           // 0-2
@@ -429,19 +429,20 @@ Acts::Transform3 AlignmentTransformation::newMakeTransform(const Surface& surf, 
   {
     if (trkrid == TrkrDefs::tpcId)
     {
-      transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
+      if (use_module_tilt_always) transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
+      else transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * mpLocalRotationAffine * actsRotationAffine;
     }
     else
     {
       if(use_new_silicon_rotation_order)
-	{
-	  transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
-	}
-      else
-	{
-	  // needed for backward compatibility to existing local rotations in MVTX
-	  transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * mpLocalRotationAffine * actsRotationAffine;
-	}
+      {
+        transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
+      }
+          else
+      {
+        // needed for backward compatibility to existing local rotations in MVTX
+        transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * mpLocalRotationAffine * actsRotationAffine;
+      }
     }
   }
 
