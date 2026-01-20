@@ -8,7 +8,9 @@
 #include <ffarawobjects/MvtxRawEvtHeaderv2.h>
 #include <ffarawobjects/MvtxRawHitContainerv1.h>
 #include <ffarawobjects/MvtxRawHitv1.h>
+
 #include <fun4all/Fun4AllUtils.h>
+#include <fun4all/InputFileHandlerReturnCodes.h>
 
 #include <phool/PHCompositeNode.h>
 #include <phool/PHNodeIterator.h>  // for PHNodeIterator
@@ -30,6 +32,7 @@ SingleMvtxPoolInput::SingleMvtxPoolInput(const std::string &name)
   : SingleStreamingInput(name)
   , plist(new Packet *[2])
 {
+  
   m_rawHitContainerName = "MVTXRAWHIT";
 }
 
@@ -54,7 +57,7 @@ void SingleMvtxPoolInput::FillPool(const uint64_t minBCO)
   }
   while (GetEventiterator() == nullptr)  // at startup this is a null pointer
   {
-    if (!OpenNextFile())
+    if (OpenNextFile() == InputFileHandlerReturnCodes::FAILURE)
     {
       AllDone(1);
       return;
@@ -68,7 +71,7 @@ void SingleMvtxPoolInput::FillPool(const uint64_t minBCO)
     while (!evt)
     {
       fileclose();
-      if (!OpenNextFile())
+      if (OpenNextFile() == InputFileHandlerReturnCodes::FAILURE)
       {
         AllDone(1);
         return;
@@ -104,7 +107,7 @@ void SingleMvtxPoolInput::FillPool(const uint64_t minBCO)
         plist[i]->identify();
       }
 
-      if (poolmap.find(plist[i]->getIdentifier()) == poolmap.end())
+      if (!poolmap.contains(plist[i]->getIdentifier()))
       {
         if (Verbosity() > 1)
         {
@@ -202,8 +205,29 @@ void SingleMvtxPoolInput::FillPool(const uint64_t minBCO)
     for (const auto &lv1Bco : gtmL1BcoSet)
     {
       auto it = m_BclkStack.lower_bound(lv1Bco);
-      const auto &tmp_it = (lv1Bco == *it ? it : m_BclkStack.cend());
-      const auto &strb_it = (it == m_BclkStack.begin()) ? tmp_it : --it;
+//      auto const strb_it = (it == m_BclkStack.begin()) ? (*it == lv1Bco ? it : m_BclkStack.cend()) : --it;
+// this is equivalent but human readable for the above:
+      auto strb_it = m_BclkStack.cend(); 
+
+      if (it == m_BclkStack.begin())
+      {
+	if (*it == lv1Bco)
+	{
+	  strb_it = it;
+	}
+	else
+	{
+	  strb_it = m_BclkStack.cend();
+	}
+      }
+      else
+      {
+	// safe because it != begin()
+	auto prev = it;
+	--prev;
+	strb_it = prev;
+      }
+     
       if (strb_it != m_BclkStack.cend())
       {
         if (StreamingInputManager())
@@ -351,13 +375,15 @@ bool SingleMvtxPoolInput::GetSomeMoreEvents()
         // 		<< std::dec << std::endl;
         return true;
       }
-      std::cout << PHWHERE << Name() << ": erasing FEE " << bcliter.first
-                << " with stuck bclk: " << std::hex << bcliter.second
-                << " current bco range: 0x" << m_MvtxRawHitMap.begin()->first
-                << ", to: 0x" << highest_bclk << ", delta: " << std::dec
-                << (highest_bclk - m_MvtxRawHitMap.begin()->first)
-                << std::dec << std::endl;
-      toerase.insert(bcliter.first);
+      
+              std::cout << PHWHERE << Name() << ": erasing FEE " << bcliter.first
+                  << " with stuck bclk: " << std::hex << bcliter.second
+                  << " current bco range: 0x" << m_MvtxRawHitMap.begin()->first
+                  << ", to: 0x" << highest_bclk << ", delta: " << std::dec
+                  << (highest_bclk - m_MvtxRawHitMap.begin()->first)
+                  << std::dec << std::endl;
+        toerase.insert(bcliter.first);
+     
     }
   }
   for (auto iter : toerase)

@@ -185,7 +185,7 @@ int Fun4AllStreamingInputManager::run(const int /*nevents*/)
   //     }
   //     else
   //     {
-  //       if (OpenNextFile())
+  //       if (OpenNextFile() == InputFileHandlerReturnCodes::FAILURE)
   //       {
   //         std::cout << Name() << ": No Input file from filelist opened" << std::endl;
   //         return -1;
@@ -776,10 +776,15 @@ int Fun4AllStreamingInputManager::FillIntt()
   {
     h_taggedAllFee_intt->Fill(refbcobitshift);
   }
-  auto InttRawHitMapIt = m_InttRawHitMap.begin();
-  while (InttRawHitMapIt->first <= select_crossings)
+
+  for (auto& [bco, hitinfo] : m_InttRawHitMap)
   {
-    for (auto *intthititer : InttRawHitMapIt->second.InttRawHitVector)
+    if (bco > select_crossings)
+    {
+      break;
+    }
+
+    for (auto *intthititer : hitinfo.InttRawHitVector)
     {
       if (Verbosity() > 1)
       {
@@ -789,11 +794,9 @@ int Fun4AllStreamingInputManager::FillIntt()
       }
       inttcont->AddHit(intthititer);
     }
-    ++InttRawHitMapIt;
-  }
+  } 
   return 0;
 }
-
 int Fun4AllStreamingInputManager::FillMvtx()
 {
   int iret = FillMvtxPool();
@@ -833,12 +836,12 @@ int Fun4AllStreamingInputManager::FillMvtx()
   }
   select_crossings += m_RefBCO;
 
-  uint64_t ref_bco_minus_range = m_RefBCO <= m_mvtx_negative_bco ? 0 : m_RefBCO - m_mvtx_negative_bco;
+  uint64_t ref_bco_minus_range = m_RefBCO < m_mvtx_negative_bco ? 0 : m_RefBCO - m_mvtx_negative_bco;
   if (Verbosity() > 2)
   {
     std::cout << "select MVTX crossings"
               << " from 0x" << std::hex << ref_bco_minus_range
-              << " to 0x" << select_crossings 
+              << " to 0x" << select_crossings - m_mvtx_bco_range
               << std::dec << std::endl;
   }
   // m_MvtxRawHitMap.empty() does not need to be checked here, FillMvtxPool returns non zero
@@ -968,18 +971,26 @@ int Fun4AllStreamingInputManager::FillMvtx()
   }
   taggedPacketsFEEs.clear();
 
-  auto MvtxRawHitMapIt = m_MvtxRawHitMap.begin();
   uint64_t lower_limit = m_mvtx_is_triggered ? select_crossings : select_crossings - m_mvtx_bco_range - m_mvtx_negative_bco;
   uint64_t upper_limit = m_mvtx_is_triggered ? select_crossings + m_mvtx_bco_range : select_crossings;
 
-  while (lower_limit <= MvtxRawHitMapIt->first && MvtxRawHitMapIt->first <= upper_limit)
+  for (auto& [bco, hitinfo] : m_MvtxRawHitMap)
   {
+    if (bco < lower_limit)
+    {
+      continue;
+    }
+    if (bco > upper_limit)
+    {
+      break;
+    }
+
     if (Verbosity() > 2)
     {
-      std::cout << "Adding 0x" << std::hex << MvtxRawHitMapIt->first
+      std::cout << "Adding 0x" << std::hex << bco 
                 << " ref: 0x" << select_crossings << std::dec << std::endl;
     }
-    for (auto *mvtxFeeIdInfo : MvtxRawHitMapIt->second.MvtxFeeIdInfoVector)
+    for (auto *mvtxFeeIdInfo : hitinfo.MvtxFeeIdInfoVector)
     {
       if (Verbosity() > 1)
       {
@@ -987,9 +998,9 @@ int Fun4AllStreamingInputManager::FillMvtx()
       }
       mvtxEvtHeader->AddFeeIdInfo(mvtxFeeIdInfo);
     }
-    mvtxEvtHeader->AddL1Trg(MvtxRawHitMapIt->second.MvtxL1TrgBco);
+    mvtxEvtHeader->AddL1Trg(hitinfo.MvtxL1TrgBco);
 
-    for (auto *mvtxhititer : MvtxRawHitMapIt->second.MvtxRawHitVector)
+    for (auto *mvtxhititer : hitinfo.MvtxRawHitVector)
     {
       if (Verbosity() > 1)
       {
@@ -997,8 +1008,6 @@ int Fun4AllStreamingInputManager::FillMvtx()
       }
       mvtxcont->AddHit(mvtxhititer);
     }
-
-    ++MvtxRawHitMapIt;
   }
 
   return 0;
@@ -1355,7 +1364,7 @@ int Fun4AllStreamingInputManager::FillMicromegasPool()
 
 int Fun4AllStreamingInputManager::FillMvtxPool()
 {
-  uint64_t ref_bco_minus_range = m_RefBCO <= m_mvtx_negative_bco ? m_mvtx_negative_bco : m_RefBCO - m_mvtx_negative_bco;
+  uint64_t ref_bco_minus_range = m_RefBCO < m_mvtx_negative_bco ? m_mvtx_negative_bco : m_RefBCO - m_mvtx_negative_bco;
   for (auto *iter : m_MvtxInputVector)
   {
     if (Verbosity() > 3)
