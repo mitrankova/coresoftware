@@ -32,11 +32,9 @@
 void AlignmentTransformation::createMap(PHCompositeNode* topNode)
 {
   localVerbosity = 0;
-  //use_module_tilt_always = true;
   // The default is to use translation parameters that are in global coordinates
   std::cout << "AlignmentTransformation: use INTT survey geometry = " << use_intt_survey_geometry << std::endl;
   std::cout << "AlignmentTransformation: localVerbosity = " << localVerbosity << std::endl;
-  std::cout << "AlignmentTransformation: use_module_tilt_always = " << use_module_tilt_always << std::endl;
 
   getNodes(topNode);
 
@@ -80,7 +78,7 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
   if (datafile.is_open())
   {
     std::cout << "AlignmentTransformation: Reading alignment parameters from disk file: "
-              << alignmentParamsFile << " localVerbosity = " << localVerbosity << " use_module_tilt_always = " << use_module_tilt_always << std::endl;
+              << alignmentParamsFile << " localVerbosity = " << localVerbosity << std::endl;
   }
   else
   {
@@ -247,7 +245,7 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
       unsigned int nlayers = 1;
       unsigned int test_layer = TrkrDefs::getLayer(hitsetkey);
       unsigned int layer_begin = test_layer;
-      if (use_module_tilt_always == true && test_layer < 3)
+      if (test_layer < 3)
       {
         // This is a TPC module hitsetkey ("test_layer" will be 0, 1, 2)
         nlayers = 16;
@@ -263,7 +261,7 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
       {
         TrkrDefs::hitsetkey this_hitsetkey = TpcDefs::genHitSetKey(this_layer, sector, side);
 
-          std::cout << " *** module hitsetkey " << hitsetkey << " this_hitsetkey " << this_hitsetkey << " this layer " << this_layer << " side " << side << " sector " << sector << std::endl;
+        //  std::cout << " *** module hitsetkey " << hitsetkey << " this_hitsetkey " << this_hitsetkey << " this layer " << this_layer << " side " << side << " sector " << sector << std::endl;
 
         // is this correct??????
         int subsurfkey_min = (1 - side) * 144 + (144 - sector * 12) - 12 - 6;
@@ -279,7 +277,8 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
           surf = surfMaps.getTpcSurface(this_hitsetkey, (unsigned int) sskey);
 
           Eigen::Vector3d localFrameTranslation(0, 0, 0);
-          if (test_layer < 4 && use_module_tilt_always)
+	  use_module_tilt = false;
+          if (test_layer < 4 || use_module_tilt_always)
           {
             // get the local frame translation that puts the local surface center at the tilted position after the local rotations are applied
             unsigned int this_region = (this_layer - 7) / 16;                                           // 0-2
@@ -287,6 +286,9 @@ void AlignmentTransformation::createMap(PHCompositeNode* topNode)
             double this_radius = std::sqrt(this_center[0] * this_center[0] + this_center[1] * this_center[1]);
             float moduleRadius = TpcModuleRadii[side][sector][this_region];                                     // radius of the center of the module in cm
             localFrameTranslation = getTpcLocalFrameTranslation(moduleRadius, this_radius, sensorAngles) * 10;  // cm to mm
+
+	    // set this flag for later use 
+	    use_module_tilt = true;
           }
 
           Acts::Transform3 transform;
@@ -419,71 +421,83 @@ Acts::Transform3 AlignmentTransformation::newMakeTransform(const Surface& surf, 
   Acts::Transform3 transform;
   //! If we read the survey parameters directly, that is the full transform
   if (survey)
-  {
-    //! The millepede affines will just be what was read in, which was the
-    //! survey information. This should (in principle) be equivalent to
-    //! the ideal position + any misalignment
-    transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * mpLocalRotationAffine;
-  }
+    {
+      //! The millepede affines will just be what was read in, which was the
+      //! survey information. This should (in principle) be equivalent to
+      //! the ideal position + any misalignment
+      transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * mpLocalRotationAffine;
+    }
   else
-  {
-    if (trkrid == TrkrDefs::tpcId)
     {
-      if (use_module_tilt_always) transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
-      else transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * mpLocalRotationAffine * actsRotationAffine;
-    }
-    else
-    {
-      if(use_new_silicon_rotation_order)
-      {
-        transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
-      }
-          else
-      {
-        // needed for backward compatibility to existing local rotations in MVTX
-        transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * mpLocalRotationAffine * actsRotationAffine;
-      }
-    }
-  }
+      // not survey. this is the normal usage
 
+      if (trkrid == TrkrDefs::tpcId)
+	{
+	  if(use_module_tilt)
+	    {
+	      // use module tilt transforms with local rotation followed by local translation 
+	      transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
+	    }
+	  else
+	    {
+	      // backward compatibility for old alignment params sets
+	      transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * mpLocalRotationAffine * actsRotationAffine;
+	    }
+	}
+      else
+	{
+	  // silicon and TPOT	  
+	  if(use_new_silicon_rotation_order)
+	    {
+	      // use new transform order for silicon as well as TPC
+	      transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * actsRotationAffine * mpLocalTranslationAffine * mpLocalRotationAffine;
+	    }
+	  else
+	    {
+	      // needed for backward compatibility to existing local rotation parmeter sets in silicon
+	      transform = mpGlobalTranslationAffine * mpGlobalRotationAffine * actsTranslationAffine * mpLocalRotationAffine * actsRotationAffine;
+	    }
+	}
+    }
+  
   if (localVerbosity)
-  {
-    Acts::Transform3 actstransform = actsTranslationAffine * actsRotationAffine;
-
-    std::cout << "newMakeTransform" << std::endl;
-    std::cout << "Input sensorAngles: " << std::endl
-              << sensorAngles << std::endl;
-    std::cout << "Input sensorAnglesGlobal: " << std::endl
-              << sensorAnglesGlobal << std::endl;
-    std::cout << "Input translation: " << std::endl
-              << millepedeTranslation << std::endl;
-    std::cout << "mpLocalRotationAffine: " << std::endl
-              << mpLocalRotationAffine.matrix() << std::endl;
-    std::cout << "mpLocalTranslationAffine: " << std::endl
-              << mpLocalTranslationAffine.matrix() << std::endl;
-    std::cout << "actsRotationAffine: " << std::endl
-              << actsRotationAffine.matrix() << std::endl;
-    std::cout << "actsTranslationAffine: " << std::endl
-              << actsTranslationAffine.matrix() << std::endl;
-    std::cout << "mpRotationGlobalAffine: " << std::endl
-              << mpGlobalRotationAffine.matrix() << std::endl;
-    std::cout << "mpTranslationGlobalAffine: " << std::endl
-              << mpGlobalTranslationAffine.matrix() << std::endl;
-    std::cout << "Overall transform: " << std::endl
-              << transform.matrix() << std::endl;
-    std::cout << "overall * idealinv " << std::endl
-              << (transform * actstransform.inverse()).matrix() << std::endl;
-    std::cout << "overall - ideal " << std::endl;
-    for (int test = 0; test < transform.matrix().rows(); test++)
     {
-      for (int test2 = 0; test2 < transform.matrix().cols(); test2++)
-      {
-        std::cout << transform(test, test2) - actstransform(test, test2) << ", ";
-      }
-      std::cout << std::endl;
+      Acts::Transform3 actstransform = actsTranslationAffine * actsRotationAffine;
+      
+      std::cout << "newMakeTransform" << std::endl;
+      std::cout << "Input sensorAngles: " << std::endl
+		<< sensorAngles << std::endl;
+      std::cout << "Input sensorAnglesGlobal: " << std::endl
+		<< sensorAnglesGlobal << std::endl;
+      std::cout << "Input translation: " << std::endl
+		<< millepedeTranslation << std::endl;
+      std::cout << "mpLocalRotationAffine: " << std::endl
+		<< mpLocalRotationAffine.matrix() << std::endl;
+      std::cout << "mpLocalTranslationAffine: " << std::endl
+		<< mpLocalTranslationAffine.matrix() << std::endl;
+      std::cout << "actsRotationAffine: " << std::endl
+		<< actsRotationAffine.matrix() << std::endl;
+      std::cout << "actsTranslationAffine: " << std::endl
+		<< actsTranslationAffine.matrix() << std::endl;
+      std::cout << "mpRotationGlobalAffine: " << std::endl
+		<< mpGlobalRotationAffine.matrix() << std::endl;
+      std::cout << "mpTranslationGlobalAffine: " << std::endl
+		<< mpGlobalTranslationAffine.matrix() << std::endl;
+      std::cout << "Overall transform: " << std::endl
+		<< transform.matrix() << std::endl;
+      std::cout << "overall * idealinv " << std::endl
+		<< (transform * actstransform.inverse()).matrix() << std::endl;
+      std::cout << "overall - ideal " << std::endl;
+      for (int test = 0; test < transform.matrix().rows(); test++)
+	{
+	  for (int test2 = 0; test2 < transform.matrix().cols(); test2++)
+	    {
+	      std::cout << transform(test, test2) - actstransform(test, test2) << ", ";
+	    }
+	  std::cout << std::endl;
+	}
     }
-  }
-
+  
   return transform;
 }
 
@@ -642,7 +656,6 @@ void AlignmentTransformation::extractModuleCenterPositions()
         double mod_radius = (surf_rad_in + surf_rad_out) / 2.0;
 
         TpcModuleRadii[iside][isector][iregion] = mod_radius;
-        std::cout << "TPC module center radius side " << iside << " sector " << isector << " region " << iregion << " radius " << mod_radius << std::endl;
 
         if (localVerbosity)
         {
