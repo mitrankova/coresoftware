@@ -84,7 +84,23 @@ int CaloValid::Init(PHCompositeNode* /*unused*/)
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-// Note: InitRun cannot be made static as it modifies member variable m_species
+/**
+ * @brief Determine the collision species for the current run and set m_species.
+ *
+ * Reads the RunHeader from the provided node tree, inspects the run number, and sets
+ * the member variable `m_species` to one of the recognized values ("pp", "AuAu", "OO").
+ * If the run number does not match any known range or the RunHeader is missing,
+ * `m_species` remains unchanged (default behavior uses "pp" elsewhere) and a diagnostic
+ * message may be printed depending on verbosity.
+ *
+ * Recognized mappings:
+ * - RUN2PP_*  -> "pp"
+ * - RUN2AUAU_* or RUN3AUAU_* -> "AuAu"
+ * - RUN3OO_*  -> "OO"
+ *
+ * @param topNode Top-level node of the event tree used to locate the RunHeader.
+ * @return int EVENT_OK on success.
+ */
 int CaloValid::InitRun(PHCompositeNode* topNode)
 {
   RunHeader* runhdr = findNode::getClass<RunHeader>(topNode, "RunHeader");
@@ -115,6 +131,14 @@ int CaloValid::InitRun(PHCompositeNode* topNode)
       if (Verbosity() > 0)
       {
         std::cout << "This run is from Run-3 Au+Au.\n";
+      }
+    }
+    else if (runnumber >= RunnumberRange::RUN3OO_FIRST && runnumber <= RunnumberRange::RUN3OO_LAST)
+    {
+      m_species = "OO";
+      if (Verbosity() > 0)
+      {
+        std::cout << "This run is from Run-3 O+O.\n";
       }
     }
     else
@@ -205,6 +229,26 @@ int CaloValid::process_towers(PHCompositeNode* topNode)
     ihcaldownscale = 55000. / 300.;
     ohcaldownscale = 265000. / 600.;
     mbddownscale = 2800.0;
+    adc_threshold_hcal = 30;
+    adc_threshold_emcal = 70;
+
+    emcal_hit_threshold = 0.5;  // GeV
+    ohcal_hit_threshold = 0.5;
+    ihcal_hit_threshold = 0.25;
+
+    emcal_highhit_threshold = 3.0;
+    ohcal_highhit_threshold = 3.0;
+    ihcal_highhit_threshold = 3.0;
+  }
+  else if (m_species == "OO")
+  {
+    // Scale by the ratio of nucleons: OO/AuAu
+    float scale_factor = 16. / 197.;
+
+    emcaldownscale = (1350000. / 800.) * scale_factor;
+    ihcaldownscale = (55000. / 300.) * scale_factor;
+    ohcaldownscale = (265000. / 600.) * scale_factor;
+    mbddownscale = 2800.0 * scale_factor;
     adc_threshold_hcal = 30;
     adc_threshold_emcal = 70;
 
