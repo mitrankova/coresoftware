@@ -17,8 +17,8 @@
 typedef std::map<TrkrDefs::hitsetkey, std::vector<TrkrDefs::hitkey>> hitMaskTpc;
 
 class PHCompositeNode;
-class PHG4TpcCylinderGeomContainer;
-class PHG4TpcCylinderGeom;
+class PHG4TpcGeomContainer;
+class PHG4TpcGeom;
 class TH2;
 class TF1;
 class TNtuple;
@@ -110,13 +110,13 @@ void makeChannelMask(hitMaskTpc& aMask, const std::string& dbName, const std::st
   std::vector<unsigned int> layersInRadialWindow(double rad, double sigma, double nsig) const;
 
   // utility: find geometry for a given layer
-  PHG4TpcCylinderGeom* getGeomForLayer(unsigned int layer) const;
+  PHG4TpcGeom* getGeomForLayer(unsigned int layer) const;
 
   // utility: determine sector for (x,y) and rotate to a canonical frame
   void rotatePointToSector(double x, double y, unsigned int side, int& sectorFound, double& xNew, double& yNew);
 
-  PHG4TpcCylinderGeomContainer *GeomContainer = nullptr;
-  PHG4TpcCylinderGeom *LayerGeom = nullptr;
+  PHG4TpcGeomContainer *GeomContainer = nullptr;
+  PHG4TpcGeom *LayerGeom = nullptr;
 
   // Minimum effective electrons per (pad,tbin) to create a hit.
   // Default to 0.0 so all contributions are kept unless configured otherwise.

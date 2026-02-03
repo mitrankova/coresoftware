@@ -120,7 +120,7 @@ PHG4TpcPadPlaneReadout::layersInRadialWindow(double rad, double sigma, double ns
   const double rmin = rad - nsig*sigma;
   const double rmax = rad + nsig*sigma;
 
-  PHG4TpcCylinderGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
+  PHG4TpcGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
   for (auto it = layerrange.first; it != layerrange.second; ++it)
   {
     const auto* g = it->second;
@@ -135,10 +135,10 @@ PHG4TpcPadPlaneReadout::layersInRadialWindow(double rad, double sigma, double ns
 }
 
 // get geometry for a given layer (utility; linear scan is fine here)
-PHG4TpcCylinderGeom*
+PHG4TpcGeom*
 PHG4TpcPadPlaneReadout::getGeomForLayer(unsigned int layer) const
 {
-  PHG4TpcCylinderGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
+  PHG4TpcGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
   for (auto it = layerrange.first; it != layerrange.second; ++it)
     if (static_cast<unsigned int>(it->second->get_layer()) == layer) return it->second;
   return nullptr;
@@ -279,7 +279,7 @@ int PHG4TpcPadPlaneReadout::InitRun(PHCompositeNode *topNode)
         return Fun4AllReturnCodes::ABORTRUN;
       }
 
-      PHG4TpcCylinderGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
+      PHG4TpcGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
       for (auto it = layerrange.first; it != layerrange.second; ++it)
       {
         unsigned int layer = static_cast<unsigned int>(it->second->get_layer());
@@ -976,7 +976,7 @@ norm1 = 0.0;
     double total_mass = 0.0;
     for (unsigned int layer_cand : cand_layers)
     {
-      PHG4TpcCylinderGeom* thisGeom = getGeomForLayer(layer_cand);
+      PHG4TpcGeom* thisGeom = getGeomForLayer(layer_cand);
       if (!thisGeom) continue;
       LayerGeom = thisGeom;
       sector_min_Phi = LayerGeom->get_sector_min_phi();
@@ -995,7 +995,7 @@ norm1 = 0.0;
     // Pass 2: fill hits with correct per-layer mass fraction
     for (unsigned int layer_cand : cand_layers)
     {
-      PHG4TpcCylinderGeom* thisGeom = getGeomForLayer(layer_cand);
+      PHG4TpcGeom* thisGeom = getGeomForLayer(layer_cand);
       if (!thisGeom) continue;
       LayerGeom = thisGeom;
       sector_min_Phi = LayerGeom->get_sector_min_phi();
@@ -1079,7 +1079,7 @@ norm1 = 0.0;
     double total_radw = 0.0;
     for (unsigned int layer_cand : cand_layers)
     {
-      PHG4TpcCylinderGeom* thisGeom = getGeomForLayer(layer_cand);
+      PHG4TpcGeom* thisGeom = getGeomForLayer(layer_cand);
       if (!thisGeom) continue;
       const double rcen = thisGeom->get_radius();
       const double thk  = thisGeom->get_thickness();
@@ -1095,7 +1095,7 @@ norm1 = 0.0;
     // Pass 2: per-layer phi sharing and fill
     for (unsigned int layer_cand : cand_layers)
     {
-      PHG4TpcCylinderGeom* thisGeom = getGeomForLayer(layer_cand);
+      PHG4TpcGeom* thisGeom = getGeomForLayer(layer_cand);
       if (!thisGeom) continue;
       LayerGeom = thisGeom;
       sector_min_Phi = LayerGeom->get_sector_min_phi();
@@ -2079,155 +2079,7 @@ void PHG4TpcPadPlaneReadout::populate_zigzag_phibins(const unsigned int side, co
   return;
 }
 
-void PHG4TpcPadPlaneReadout::populate_tbins(const double t, const std::array<double, 2> &cloud_sig_tt, std::vector<int> &tbin_adc, std::vector<double> &tbin_adc_share)
-{
-  int tbin = LayerGeom->get_zbin(t);
-  if (tbin < 0 || tbin > LayerGeom->get_zbins())
-  {
-    if (Verbosity() > 0)
-    {
-      std::cout << " t bin " << tbin << " for time " << t << " is outside range of " << LayerGeom->get_zbins() << " so return" << std::endl;
-    }
-    return;
-  }
 
-  double tstepsize = LayerGeom->get_zstep();
-  double tdisp = t - LayerGeom->get_zcenter(tbin);
-
-  if (Verbosity() > 1000)
-  {
-    std::cout << "     input:  t " << t << " tbin " << tbin << " tstepsize " << tstepsize << " t center " << LayerGeom->get_zcenter(tbin) << " tdisp " << tdisp << std::endl;
-  }
-
-  // Because of diffusion, hits can be shared across the membrane, so we allow all t bins
-  int min_cell_tbin = 0;
-  int max_cell_tbin = NTBins - 1;
-
-  double cloud_sig_tt_inv[2];
-  cloud_sig_tt_inv[0] = 1. / cloud_sig_tt[0];
-  cloud_sig_tt_inv[1] = 1. / cloud_sig_tt[1];
-
-  int zsect = 0;
-  if (t < 0)
-  {
-    zsect = -1;
-  }
-  else
-  {
-    zsect = 1;
-  }
-
-  int n_zz = int(3 * (cloud_sig_tt[0] + cloud_sig_tt[1]) / (2.0 * tstepsize) + 1);
-  if (Verbosity() > 1000)
-  {
-    std::cout << " n_zz " << n_zz << " cloud_sigzz[0] " << cloud_sig_tt[0] << " cloud_sig_tt[1] " << cloud_sig_tt[1] << std::endl;
-  }
-  for (int it = -n_zz; it != n_zz + 1; ++it)
-  {
-    int cur_t_bin = tbin + it;
-    if ((cur_t_bin < min_cell_tbin) || (cur_t_bin > max_cell_tbin))
-    {
-      continue;
-    }
-
-    if (Verbosity() > 1000)
-    {
-      std::cout << " it " << it << " cur_t_bin " << cur_t_bin << " min_cell_tbin " << min_cell_tbin << " max_cell_tbin " << max_cell_tbin << std::endl;
-    }
-
-    double t_integral = 0.0;
-    if (it == 0)
-    {
-      // the crossover between lead and tail shaping occurs in this bin
-      int index1 = -1;
-      int index2 = -1;
-      if (zsect == -1)
-      {
-        index1 = 0;
-        index2 = 1;
-      }
-      else
-      {
-        index1 = 1;
-        index2 = 0;
-      }
-
-      double tLim1 = 0.0;
-      double tLim2 = 0.5 * M_SQRT2 * (-0.5 * tstepsize - tdisp) * cloud_sig_tt_inv[index1];
-      // 1/2 * the erf is the integral probability from the argument Z value to zero, so this is the integral probability between the Z limits
-      double t_integral1 = 0.5 * (std::erf(tLim1) - std::erf(tLim2));
-
-      if (Verbosity() > 1000)
-      {
-        if (LayerGeom->get_layer() == print_layer)
-        {
-          std::cout << "   populate_tbins:  cur_t_bin " << cur_t_bin << "  center t " << LayerGeom->get_zcenter(cur_t_bin)
-                    << " index1 " << index1 << "  tLim1 " << tLim1 << " tLim2 " << tLim2 << " t_integral1 " << t_integral1 << std::endl;
-        }
-      }
-
-      tLim2 = 0.0;
-      tLim1 = 0.5 * M_SQRT2 * (0.5 * tstepsize - tdisp) * cloud_sig_tt_inv[index2];
-      double t_integral2 = 0.5 * (std::erf(tLim1) - std::erf(tLim2));
-
-      if (Verbosity() > 1000)
-      {
-        if (LayerGeom->get_layer() == print_layer)
-        {
-          std::cout << "   populate_tbins:  cur_t_bin " << cur_t_bin << "  center t " << LayerGeom->get_zcenter(cur_t_bin)
-                    << " index2 " << index2 << "  tLim1 " << tLim1 << " tLim2 " << tLim2 << " t_integral2 " << t_integral2 << std::endl;
-        }
-      }
-
-      t_integral = t_integral1 + t_integral2;
-    }
-    else
-    {
-      // The non zero bins are entirely in the lead or tail region
-      // lead or tail depends on which side of the membrane
-      int index = 0;
-      if (it < 0)
-      {
-        if (zsect == -1)
-        {
-          index = 0;
-        }
-        else
-        {
-          index = 1;
-        }
-      }
-      else
-      {
-        if (zsect == -1)
-        {
-          index = 1;
-        }
-        else
-        {
-          index = 0;
-        }
-      }
-      double tLim1 = 0.5 * M_SQRT2 * ((it + 0.5) * tstepsize - tdisp) * cloud_sig_tt_inv[index];
-      double tLim2 = 0.5 * M_SQRT2 * ((it - 0.5) * tstepsize - tdisp) * cloud_sig_tt_inv[index];
-      t_integral = 0.5 * (std::erf(tLim1) - std::erf(tLim2));
-
-      if (Verbosity() > 1000)
-      {
-        if (LayerGeom->get_layer() == print_layer)
-        {
-          std::cout << "   populate_tbins:  t_bin " << cur_t_bin << "  center t " << LayerGeom->get_zcenter(cur_t_bin)
-                    << " index " << index << "  tLim1 " << tLim1 << " tLim2 " << tLim2 << " t_integral " << t_integral << std::endl;
-        }
-      }
-    }
-
-    tbin_adc.push_back(cur_t_bin);
-    tbin_adc_share.push_back(t_integral);
-  }
-
-  return;
-}
 
 void PHG4TpcPadPlaneReadout::UseGain(const int flagToUseGain)
 {
