@@ -88,13 +88,21 @@ void SetMaskChannelsFromFile()
   void SetVisualizationDumpFile(const std::string &file);
   void SetVisualizeAllClouds(bool enable);
 
+  protected: 
+  double Ts = 80.0; // SAMPA peaking time
+
+  double sampaShapingResponseFunction(double tzero, double t) const;
+
+  void sampaTimeDistribution(double tzero, 
+                             std::vector<int> &adc_tbin, 
+                             std::vector<double> &adc_tbin_share);
 
  private:
 
   //  void populate_rectangular_phibins(const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void populate_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
   void SERF_zigzag_phibins(const unsigned int side, const unsigned int layernum, const double phi, const double rad_gem, const double cloud_sig_rp, std::vector<int> &pad_phibin, std::vector<double> &pad_phibin_share);
-  void populate_tbins(const double t, const std::array<double, 2> &cloud_sig_tt, std::vector<int> &adc_tbin, std::vector<double> &adc_tbin_share);
+  //void populate_tbins(const double t, const std::array<double, 2> &cloud_sig_tt, std::vector<int> &adc_tbin, std::vector<double> &adc_tbin_share);
 
   double check_phi(const unsigned int side, const double phi, const double radius);
 void makeChannelMask(hitMaskTpc& aMask, const std::string& dbName, const std::string& totalChannelsToMask);

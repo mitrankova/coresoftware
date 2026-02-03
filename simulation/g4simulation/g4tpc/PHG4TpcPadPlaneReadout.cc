@@ -2,8 +2,8 @@
 
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <g4detectors/PHG4CellDefs.h>  // for genkey, keytype
-#include <g4detectors/PHG4TpcCylinderGeom.h>
-#include <g4detectors/PHG4TpcCylinderGeomContainer.h>
+#include <g4detectors/PHG4TpcGeom.h>
+#include <g4detectors/PHG4TpcGeomContainer.h>
 
 #include <g4main/PHG4Hit.h>  // for PHG4Hit
 #include <g4main/PHG4HitContainer.h>
@@ -48,10 +48,13 @@
 #include <limits>
 #include <cmath>
 #include <cstdlib>  // for getenv
+#include <format>
 #include <iostream>
 #include <map>      // for _Rb_tree_cons...
 #include <utility>  // for pair
 #include <fstream>  // for std::ifstream
+#include <chrono>
+#include <iomanip>
 
 class PHCompositeNode;
 class TrkrHitTruthAssoc;
@@ -150,8 +153,8 @@ int PHG4TpcPadPlaneReadout::InitRun(PHCompositeNode *topNode)
   {
     return reply;
   }
-  const std::string seggeonodename = "CYLINDERCELLGEOM_SVTX";
-  GeomContainer = findNode::getClass<PHG4TpcCylinderGeomContainer>(topNode, seggeonodename);
+  const std::string seggeonodename = "TPCGEOMCONTAINER";
+  GeomContainer = findNode::getClass<PHG4TpcGeomContainer>(topNode, seggeonodename);
   assert(GeomContainer);
   if(m_use_module_gain_weights)
     {
@@ -526,56 +529,7 @@ double PHG4TpcPadPlaneReadout::getSingleEGEMAmplification(TF1 *f)
 }
 
 
-/* //_________________________________________________________
-inline void rotatePointToSector(double x, double y,
-                                double& xNew, double& yNew,
-                                int& sector,
-                                const unsigned int side)
-{
-    // 1) compute original phi in [−π, +π]
-    double phi = std::atan2(y, x);
 
-    sector = -1;
-    for (int s = 0; s < 12; ++s) {
-        double min_phi = sector_min_Phi[side][s];
-        double max_phi = sector_max_Phi[side][s];
-        
-        // Check if phi is in this sector
-        // Note: need to handle wraparound at ±π
-        if (min_phi <= max_phi) {
-            if (phi >= min_phi && phi <= max_phi) {
-                sector = s;
-                break;
-            }
-        } else {  // wraps around ±π
-            if (phi >= min_phi || phi <= max_phi) {
-                sector = s;
-                break;
-            }
-        }
-    }
-
-    double dphi = sector_min_phi[side][sector] - sector_min_phi[side][2];
-    // 2) find the 30°‐wide wedge it lives in
-    const double PI = std::acos(-1.0);
-    double wedgeWidth = 2.0 * PI / TpcDefs::NSectors;  // = π/6
-    // shift by half‐wedge so floor() bins correctly
-    sector = static_cast<int>(
-        std::floor((phi + wedgeWidth * 0.5) / wedgeWidth)
-    ) % TpcDefs::NSectors;
-    if (sector < 0) sector += TpcDefs::NSectors;  // ensure non‐negative
-
-    // 3) how much to rotate so that this sector’s center → +90° (π/2)
-    double targetCenter   = PI / 2.0;            // 12 o'clock
-    double originalCenter = sector * wedgeWidth; // e.g. 3 → π/2
-    double dphi = targetCenter - originalCenter;
-
-    // 4) apply rotation in polar coords
-    double R      = std::hypot(x, y);
-    double phiRot = phi + dphi;
-    xNew = R * std::cos(phiRot);
-    yNew = R * std::sin(phiRot);
-} */
 void PHG4TpcPadPlaneReadout::rotatePointToSector(
     double x, double y,
     unsigned int side,
@@ -789,8 +743,8 @@ void PHG4TpcPadPlaneReadout::MapToPadPlane(
 
   // Find which readout layer this electron ends up in
 
-  PHG4TpcCylinderGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
-  for (PHG4TpcCylinderGeomContainer::ConstIterator layeriter = layerrange.first;
+  PHG4TpcGeomContainer::ConstRange layerrange = GeomContainer->get_begin_end();
+  for (PHG4TpcGeomContainer::ConstIterator layeriter = layerrange.first;
        layeriter != layerrange.second;
        ++layeriter)
   {
@@ -982,7 +936,7 @@ norm1 = 0.0;
 
   std::vector<int> adc_tbin;
   std::vector<double> adc_tbin_share;
-  populate_tbins(t_gem, sigmaL, adc_tbin, adc_tbin_share);
+  sampaTimeDistribution(t_gem, adc_tbin, adc_tbin_share);
   /* if (adc_tbin.size() == 0)  { */
   /* pass_data.neff_electrons = 0; */
   /* } else { */
@@ -2311,6 +2265,7 @@ void PHG4TpcPadPlaneReadout::SetDefaultParameters()
   set_default_double_param("tpc_maxradius_inner", 40.249);  // 40.0);  // cm
   set_default_double_param("tpc_maxradius_mid", 57.475);    // 60.0);
   set_default_double_param("tpc_maxradius_outer", 75.911);  // 77.0);  // from Tom
+  set_default_double_param("tpc_sampa_peaking_time", 80.0); // ns
 
   // Minimum effective electrons per (pad,tbin) to create a hit
   // Set to 0.0 by default to include all contributions
@@ -2368,6 +2323,7 @@ void PHG4TpcPadPlaneReadout::UpdateInternalParameters()
 
   averageGEMGain = get_double_param("gem_amplification");
   polyaTheta = get_double_param("polya_theta");
+  Ts = get_double_param("tpc_sampa_peaking_time");
 
 }
 void PHG4TpcPadPlaneReadout::makeChannelMask(hitMaskTpc &aMask, const std::string &dbName, const std::string &totalChannelsToMask)
@@ -2405,4 +2361,66 @@ void PHG4TpcPadPlaneReadout::makeChannelMask(hitMaskTpc &aMask, const std::strin
   }
 
   delete cdbttree;
+
+}
+// -------------------------------------------------------------------------
+// REPLACEMENT FUNCTIONS (From Code A)
+// -------------------------------------------------------------------------
+
+void PHG4TpcPadPlaneReadout::sampaTimeDistribution(double tzero, std::vector<int> &adc_tbin, std::vector<double> &adc_tbin_share)
+{
+  // tzero is the arrival time of the electron at the GEM
+  // Ts is the sampa peaking time
+  // Assume the response is over after 8 clock cycles (400 ns)
+  int nclocks = 8;
+
+  double tstepsize = LayerGeom->get_zstep();
+  int tbinzero = LayerGeom->get_zbin(tzero);
+
+  // the first clock bin is a special case
+  double tfirst_end = LayerGeom->get_zcenter(tbinzero) + tstepsize/2.0;
+  double vfirst_end = sampaShapingResponseFunction(tzero, tfirst_end); 
+  double first_integral = (vfirst_end / 2.0) * (tfirst_end - tzero);
+    
+  adc_tbin.push_back(tbinzero);
+  adc_tbin_share.push_back(first_integral);
+
+  for(int iclock = 1; iclock < nclocks; ++iclock)
+  {
+    int tbin = tbinzero + iclock;
+    if (tbin < 0 || tbin > LayerGeom->get_zbins())
+    {
+      if (Verbosity() > 0)
+	    {
+	      std::cout << " t bin " << tbin << " is outside range of " << LayerGeom->get_zbins() << " so skip it" << std::endl;
+	    }
+      continue;
+    }
+
+    // get the beginning and end of this clock bin
+    double tcenter = LayerGeom->get_zcenter(tbin);
+    double tlow = tcenter - tstepsize/2.0;
+
+    // sample the voltage in this bin at nsamples locations
+    int nsamples = 6;
+    double sample_step = tstepsize / (double) nsamples;
+    double sintegral = 0;
+    for(int isample = 0; isample < nsamples; ++isample)
+    {
+      double tnow = tlow + (double) isample * sample_step + sample_step / 2.0;   
+      double vnow = sampaShapingResponseFunction(tzero, tnow);
+      sintegral += vnow * sample_step;
+    }
+
+    adc_tbin.push_back(tbin);
+    adc_tbin_share.push_back(sintegral);      
+  }
+}
+  
+double PHG4TpcPadPlaneReadout::sampaShapingResponseFunction(double tzero, double t) const
+{
+  // The specific SAMPA response function: V ~ (t/tau)^4 * exp(-4t/tau)
+  //if (t < tzero) return 0.0; 
+  double v = exp(-4.0 * (t - tzero) / Ts) * pow((t - tzero) / Ts, 4.0);
+  return v;
 }
