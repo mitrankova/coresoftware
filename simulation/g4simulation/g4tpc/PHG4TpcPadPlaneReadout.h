@@ -91,7 +91,7 @@ class PHG4TpcPadPlaneReadout : public PHG4TpcPadPlane
   double check_phi(const unsigned int side, const double phi, const double radius);
 
   void makeChannelMask(hitMaskTpc& aMask, const std::string& dbName, const std::string& totalChannelsToMask);
-
+ void rotatePointToSector(double x, double y, unsigned int side, int& sectorFound, double& xNew, double& yNew);
   PHG4TpcGeomContainer *GeomContainer = nullptr;
   PHG4TpcGeom *LayerGeom = nullptr;
 

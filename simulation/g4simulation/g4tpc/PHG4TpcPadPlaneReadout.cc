@@ -430,7 +430,7 @@ double PHG4TpcPadPlaneReadout::getSingleEGEMAmplification(TF1 *f)
 }
 
 //_________________________________________________________
-inline void rotatePointToSector(double x, double y,
+/*inline void rotatePointToSector(double x, double y,
                                 double& xNew, double& yNew,
                                 int& sector)
 {
@@ -456,7 +456,94 @@ inline void rotatePointToSector(double x, double y,
     double phiRot = phi + dphi;
     xNew = R * std::cos(phiRot);
     yNew = R * std::sin(phiRot);
+}*/
+void PHG4TpcPadPlaneReadout::rotatePointToSector(
+    double x, double y,
+    unsigned int side,
+    int&    sectorFound,
+    double& xNew, double& yNew
+)
+{
+  // ---- helpers -------------------------------------------------------------
+  const double PI = std::acos(-1.0);
+  const double TWOPI = 2.0*PI;
+
+  auto wrap = [&](double a) {
+    while (a <= -PI) a += TWOPI;
+    while (a >   PI) a -= TWOPI;
+    return a;
+  };
+
+  // check a ∈ [lo,hi) with wrap at ±π
+  auto inInterval = [&](double a, double lo, double hi) {
+    a  = wrap(a); lo = wrap(lo); hi = wrap(hi);
+    if (lo <= hi) return (a >= lo && a < hi);
+    // interval crosses the branch cut
+    return (a >= lo || a < hi);
+  };
+
+  // midpoint on the circle between lo..hi (shorter arc)
+  auto mid = [&](double lo, double hi) {
+    double d = wrap(hi - lo);
+    return wrap(lo + 0.5*d);
+  };
+
+  // ---- 1) angle & sector ---------------------------------------------------
+  const double R   = std::hypot(x, y);
+  const double phi = wrap(std::atan2(y, x));
+
+  // sector_min_Phi / sector_max_Phi are class members filled from LayerGeom
+  sectorFound = -1;
+  for (int s = 0; s < 12; ++s)
+  {
+    if (inInterval(phi, sector_min_Phi[side][s], sector_max_Phi[side][s]))
+    { sectorFound = s; break; }
+  }
+
+  // If exactly on a boundary, pick nearest sector center
+  if (sectorFound < 0)
+  {
+    double best = 1e9; int bestS = 0;
+    for (int s = 0; s < 12; ++s)
+    {
+      double c = mid(sector_min_Phi[side][s], sector_max_Phi[side][s]);
+      double d = std::fabs(wrap(phi - c));
+      if (d < best) { best = d; bestS = s; }
+    }
+    sectorFound = bestS;
+  }
+
+  // ---- 2) rotate to the reference sector (sector 2) ------------------------
+  // The SERF reference polygons are defined in the frame of sector 2.
+  // Rotate points from the found sector into the sector-2 frame by the
+  // boundary difference:
+  //   side 0 (South): dphi = sec_min[found] - sec_min[2]
+  //   side 1 (North): dphi = sec_max[found] - sec_max[2]
+  // We then rotate the point by -dphi so that boundaries align.
+  const int refSector = 2;
+  const double currentBoundary = (side == 0)
+      ? sector_min_Phi[side][sectorFound]
+      : sector_max_Phi[side][sectorFound];
+  const double refBoundary = (side == 0)
+      ? sector_min_Phi[side][refSector]
+      : sector_max_Phi[side][refSector];
+  const double dphi = wrap(currentBoundary - refBoundary);
+  const double phiRot = wrap(phi - dphi);
+
+  xNew = R * std::cos(phiRot);
+  yNew = R * std::sin(phiRot);
+
+  // ---- 3) mirror for South side to match reference polygon handedness ------
+  // Looking from the South side outward (toward +z), the x-axis is to the left
+  // while the reference sector has x to the right, so flip x for side 0.
+  constexpr unsigned SOUTH_SIDE = 0;
+  if (side == SOUTH_SIDE)
+  {
+    xNew = -xNew;
+  }
 }
+
+
 //_________________________________________________________
 bool PHG4TpcPadPlaneReadout::pointInPolygon(
     double x, double y,
@@ -1527,7 +1614,8 @@ void PHG4TpcPadPlaneReadout::SERF_zigzag_phibins(
   double xNew = 0.0;
   double yNew = 0.0;
 
-  rotatePointToSector(x, y, xNew, yNew, sector1);
+  //rotatePointToSector(x, y, xNew, yNew, sector1);
+  rotatePointToSector( x,  y,  side, sector1, xNew, yNew);
   int tpc_module = (int)(layernum - 7)/16;
 
   //auto t_after_rotation = std::chrono::high_resolution_clock::now();
