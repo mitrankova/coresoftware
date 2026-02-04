@@ -143,6 +143,9 @@ class PHG4TpcElectronDrift : public SubsysReco, public PHParameterInterface
   bool zero_bfield{false};
   bool m_use_PDG_gas_params{false};
 
+
+   std::vector<double> cluster_size_cdf;
+
   std::unique_ptr<TrkrHitSetContainer> temp_hitsetcontainer;
   std::unique_ptr<TrkrHitSetContainer> single_hitsetcontainer;
   std::unique_ptr<PHG4TpcPadPlane> padplane;
