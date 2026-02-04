@@ -364,7 +364,7 @@ void TrackResiduals::fillFailedSeedTree(PHCompositeNode* topNode, std::set<unsig
     }
     m_trackid = svtxseedmap->find(seed);
     auto tpcseedindex = seed->get_tpc_seed_index();
-    if (tpc_seed_ids.find(tpcseedindex) != tpc_seed_ids.end())
+    if (tpc_seed_ids.contains(tpcseedindex))
     {
       continue;
     }
@@ -664,7 +664,7 @@ void TrackResiduals::fillClusterTree(TrkrClusterContainer* clusters,
         m_clusmaxadc = cluster->getMaxAdc();
         m_scluslx = cluster->getLocalX();
         m_scluslz = cluster->getLocalY();
-        auto para_errors = m_clusErrPara.get_clusterv5_modified_error(cluster, m_sclusgr, key);
+        auto para_errors = ClusterErrorPara::get_clusterv5_modified_error(cluster, m_sclusgr, key);
         m_phisize = cluster->getPhiSize();
         m_zsize = cluster->getZSize();
         m_scluselx = std::sqrt(para_errors.first);
@@ -1147,7 +1147,7 @@ void TrackResiduals::fillClusterBranchesKF(TrkrDefs::cluskey ckey, SvtxTrack* tr
   }
 
   float clusr = r(clusglob_moved.x(), clusglob_moved.y());
-  auto para_errors = m_clusErrPara.get_clusterv5_modified_error(cluster,
+  auto para_errors = ClusterErrorPara::get_clusterv5_modified_error(cluster,
                                                                 clusr, ckey);
   m_cluselx.push_back(sqrt(para_errors.first));
   m_cluselz.push_back(sqrt(para_errors.second));
@@ -1425,7 +1425,7 @@ void TrackResiduals::fillClusterBranchesSeeds(TrkrDefs::cluskey ckey,  // SvtxTr
   m_cluslz.push_back(loc.y());
 
   float clusr = r(clusglob_moved.x(), clusglob_moved.y());
-  auto para_errors = m_clusErrPara.get_clusterv5_modified_error(cluster,
+  auto para_errors = ClusterErrorPara::get_clusterv5_modified_error(cluster,
                                                                 clusr, ckey);
   m_cluselx.push_back(sqrt(para_errors.first));
   m_cluselz.push_back(sqrt(para_errors.second));
@@ -1728,6 +1728,7 @@ void TrackResiduals::createBranches()
   m_clustree->Branch("timebucket", &m_timebucket, "m_timebucket/I");
   m_clustree->Branch("segtype", &m_segtype, "m_segtype/I");
   m_clustree->Branch("tile", &m_tileid, "m_tileid/I");
+  m_clustree->Branch("layer", &m_scluslayer, "m_scluslayer/I");
 
   m_tree = new TTree("residualtree", "A tree with track, cluster, and state info");
   m_tree->Branch("run", &m_runnumber, "m_runnumber/I");

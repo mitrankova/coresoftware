@@ -248,7 +248,7 @@ void SiliconSeedsQA::createHistos()
   }
 
   {
-    h_trackcrossing = new TH1F(std::string(getHistoPrefix() + "trackcrossing").c_str(), "Track beam bunch crossing;Track crossing;Entries", 110, -10, 100);
+    h_trackcrossing = new TH1F(std::string(getHistoPrefix() + "trackcrossing").c_str(), "Track beam bunch crossing;Track crossing;Entries", 1000, -200, 800);
     hm->registerHisto(h_trackcrossing);
   }
 
@@ -319,7 +319,7 @@ void SiliconSeedsQA::createHistos()
   }
 
   {
-    h_vx_vy = new TH2F(std::string(getHistoPrefix() + "vx_vy").c_str(), "Vertex x vs y;Vertex x [cm];Vertex y [cm];Entries", 500, -2.5, 2.5, 500, -2.5, 2.5);
+    h_vx_vy = new TH2F(std::string(getHistoPrefix() + "vx_vy").c_str(), "Vertex x vs y;Vertex x [cm];Vertex y [cm];Entries", 500, -0.5, 0.5, 500, -0.5, 0.5);
     hm->registerHisto(h_vx_vy);
   }
 
