@@ -594,6 +594,7 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
   TrackFitUtils::position_vector_t xypoints;
   TrackFitUtils::position_vector_t rzpoints;
   TrackFitUtils::position_vector_t yzpoints;
+  int idx=0;
   for (auto& pos : clusPos)
   {
     float clusr = r(pos.x(), pos.y());
@@ -601,17 +602,23 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
     {
       clusr *= -1;
     }
-
+    //const uint8_t tid_u8 = TrkrDefs::getTrkrId(keys.at(idx));
+    //const TrkrDefs::TrkrId tid = static_cast<TrkrDefs::TrkrId>(tid_u8);
+    const TrkrDefs::TrkrId tid = static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(keys.at(idx)));
+    //std::cout <<"!!!!Detector ID "<< static_cast<unsigned>(tid_u8) <<" (" << TrkrDefs::TrkrNames.at(tid) << ")   Cluster r: " << clusr << std::endl;
     // exclude 1d tpot clusters for now
 
-    if (std::fabs(clusr) > 20.)
+    //if ( TrkrDefs::getTrkrId(keys.at(idx))!=TrkrDefs::TrkrId::mvtxId && TrkrDefs::getTrkrId(keys.at(idx))!=TrkrDefs::TrkrId::micromegasId )//(std::fabs(clusr) > 20.)
+    if( tid != TrkrDefs::mvtxId && tid != TrkrDefs::micromegasId )
     {
+     //std::cout <<" ------Continue Detector ID (" << TrkrDefs::TrkrNames.at(tid) << ")   Cluster r: " << clusr << std::endl;
       continue;
     }
 
     rzpoints.emplace_back(pos.z(), clusr);
     xypoints.emplace_back(pos.x(), pos.y());
     yzpoints.emplace_back(pos.z(), pos.y());
+    idx++;
   }
 
   auto xyparams = TrackFitUtils::line_fit(xypoints);
