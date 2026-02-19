@@ -584,35 +584,35 @@ void TrackResiduals::lineFitClusters(std::vector<TrkrDefs::cluskey>& keys,
                                      TrkrClusterContainer* clusters,
                                      const short int& crossing)
 {
-  std::vector<Acts::Vector3> clusPos;
-  for (auto& key : keys)
-  {
-    auto *cluster = clusters->findCluster(key);
-    const Acts::Vector3 pos = m_globalPositionWrapper.getGlobalPositionDistortionCorrected(key, cluster, crossing);
-    clusPos.push_back(pos);
-  }
   TrackFitUtils::position_vector_t xypoints;
   TrackFitUtils::position_vector_t rzpoints;
   TrackFitUtils::position_vector_t yzpoints;
-  for (auto& pos : clusPos)
+
+  for (const auto& key : keys)
   {
+    // Require TPC
+    const TrkrDefs::TrkrId tid =
+      static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(key));
+    if (tid != TrkrDefs::tpcId) continue;
+
+    auto* cluster = clusters->findCluster(key);
+    if (!cluster) continue;
+
+    // Exclude edge clusters
+    if (cluster->getEdge() != 0) continue;
+
+    const Acts::Vector3 pos =
+      m_globalPositionWrapper.getGlobalPositionDistortionCorrected(
+        key, cluster, crossing);
+
     float clusr = r(pos.x(), pos.y());
-    if (pos.y() < 0)
-    {
-      clusr *= -1;
-    }
-
-    // exclude 1d tpot clusters for now
-
-    if (std::fabs(clusr) > 80 || (m_linefitTPCOnly && std::fabs(clusr) < 20.))
-    {
-      continue;
-    }
+    if (pos.y() < 0) clusr *= -1.0f;
 
     rzpoints.emplace_back(pos.z(), clusr);
     xypoints.emplace_back(pos.x(), pos.y());
     yzpoints.emplace_back(pos.z(), pos.y());
   }
+
 
   auto xyparams = TrackFitUtils::line_fit(xypoints);
   auto rzparams = TrackFitUtils::line_fit(rzpoints);
