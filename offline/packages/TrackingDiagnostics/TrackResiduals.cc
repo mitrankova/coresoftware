@@ -513,12 +513,14 @@ void TrackResiduals::fillFailedSeedTree(PHCompositeNode* topNode, std::set<unsig
 }
 void TrackResiduals::fillVertexTree(PHCompositeNode* topNode)
 {
-  auto *svtxvertexmap = findNode::getClass<SvtxVertexMap>(topNode, "SvtxVertexMap");
+  auto *svtxvertexmap = findNode::getClass<SvtxVertexMap>(topNode, m_vertexMapName);
   auto *trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
   auto *clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
   if (svtxvertexmap)
   {
+    
     m_nvertices = svtxvertexmap->size();
+    std::cout << "TrackResiduals::fillVertexTree - FOUND vertex map " << m_vertexMapName << " on node tree; Nvertices = "<<m_nvertices << std::endl;
     clearClusterStateVectors();
 
     for (const auto& [key, vertex] : *svtxvertexmap)
@@ -558,6 +560,9 @@ void TrackResiduals::fillVertexTree(PHCompositeNode* topNode)
 
       m_vertextree->Fill();
     }
+  }else
+  {
+    std::cout << "TrackResiduals::fillVertexTree - No vertex map " << m_vertexMapName << " found on node tree" << std::endl;
   }
 }
 
@@ -2084,7 +2089,7 @@ void TrackResiduals::fillResidualTreeKF(PHCompositeNode* topNode)
       findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
   auto *trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
   auto *clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
-  auto *vertexmap = findNode::getClass<SvtxVertexMap>(topNode, "SvtxVertexMap");
+  auto *vertexmap = findNode::getClass<SvtxVertexMap>(topNode, m_vertexMapName);
   auto *alignmentmap = findNode::getClass<SvtxAlignmentStateMap>(topNode, m_alignmentMapName);
   auto *geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
   std::set<unsigned int> tpc_seed_ids;
@@ -2428,7 +2433,7 @@ void TrackResiduals::fillResidualTreeSeeds(PHCompositeNode* topNode)
       findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
   auto *trackmap = findNode::getClass<SvtxTrackMap>(topNode, m_trackMapName);
   auto *clustermap = findNode::getClass<TrkrClusterContainer>(topNode, m_clusterContainerName);
-  auto *vertexmap = findNode::getClass<SvtxVertexMap>(topNode, "SvtxVertexMap");
+  auto *vertexmap = findNode::getClass<SvtxVertexMap>(topNode, m_vertexMapName);
   auto *alignmentmap = findNode::getClass<SvtxAlignmentStateMap>(topNode, m_alignmentMapName);
   auto *geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
   auto *iteration_map = findNode::getClass<TrkrClusterIterationMap>(topNode, "TrkrClusterIterationMap");
