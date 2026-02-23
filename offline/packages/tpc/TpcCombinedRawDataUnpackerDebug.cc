@@ -263,7 +263,7 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
     std::string varname = "layer";
     int layer = m_cdbttree->GetIntValue(key, varname);
     // antenna pads will be in 0 layer
-    if (layer <= 0)
+    if (layer <= 6)
     {
       continue;
     }
@@ -272,8 +272,18 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
     uint16_t sampch = tpchit->get_sampachannel();
     uint16_t sam = tpchit->get_samples();
     max_time_range = sam;
+     
+   /* int region = 2;
+    if(layer < 7 + 16)
+    {
+      region = 0;
+    }
+    else if( layer < 7 + 32)
+    {
+      region = 1;
+    }*/
     varname = "phi";  // + std::to_string(key);
-    double phi = -1 * pow(-1, side) * m_cdbttree->GetDoubleValue(key, varname) - M_PI/2. + (sector % 12) * M_PI / 6;
+    double phi = ((side == 1 ? 1 : -1) * (m_cdbttree->GetDoubleValue(key, varname) - M_PI / 2.)) + ((sector % 12) * M_PI / 6);
     PHG4TpcGeom* layergeom = geom_container->GetLayerCellGeom(layer);
     unsigned int phibin = layergeom->get_phibin(phi, side);
     if (m_writeTree)
@@ -326,6 +336,29 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
           hit->setAdc(float(adc));
 
           hit_set_container_itr->second->addHitSpecificKey(hit_key, hit);
+          if (m_writeTree)
+          {
+            float fXh[18];
+            int nh = 0;
+
+            fXh[nh++] = _ievent - 1;
+            fXh[nh++] = 0;                        // gtm_bco;
+            fXh[nh++] = 0;                        // packet_id;
+            fXh[nh++] = 0;                        // ep;
+            fXh[nh++] = mc_sectors[sector % 12];  // Sector;
+            fXh[nh++] = side;
+            fXh[nh++] = fee;
+            fXh[nh++] = 0;  // channel;
+            fXh[nh++] = 0;  // sampadd;
+            fXh[nh++] = 0;  // sampch;
+            fXh[nh++] = (float) phibin;
+            fXh[nh++] = (float) t;
+            fXh[nh++] = layer;
+            fXh[nh++] = (float(adc) );
+
+
+            m_ntup_hits->Fill(fXh);
+          }
         }
       }
     }
@@ -463,10 +496,13 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
           }
         }
         float threshold_cut = (hpedwidth * m_ped_sig_cut);
+        std::cout<<"adc "<<adc<<" ped "<<hpedestal<<" width "<<hpedwidth<<" cut "<<(float(adc) - hpedestal)<<" threshold "<<threshold_cut<<std::endl;
+
         if (m_do_zs_emulation)
         {
           threshold_cut = m_zs_threshold;
         }
+        threshold_cut =-1;
         if ((float(adc) - hpedestal) > threshold_cut)
         {
           hit_key = TpcDefs::genHitKey(phibin, (unsigned int) t);
@@ -485,7 +521,7 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
             }
             hit_set_container_itr->second->addHitSpecificKey(hit_key, hit);
           }
-          if (m_writeTree)
+       /*   if (m_writeTree)
           {
             float fXh[18];
             int nh = 0;
@@ -508,7 +544,7 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
             fXh[nh++] = hpedwidth;
 
             m_ntup_hits->Fill(fXh);
-          }
+          }*/
         }
       }
     }
