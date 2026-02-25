@@ -342,15 +342,15 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
             int nh = 0;
 
             fXh[nh++] = _ievent - 1;
-            fXh[nh++] = 0;                        // gtm_bco;
-            fXh[nh++] = 0;                        // packet_id;
-            fXh[nh++] = 0;                        // ep;
+            fXh[nh++] = gtm_bco;
+            fXh[nh++] = packet_id;
+            fXh[nh++] = ep;
             fXh[nh++] = mc_sectors[sector % 12];  // Sector;
             fXh[nh++] = side;
             fXh[nh++] = fee;
-            fXh[nh++] = 0;  // channel;
-            fXh[nh++] = 0;  // sampadd;
-            fXh[nh++] = 0;  // sampch;
+            fXh[nh++] = channel;
+            fXh[nh++] = sampadd;
+            fXh[nh++] = sampch;
             fXh[nh++] = (float) phibin;
             fXh[nh++] = (float) t;
             fXh[nh++] = layer;
@@ -677,6 +677,31 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
 
         unsigned int fee_key = create_fee_key(side, sector, rx, fee);
         std::map<unsigned int, std::vector<float>>::iterator fee_blm_it = feebaseline_map.find(fee_key);
+        if (m_writeTree)
+        {
+          float fXh[18];
+          int nh = 0;
+
+          fXh[nh++] = _ievent - 1;
+          fXh[nh++] = 0;       // gtm_bco;
+          fXh[nh++] = 0;       // packet_id;
+          fXh[nh++] = 0;       // ep;
+          fXh[nh++] = sector;  // mc_sectors[sector % 12];//Sector;
+          fXh[nh++] = side;
+          fXh[nh++] = fee;
+          fXh[nh++] = 0;  // channel;
+          fXh[nh++] = 0;  // sampadd;
+          fXh[nh++] = 0;  // sampch;
+          fXh[nh++] = (float) phibin;
+          fXh[nh++] = (float) tbin;
+          fXh[nh++] = layer;
+          fXh[nh++] = float(adc);
+          fXh[nh++] = hpedestal2;
+          fXh[nh++] = hpedwidth2;
+          fXh[nh++] = corr;
+
+          m_ntup_hits_corr->Fill(fXh);
+        }
         if (fee_blm_it != feebaseline_map.end())
         {
           corr = (*fee_blm_it).second[tbin] - pedestal_offset;
@@ -750,31 +775,7 @@ int TpcCombinedRawDataUnpackerDebug::process_event(PHCompositeNode* topNode)
                         << std::endl;
             }
 #endif
-            if (m_writeTree)
-            {
-              float fXh[18];
-              int nh = 0;
-
-              fXh[nh++] = _ievent - 1;
-              fXh[nh++] = 0;       // gtm_bco;
-              fXh[nh++] = 0;       // packet_id;
-              fXh[nh++] = 0;       // ep;
-              fXh[nh++] = sector;  // mc_sectors[sector % 12];//Sector;
-              fXh[nh++] = side;
-              fXh[nh++] = fee;
-              fXh[nh++] = 0;  // channel;
-              fXh[nh++] = 0;  // sampadd;
-              fXh[nh++] = 0;  // sampch;
-              fXh[nh++] = (float) phibin;
-              fXh[nh++] = (float) tbin;
-              fXh[nh++] = layer;
-              fXh[nh++] = float(adc);
-              fXh[nh++] = hpedestal2;
-              fXh[nh++] = hpedwidth2;
-              fXh[nh++] = corr;
-
-              m_ntup_hits_corr->Fill(fXh);
-            }
+            
           }
         }
       }
