@@ -246,6 +246,7 @@ int Tpc3DClusterizer::process_event(PHCompositeNode *topNode)
   std::multimap<unsigned int, std::pair<std::pair<TrkrDefs::hitkey, TrkrDefs::hitsetkey>, std::array<int, 3>>> adcMap;
   //  std::cout << "n hitsets: " << std::distance(hitsetrange.first,hitsetrange.second)
   //          << std::endl;
+  std::cout << "looping over hitsets and hits to fill rtree and adcMap" << std::endl;
   for (TrkrHitSetContainer::ConstIterator hitsetitr = hitsetrange.first;
        hitsetitr != hitsetrange.second;
        ++hitsetitr)
@@ -256,13 +257,14 @@ int Tpc3DClusterizer::process_event(PHCompositeNode *topNode)
     unsigned int sector = TpcDefs::getSectorId(hitsetitr->first);
     // PHG4TpcGeom *layergeom = m_geom_container->GetLayerCellGeom(layer);
     //  double r = layergeom->get_radius();
+    std::cout<<"layer: " << layer << " side: " << side << " sector: " << sector << std::endl;
 
     TrkrDefs::hitsetkey hitsetKey = TpcDefs::genHitSetKey(layer, sector, side);
 
     TrkrHitSet::ConstRange hitrangei = hitset->getHits();
     // std::cout << "n hits in set: " << hitset->size()
     //         << std::endl;
-    // int nhits = 0;
+     int nhits = 0;
     for (TrkrHitSet::ConstIterator hitr = hitrangei.first;
          hitr != hitrangei.second;
          ++hitr)
@@ -272,7 +274,7 @@ int Tpc3DClusterizer::process_event(PHCompositeNode *topNode)
       // std::cout << " iphi: " << iphi << " it: " << it << std::endl;
       float_t fadc = (hitr->second->getAdc());  // - m_pedestal;  // proper int rounding +0.5
       unsigned short adc = 0;
-      // std::cout << " nhit: " << nhits++ << "adc: " << fadc << " phi: " << iphi << " it: " << it << std::endl;
+       std::cout << " nhit: " << nhits++ << "adc: " << fadc << " phi: " << iphi << " it: " << it << std::endl;
       if (fadc > 0)
       {
         adc = (unsigned short) fadc;
@@ -383,7 +385,7 @@ int Tpc3DClusterizer::process_event(PHCompositeNode *topNode)
       auto spechitkey = std::make_pair(hitKey, hitsetKey);
       auto keyCoords = std::make_pair(spechitkey, coords);
       adcMap.insert(std::make_pair(adc, keyCoords));
-      // std::cout << "inserting " << " l: " << layer << " iphi: " <<iphi << " t: " << it << std::endl;
+       std::cout << "inserting " << " l: " << layer << " iphi: " <<iphi << " t: " << it << std::endl;
       rtree.insert(std::make_pair(point(1.0 * layer, 1.0 * iphi, 1.0 * it), spechitkey));
     }
   }
