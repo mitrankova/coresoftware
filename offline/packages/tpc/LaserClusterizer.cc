@@ -11,6 +11,7 @@
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
+#include <trackbase/alignmentTransformationContainer.h>
 
 #include <ffaobjects/EventHeader.h>
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -47,6 +48,7 @@
 #include <iostream>
 #include <limits>
 #include <map>  // for _Rb_tree_cons...
+#include <numeric>
 #include <queue>
 #include <set>
 #include <string>
@@ -59,7 +61,7 @@
 namespace bg = boost::geometry;
 namespace bgi = boost::geometry::index;
 
-using point = bg::model::point<float, 3, bg::cs::cartesian>;
+using point = bg::model::point<double, 3, bg::cs::cartesian>;
 using box = bg::model::box<point>;
 using specHitKey = std::pair<TrkrDefs::hitkey, TrkrDefs::hitsetkey>;
 using adcKey = std::pair<unsigned int, specHitKey>;
@@ -145,7 +147,145 @@ namespace
     return par[0] * g * cdf;
   }
 
-  void findConnectedRegions3(std::vector<hitData> &clusHits, std::pair<TrkrDefs::hitkey, TrkrDefs::hitsetkey> &maxKey)
+  void splitWeaklyConnectedRegion(const std::vector<hitData> &region, std::vector<std::vector<hitData>> &outputRegions, int aVerbosity)
+  {
+    int N = region.size();
+    /*
+    std::vector<std::vector<int>> adj(N);
+    for(int i=0; i<N; i++)
+    {
+      for(int j=i+1; j<N; j++)
+      {
+        for(const auto &neigh : neighborOffsets)
+        {
+          if(fabs(region[i].first.get<0>() + neigh.get<0>() - region[j].first.get<0>()) < 0.01 &&
+             fabs(region[i].first.get<1>() + neigh.get<1>() - region[j].first.get<1>()) < 0.01 &&
+             fabs(region[i].first.get<2>() + neigh.get<2>() - region[j].first.get<2>()) < 0.01)
+          {
+            adj[i].push_back(j);
+            adj[j].push_back(i);
+            break;
+          }
+        }
+      }
+    }
+    */
+    std::map<std::tuple<int,int,int>, int> coordIndex;
+    for(int i=0; i<N; i++)
+    {
+      int l = static_cast<int>(std::round(region[i].first.get<0>()));
+      int p = static_cast<int>(std::round(region[i].first.get<1>()));
+      int t = static_cast<int>(std::round(region[i].first.get<2>()));
+      coordIndex[{l,p,t}] = i;
+    }
+    std::vector<std::vector<int>> adj(N);
+    for(int i=0; i<N; i++)
+    {
+      int l = static_cast<int>(std::round(region[i].first.get<0>()));
+      int p = static_cast<int>(std::round(region[i].first.get<1>()));
+      int t = static_cast<int>(std::round(region[i].first.get<2>()));
+      for(const auto &neigh : neighborOffsets)
+      {
+        int nl = l + static_cast<int>(neigh.get<0>());
+        int np = p + static_cast<int>(neigh.get<1>());
+        int nt = t + static_cast<int>(neigh.get<2>());
+        auto it = coordIndex.find({nl,np,nt});
+        if(it != coordIndex.end())
+        {
+          adj[i].push_back(it->second);
+        }
+      }
+    }
+
+    if(aVerbosity > 3) { std::cout << "   constructed adjacency list, average degree = " << std::accumulate(adj.begin(), adj.end(), 0.0, [](double s, auto &v) { return s + v.size(); }) / N << ")" << std::endl;
+}
+
+    std::vector<int> disc(N, -1);
+    std::vector<int> low(N, -1);
+    std::vector<int> parent(N, -1);
+    std::vector<std::pair<int,int>> bridges;
+    int time=0;
+
+    std::function<void(int)> dfs = [&](int u)
+    {
+      disc[u] = low[u] = ++time;
+      for(auto v : adj[u])
+      {
+        if(disc[v] == -1)
+        {
+          parent[v] = u;
+          dfs(v);
+          low[u] = std::min(low[u], low[v]);
+          if(low[v] > disc[u])
+          {
+            bridges.emplace_back(u,v);
+          }
+        }
+        else if(v != parent[u])
+        {
+          low[u] = std::min(low[u], disc[v]);
+        }
+      }
+    };
+
+    for(int i=0; i<N; i++)
+    {
+      if(disc[i] == -1) { dfs(i);
+}
+    }
+
+    if(aVerbosity > 2) { std::cout << "   Found " << bridges.size() << " bridges in region of size " << N << std::endl;
+}
+
+    std::vector<std::vector<int>> adj2 = adj;
+    int removed = 0;
+    for(auto [u,v] : bridges)
+    {
+      if(adj[u].size() > 2 && adj[v].size() > 2)
+      {
+        adj2[u].erase(std::remove(adj2[u].begin(), adj2[u].end(), v), adj2[u].end());
+        adj2[v].erase(std::remove(adj2[v].begin(), adj2[v].end(), u), adj2[v].end());
+        removed++;
+        if(aVerbosity > 3) { std::cout << "      removed weak bridge between nodes " << u << " (deg = " << adj[u].size() << ") and " << v << " (deg = " << adj[v].size() << ")" << std::endl;
+}
+      }
+    }
+
+    if(aVerbosity > 3) { std::cout << "   Removed " << removed << " weak bridges, now finding connected components" << std::endl;
+}
+
+    std::vector<bool> visited(N, false);
+    for(int i=0; i<N; i++)
+    {
+      if(visited[i]) { continue;
+}
+      std::vector<hitData> sub;
+      std::queue<int> q;
+      q.push(i);
+      visited[i] = true;
+      while(!q.empty())
+      {
+        int u = q.front();
+        q.pop();
+        sub.push_back(region[u]);
+        for(auto v : adj2[u])
+        {
+          if(!visited[v])
+          {
+            visited[v] = true;
+            q.push(v);
+          }
+        }
+      }
+      outputRegions.push_back(sub);
+      if(aVerbosity > 3) { std::cout << "      found subregion of size " << sub.size() << std::endl;
+}
+  }
+  if(aVerbosity > 2) { std::cout << "   finished splitting region into " << outputRegions.size() << " subregions" << std::endl;
+}
+}
+
+  void findConnectedRegions3(std::vector<hitData> &clusHits, std::pair<TrkrDefs::hitkey, TrkrDefs::hitsetkey> &maxKey, int aVerbosity)
   {
     std::vector<std::vector<hitData>> regions;
 
@@ -180,16 +320,16 @@ namespace
 
       while (!q.empty())
       {
-        float ix = q.front().first.get<0>();
-        float iy = q.front().first.get<1>();
-        float iz = q.front().first.get<2>();
+        double ix = q.front().first.get<0>();
+        double iy = q.front().first.get<1>();
+        double iz = q.front().first.get<2>();
         q.pop();
 
         for (auto neigh : neighborOffsets)
         {
-          float nx = ix + neigh.get<0>();
-          float ny = iy + neigh.get<1>();
-          float nz = iz + neigh.get<2>();
+          double nx = ix + neigh.get<0>();
+          double ny = iy + neigh.get<1>();
+          double nz = iz + neigh.get<2>();
 
           for (unsigned int v = 0; v < unvisited.size(); v++)
           {
@@ -207,8 +347,61 @@ namespace
       regions.push_back(region);
     }
 
+    if(aVerbosity > 2) { std::cout << "finished with normal region finding, now splitting weakly connected regions" << std::endl;
+}
+
+    std::vector<std::vector<hitData>> refinedRegions;
+    int regionNum = 0;
+    for(auto &region : regions)
+    {
+      std::vector<std::vector<hitData>> tmpRefinedRegions;
+      if(aVerbosity > 2) { std::cout << "starting to split region " << regionNum << " with " << region.size() << " hits" << std::endl;
+}
+      regionNum++;
+      splitWeaklyConnectedRegion(region, tmpRefinedRegions, aVerbosity);
+      if(aVerbosity > 2) { std::cout << "finished splitting region into " << tmpRefinedRegions.size() << std::endl;
+}
+      for(auto &subregion : tmpRefinedRegions)
+      {
+        refinedRegions.push_back(subregion);
+      }
+      if(aVerbosity > 2) { std::cout << "total refined regions so far: " << refinedRegions.size() << std::endl;
+}
+    }
+
+    std::sort(refinedRegions.begin(), refinedRegions.end(), [&](const auto &a, const auto &b)
+    {
+      bool a_has = false;
+      bool b_has = false;
+      for(auto &h : a)
+      {
+        if(h.second.second.first == maxKey.first && h.second.second.second == maxKey.second)
+        {
+          a_has = true;
+          break;
+        }
+      }
+      for(auto &h : b)
+      {
+        if(h.second.second.first == maxKey.first && h.second.second.second == maxKey.second)
+        {       
+          b_has = true;
+          break;
+        }
+      }
+      if(a_has != b_has)
+      {
+        return a_has;
+      }
+      return a.size() > b.size();
+    });
+
     clusHits.clear();
-    for (auto hit : regions[0])
+    if(refinedRegions.empty() || refinedRegions[0].empty())
+    {
+      return;
+    }
+    for(auto hit : refinedRegions[0])
     {
       clusHits.push_back(hit);
     }
@@ -237,7 +430,7 @@ namespace
 
   void calc_cluster_parameter(std::vector<hitData> &clusHits, thread_data &my_data, std::pair<TrkrDefs::hitkey, TrkrDefs::hitsetkey> maxADCKey)
   {
-    findConnectedRegions3(clusHits, maxADCKey);
+    findConnectedRegions3(clusHits, maxADCKey, my_data.Verbosity);
 
     double rSum = 0.0;
     double phiSum = 0.0;
@@ -251,6 +444,8 @@ namespace
 
     double maxAdc = 0.0;
     TrkrDefs::hitsetkey maxKey = 0;
+    double secondmaxAdc = 0.0;
+    TrkrDefs::hitsetkey secondmaxKey = 0;
 
     unsigned int nHits = clusHits.size();
 
@@ -258,9 +453,9 @@ namespace
 
     int meanSide = 0;
 
-    std::vector<float> usedLayer;
-    std::vector<float> usedIPhi;
-    std::vector<float> usedIT;
+    std::vector<double> usedLayer;
+    std::vector<double> usedIPhi;
+    std::vector<double> usedIT;
 
     double meanLayer = 0.0;
     double meanIPhi = 0.0;
@@ -268,7 +463,7 @@ namespace
 
     for (auto &clusHit : clusHits)
     {
-      float coords[3] = {clusHit.first.get<0>(), clusHit.first.get<1>(), clusHit.first.get<2>()};
+      double coords[3] = {clusHit.first.get<0>(), clusHit.first.get<1>(), clusHit.first.get<2>()};
       std::pair<TrkrDefs::hitkey, TrkrDefs::hitsetkey> spechitkey = clusHit.second.second;
       unsigned int adc = clusHit.second.first;
 
@@ -293,7 +488,7 @@ namespace
       double hitZ = my_data.tdriftmax * my_data.tGeometry->get_drift_velocity() - hitzdriftlength;
 
       bool foundLayer = false;
-      for (float i : usedLayer)
+      for (double i : usedLayer)
       {
         if (coords[0] == i)
         {
@@ -308,7 +503,7 @@ namespace
       }
 
       bool foundIPhi = false;
-      for (float i : usedIPhi)
+      for (double i : usedIPhi)
       {
         if (coords[1] == i)
         {
@@ -323,7 +518,7 @@ namespace
       }
 
       bool foundIT = false;
-      for (float i : usedIT)
+      for (double i : usedIT)
       {
         if (coords[2] == i)
         {
@@ -344,7 +539,7 @@ namespace
       clus->setHitX(clus->getNhits() - 1, r * cos(phi));
       clus->setHitY(clus->getNhits() - 1, r * sin(phi));
       clus->setHitZ(clus->getNhits() - 1, hitZ);
-      clus->setHitAdc(clus->getNhits() - 1, (float) adc);
+      clus->setHitAdc(clus->getNhits() - 1, (double) adc);
 
       rSum += r * adc;
       phiSum += phi * adc;
@@ -362,9 +557,18 @@ namespace
 
       if (adc > maxAdc)
       {
+        secondmaxAdc = maxAdc;
+        secondmaxKey = maxKey;
         maxAdc = adc;
         maxKey = spechitkey.second;
       }
+      else if (adc > secondmaxAdc)
+      {
+        secondmaxAdc = adc;
+        secondmaxKey = spechitkey.second;
+      }
+
+
     }
 
     if (nHits == 0)
@@ -626,10 +830,68 @@ namespace
       clus->setSDWeightedIT(sqrt(sigmaWeightedIT / adcSum));
     }
 
+
+    pthread_mutex_lock(&mythreadlock);
+    // Get surface of max ADC hit
+    bool alignmentflag = alignmentTransformationContainer::use_alignment;
+    alignmentTransformationContainer::use_alignment = false;
+    Acts::Vector3 ideal(clus->getX(), clus->getY(), clus->getZ());
+    TrkrDefs::subsurfkey subsurfkey = 0;
+
+    Surface surface = my_data.tGeometry->get_tpc_surface_from_coords(
+        maxKey,
+        ideal,
+        subsurfkey);
+
+    if (!surface)
+    {
+      // try second maximum ADC hit
+      if (secondmaxKey != 0)
+      {
+        surface = my_data.tGeometry->get_tpc_surface_from_coords(
+            secondmaxKey,
+            ideal,
+            subsurfkey);
+      }
+
+      // if still no surface, skip this cluster
+      if (!surface)
+      {
+        // clean up
+        alignmentTransformationContainer::use_alignment = alignmentflag;
+        delete clus;
+        delete fit3D;
+        if (my_data.hitHist)
+        {
+          delete my_data.hitHist;
+          my_data.hitHist = nullptr;
+        }
+        pthread_mutex_unlock(&mythreadlock);
+        return;
+      }
+    }
+
+    // Convert from ideal TPC coordinates to surface coordinates 
+    Acts::Vector3 local = surface->transform(my_data.tGeometry->geometry().getGeoContext()).inverse() * (ideal * Acts::UnitConstants::cm);
+    local /= Acts::UnitConstants::cm;
+
+    // Convert back to TPC coordinates with alignment applied 
+    alignmentTransformationContainer::use_alignment = true;
+    Acts::Vector3 global = surface->transform(my_data.tGeometry->geometry().getGeoContext()) * (local * Acts::UnitConstants::cm);
+    global /= Acts::UnitConstants::cm;
+    clus->setX(global(0));
+    clus->setY(global(1));
+    clus->setZ(global(2));
+
+    alignmentTransformationContainer::use_alignment = alignmentflag;
+    pthread_mutex_unlock(&mythreadlock);
+
+
     const auto ckey = TrkrDefs::genClusKey(maxKey, my_data.cluster_vector.size());
     my_data.cluster_vector.push_back(clus);
     my_data.cluster_key_vector.push_back(ckey);
 
+    
     delete fit3D;
 
     if (my_data.hitHist)
@@ -669,7 +931,7 @@ namespace
 
       for (TrkrHitSet::ConstIterator hitr = hitrangei.first; hitr != hitrangei.second; ++hitr)
       {
-        float_t fadc = hitr->second->getAdc();
+        double_t fadc = hitr->second->getAdc();
         unsigned short adc = 0;
         if (fadc > my_data->adc_threshold)
         {
@@ -803,6 +1065,7 @@ int LaserClusterizer::InitRun(PHCompositeNode *topNode)
   // get the first layer to get the clock freq
   AdcClockPeriod = m_geom_container->GetFirstLayerCellGeom()->get_zstep();
   m_tdriftmax = AdcClockPeriod * NZBinsSide;
+  
 
   return Fun4AllReturnCodes::EVENT_OK;
 }

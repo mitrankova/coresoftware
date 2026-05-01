@@ -8,6 +8,7 @@
  */
 
 #include <array>
+#include <string>
 
 class TH1;
 
@@ -17,11 +18,17 @@ class TpcDistortionCorrectionContainer
   //! constructor
   TpcDistortionCorrectionContainer() = default;
 
+  //! load histograms from input file
+  void load_histograms( const std::string& /*source*/ );
+
+  //! save histograms to out file
+  void save_histograms( const std::string& /*destination*/ ) const;
+
   //! flag to tell us whether to read z data or just 2d data
   int m_dimensions = 3;
 
   bool m_use_scalefactor = false;
-  float m_scalefactor = 1.0;
+  double m_scalefactor = 1.0;
 
   //! set the phi histogram to be interpreted as radians rather than mm
   bool m_phi_hist_in_radians = true;

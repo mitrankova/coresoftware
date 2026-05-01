@@ -15,22 +15,22 @@
  * @var RUN3AUAU_LAST  Last Run 3 Au+Au (heavy-ion) physics run.
  * @var RUN3PP_FIRST First Run 3 proton-proton (beam) physics run.
  * @var RUN3PP_LAST  Last Run 3 proton-proton physics run.
- * @var RUN3OO_FIRST Temporary placeholder for the first Run 3 OO run (to be updated once OO starts).
- * @var RUN3OO_LAST  Temporary upper bound for Run 3 OO runs.
+ * @var RUN3OO_FIRST First Run 3 O+O physics run.
+ * @var RUN3OO_LAST  Last Run 3 O+O physics run.
  */
 namespace RunnumberRange
 {
-  static const int RUN2PP_FIRST = 47286;
-  static const int RUN2PP_LAST = 53880;
-  static const int RUN2AUAU_FIRST = 54128;
-  static const int RUN2AUAU_LAST = 54974;
-  static const int RUN3_TPCFW_CLOCK_CHANGE = 58667;
-  static const int RUN3AUAU_FIRST = 66457;
-  static const int RUN3AUAU_LAST = 78954;
-  static const int RUN3PP_FIRST = 79146; // first beam data
-  static const int RUN3PP_LAST = 81668;
-  static const int RUN3OO_FIRST = 82300; // TEMP (to be updated once OO starts)
-  static const int RUN3OO_LAST = 200000;
+  constexpr int RUN2PP_FIRST = 47286;
+  constexpr int RUN2PP_LAST = 53880;
+  constexpr int RUN2AUAU_FIRST = 54128;
+  constexpr int RUN2AUAU_LAST = 54974;
+  constexpr int RUN3_TPCFW_CLOCK_CHANGE = 58667;
+  constexpr int RUN3AUAU_FIRST = 66457;
+  constexpr int RUN3AUAU_LAST = 78954;
+  constexpr int RUN3PP_FIRST = 79146; // first beam data
+  constexpr int RUN3PP_LAST = 81668;
+  constexpr int RUN3OO_FIRST = 82388; // after trigger settled down (run 82374 excluded);
+  constexpr int RUN3OO_LAST = 82703;
 }
 
 #endif

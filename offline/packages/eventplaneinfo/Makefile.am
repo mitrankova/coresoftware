@@ -14,8 +14,7 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib
 
 libeventplaneinfo_io_la_LIBADD = \
-  -lphool \
-  -lcentrality_io
+  -lphool
 
 libeventplaneinfo_la_LIBADD = \
   libeventplaneinfo_io.la \
@@ -24,14 +23,15 @@ libeventplaneinfo_la_LIBADD = \
   -lfun4all \
   -lffamodules \
   -lcalotrigger_io \
+  -lcentrality_io \
   -lffarawobjects \
   -lcdbobjects \
   -lglobalvertex_io
 
 pkginclude_HEADERS = \
-  EventPlaneCalibration.h \
   Eventplaneinfo.h \
   Eventplaneinfov1.h \
+  Eventplaneinfov2.h \
   EventplaneinfoMap.h \
   EventplaneinfoMapv1.h \
   EventPlaneReco.h
@@ -39,6 +39,7 @@ pkginclude_HEADERS = \
 ROOTDICTS = \
   Eventplaneinfo_Dict.cc \
   Eventplaneinfov1_Dict.cc \
+  Eventplaneinfov2_Dict.cc \
   EventplaneinfoMap_Dict.cc \
   EventplaneinfoMapv1_Dict.cc
 
@@ -50,11 +51,11 @@ libeventplaneinfo_io_la_SOURCES = \
   $(ROOTDICTS) \
   Eventplaneinfo.cc \
   Eventplaneinfov1.cc \
+  Eventplaneinfov2.cc \
   EventplaneinfoMap.cc \
   EventplaneinfoMapv1.cc
 
 libeventplaneinfo_la_SOURCES = \
-  EventPlaneCalibration.cc \
   EventPlaneReco.cc
 
 # Rule for generating table CINT dictionaries.

@@ -8,6 +8,9 @@
 #include <ffarawobjects/TpcRawHitv2.h>
 #include <ffarawobjects/TpcRawHitv3.h>
 
+#include <cdbobjects/CDBTTree.h>
+#include <ffamodules/CDBInterface.h>
+
 #include <phool/PHTimer.h>  // for PHTimer
 
 #include <fun4all/Fun4AllHistoManager.h>
@@ -596,6 +599,12 @@ int TpcTimeFrameBuilder::ProcessPacket(Packet* packet)
     {
       unsigned int fee_id = dma_word_data.dma_header & 0xffU;
 
+      // for packet id 4XYZ ebdc is XY, endpoint is Z
+      if (m_maskedFEEs[((m_packet_id / 10) % 100)].contains(fee_id))
+      {
+        continue;
+      }
+
       if (fee_id < MAX_FEECOUNT)
       {
         for (const uint16_t& i : dma_word_data.data)
@@ -713,7 +722,7 @@ int TpcTimeFrameBuilder::process_fee_data(unsigned int fee)
     }
 
     // valid packet
-    const uint16_t& pkt_length = data_buffer[0];  // this is indeed the number of 10-bit words + 5 in this packet
+    const uint16_t pkt_length = data_buffer[0];  // this is indeed the number of 10-bit words + 5 in this packet
     if (pkt_length > MAX_PACKET_LENGTH)
     {
       if (m_verbosity > 1)
@@ -2055,4 +2064,28 @@ void TpcTimeFrameBuilder::BcoMatchingInformation::cleanup(uint64_t ref_bco)
 
   // clear orphans
   m_orphans.clear();
+}
+
+void TpcTimeFrameBuilder::fillBadFeeMap()
+{
+  const std::string filename = CDBInterface::instance()->getUrl("TPC_DECODER_BAD_FEE");
+
+  if (filename.empty())
+  {
+    if (m_verbosity > 0)
+    {
+      std::cout << "TpcTimeFrameBuilder::fillBadFeeMap - no file found for TPC_DECODER_BAD_FEE, not filling bad fee map" << std::endl;
+    }
+    return;
+  }
+
+  CDBTTree cdbtree(filename);
+  cdbtree.LoadCalibrations();
+
+  const int nentries = cdbtree.GetSingleIntValue("N_MASKED_FEES");
+
+  for (int i = 0; i < nentries; i++)
+  {
+    m_maskedFEEs[cdbtree.GetIntValue(i, "EBDC")].insert(cdbtree.GetIntValue(i, "FEEID"));
+  }
 }

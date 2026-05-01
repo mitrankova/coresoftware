@@ -27,6 +27,8 @@
 #include <globalvertex/MbdVertex.h>
 #include <globalvertex/MbdVertexMap.h>
 
+#include <dedxfitter/bethe_bloch.h> // included here so inline functions are defined on user end
+
 #include <KFParticle.h>
 
 #include <TF1.h>
@@ -73,7 +75,7 @@ class KFParticle_Tools : protected KFParticle_MVA
 
   std::vector<int> findAllGoodTracks(const std::vector<KFParticle> &daughterParticles, const std::vector<KFParticle> &primaryVertices);
 
-  std::vector<std::vector<int>> findTwoProngs(std::vector<KFParticle> daughterParticles, std::vector<int> goodTrackIndex, int nTracks) const;
+  std::vector<std::vector<int>> findTwoProngs(std::vector<KFParticle> daughterParticles, std::vector<int> goodTrackIndex, int nTracks);
 
   std::vector<std::vector<int>> findNProngs(std::vector<KFParticle> daughterParticles,
                                             const std::vector<int> &goodTrackIndex,
@@ -124,6 +126,8 @@ class KFParticle_Tools : protected KFParticle_MVA
   void set_dont_use_global_vertex(bool set_variable) { m_dont_use_global_vertex = set_variable; }
 
  protected:
+  int m_verbosity = 0;
+
   std::string m_mother_name_Tools;
   int m_num_intermediate_states{-1};
   std::vector<int> m_num_tracks_from_intermediate;
@@ -149,6 +153,8 @@ class KFParticle_Tools : protected KFParticle_MVA
   std::vector<float> m_intermediate_vertex_volume;
 
   bool m_use_PID{false};
+  bool m_use_local_PID_file{false};
+  std::string m_local_PID_filename = "";
   float m_dEdx_band_width{0.2};  // Fraction of expected dE/dx
 
   TF1 *f_pion_plus{nullptr};
@@ -277,6 +283,12 @@ class KFParticle_Tools : protected KFParticle_MVA
   void removeDuplicates(std::vector<int> &v);
   void removeDuplicates(std::vector<std::vector<int>> &v);
   void removeDuplicates(std::vector<std::vector<std::string>> &v);
+
+  void printSelectionCheck(const std::string &parameter, float min, float val, float max);
+  void printSelectionCheck(const std::string &start, const std::string &accept, const std::string &reject, const std::string &end, bool equality);
+  void printSelectionCheck(const std::string &info, unsigned int value);
+  std::string accept_colour = "32";
+  std::string reject_colour = "31";
 };
 
 #endif  // KFPARTICLESPHENIX_KFPARTICLETOOLS_H

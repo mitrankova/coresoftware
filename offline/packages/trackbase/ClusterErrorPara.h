@@ -17,6 +17,7 @@ class ClusterErrorPara
 
   virtual ~ClusterErrorPara()
   {
+    //delete ftpcR1;
     delete f0;
     delete f1;
     delete f2;
@@ -71,6 +72,7 @@ class ClusterErrorPara
   double tpc_z_error(int layer, double beta, TrkrCluster *cluster);
 
  private:
+  //  TF1 *ftpcR1 {nullptr};
   TF1 *f0 {nullptr};
   TF1 *f1 {nullptr};
   TF1 *f2 {nullptr};
@@ -128,6 +130,7 @@ class ClusterErrorPara
   double scale_mm_1 {1.5};
   double pull_fine_phi[60]{};
   double pull_fine_z[60]{};
+
 };
 
 #endif

@@ -4,10 +4,13 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/ActsGeometry.h>
 #include <trackbase/TrkrCluster.h>
+#include <trackbase/TrkrDefs.h>
 
 #include <map>
 #include <string>
-#include <vector>
+#include <unordered_set>
+
+typedef std::map<TrkrDefs::hitsetkey, std::unordered_set<TrkrDefs::hitkey>> hitMaskTpcSet;
 
 class ClusHitsVerbosev1;
 class PHCompositeNode;
@@ -41,12 +44,12 @@ public:
   void set_do_sequential(bool do_seq) { do_sequential = do_seq; }
   void set_do_split(bool split) { do_split = split; }
   void set_fixed_window(int fixed) { do_fixed_window = fixed; }
-  void set_pedestal(float val) { pedestal = val; }
-  void set_seed_threshold(float val) { seed_threshold = val; }
-  void set_edge_threshold(float val) { edge_threshold = val; }
-  void set_min_err_squared(float val) { min_err_squared = val; }
-  void set_min_clus_size(float val) { min_clus_size = val; }
-  void set_min_adc_sum(float val) { min_adc_sum = val; }
+  void set_pedestal(double val) { pedestal = val; }
+  void set_seed_threshold(double val) { seed_threshold = val; }
+  void set_edge_threshold(double val) { edge_threshold = val; }
+  void set_min_err_squared(double val) { min_err_squared = val; }
+  void set_min_clus_size(double val) { min_clus_size = val; }
+  void set_min_adc_sum(double val) { min_adc_sum = val; }
   void set_remove_singles(bool do_sing) { do_singles = do_sing; }
   void set_read_raw(bool read_raw) { do_read_raw = read_raw; }
   void set_max_cluster_half_size_phi(unsigned short size) { MaxClusterHalfSizePhi = size; }
@@ -69,12 +72,30 @@ public:
     set_max_cluster_half_size_z(20);
     set_fixed_window(3);
   };
-  
+
   ClusHitsVerbosev1 *mClusHitsVerbose{nullptr};
-  
+
+  void SetMaskChannelsFromFile() 
+  {
+    m_maskFromFile = true;
+  }
+
+  void SetDeadChannelMapName(const std::string& dcmap) 
+  {
+    m_maskDeadChannels = true;
+    m_deadChannelMapName = dcmap;
+  }
+  void SetHotChannelMapName(const std::string& hmap) 
+  {
+    m_maskHotChannels = true;
+    m_hotChannelMapName = hmap;
+  }
+
  private:
   bool is_in_sector_boundary(int phibin, int sector, PHG4TpcGeom *layergeom) const;
   bool record_ClusHitsVerbose{false};
+
+  void makeChannelMask(hitMaskTpcSet& aMask, const std::string& dbName, const std::string& totalChannelsToMask);
 
   TrkrHitSetContainer *m_hits = nullptr;
   RawHitSetContainer *m_rawhits = nullptr;
@@ -105,8 +126,17 @@ public:
   double m_tdriftmax = 0;
   double AdcClockPeriod = 53.0;  // ns
   double NZBinsSide = 249;
-    
+
   TrainingHitsContainer *m_training;
+
+  hitMaskTpcSet m_deadChannelMap;
+  hitMaskTpcSet m_hotChannelMap; 
+
+  bool m_maskDeadChannels {false};
+  bool m_maskHotChannels {false};
+  bool m_maskFromFile {false};
+  std::string m_deadChannelMapName; 
+  std::string m_hotChannelMapName;
 };
 
 #endif
