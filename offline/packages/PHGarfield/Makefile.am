@@ -12,7 +12,8 @@ AM_LDFLAGS = \
   `root-config --libs`
 
 pkginclude_HEADERS = \
-  PHGarfield.h
+  PHGarfield.h \
+  PHGarfieldRossegger.h
 
 lib_LTLIBRARIES = \
   libPHGarfield.la
@@ -26,7 +27,8 @@ libPHGarfield_la_LIBADD = \
   -lSubsysReco
 
 libPHGarfield_la_SOURCES = \
-  PHGarfield.cc
+  PHGarfield.cc \
+  PHGarfieldRossegger.cc
 
 bin_PROGRAMS = \
   GasModel \
