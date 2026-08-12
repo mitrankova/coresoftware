@@ -3,6 +3,11 @@
 
 #include <fun4all/SubsysReco.h>
 
+#include <array>
+#include <cstddef>
+#include <numbers>
+#include <string>
+
 #include <TRotation.h>
 #include <TVector3.h>
 
@@ -15,6 +20,7 @@ class CDBTTree;
 class PHField3DCartesian;
 class TPolyLine3D;
 class TH2;
+class TH3;
 
 namespace Garfield
 {
@@ -28,7 +34,9 @@ class PHGarfield : public SubsysReco
   PHGarfield(const std::string &name = "PHGarfield",
              const std::string &electricFieldMap = "",
              double spaceChargeScale_side0 = 1.0,
-             double spaceChargeScale_side1 = 1.0);
+             double spaceChargeScale_side1 = 1.0,
+             const std::string &electricFieldMap3D_side0 = "",
+             const std::string &electricFieldMap3D_side1 = "");
   ~PHGarfield() override;
 
   int InitRun(PHCompositeNode *) override;
@@ -62,9 +70,20 @@ class PHGarfield : public SubsysReco
 
   double GetRadius(size_t index) const { return radii.at(index); }
 
-  // ROOT map must contain QA/hErDefault and QA/hEzDefault.
+  // Axisymmetric ROOT map must contain QA/hErDefault and QA/hEzDefault.
   // The histograms are expected in cm on the axes and V/m in the bins.
   void SetElectricFieldMap(const std::string &filename) { m_electricFieldMap = filename; }
+
+  // Side-separated 3D ROOT maps must contain Field3D/hEx, Field3D/hEy,
+  // and Field3D/hEz. Axes are (r [cm], phi [rad], |z| [cm]); bin contents
+  // are V/m. hEz is expressed along the +|z| solver coordinate.
+  void SetElectricFieldMap3D(const std::string &side0_filename, const std::string &side1_filename)
+  {
+    m_electricFieldMap3D[0] = side0_filename;
+    m_electricFieldMap3D[1] = side1_filename;
+  }
+  void SetElectricFieldMap3DSide0(const std::string &filename) { m_electricFieldMap3D[0] = filename; }
+  void SetElectricFieldMap3DSide1(const std::string &filename) { m_electricFieldMap3D[1] = filename; }
   void SetSpaceChargeScale(double value)
   {
     m_spaceChargeScale_side0 = value;
@@ -84,7 +103,11 @@ class PHGarfield : public SubsysReco
   void GetElectricFieldVcm(double x_cm, double y_cm, double z_cm, double &ex_vcm, double &ey_vcm, double &ez_vcm) const;  // Feeds electric field to Garfield
   void InitializeGas(const std::string &name);                                                                            // Accepts a file or a directory
   bool LoadElectricFieldCorrections(const std::string &filename);
+  bool LoadElectricFieldCorrections3D(const std::string &filename, std::size_t side);
+  bool HasElectricFieldCorrections3D(std::size_t side) const;
+  void ClearElectricFieldCorrections3D(std::size_t side);
   double InterpolateCorrectionVcm(const TH2 *hist, double r_cm, double abs_z_cm) const;
+  double InterpolateCorrectionVcm(const TH3 *hist, double r_cm, double phi_rad, double abs_z_cm) const;
   TVector3 TpcPointToGlobalPoint(double x_cm, double y_cm, double z_cm) const;
   TVector3 GlobalPointToTpcPoint(double x_cm, double y_cm, double z_cm) const;
   TVector3 TpcPointToMagnetFieldMapPoint(double x_cm, double y_cm, double z_cm) const;
@@ -108,15 +131,19 @@ class PHGarfield : public SubsysReco
   TVector3 m_tpcpos{0.0, 0.0, 0.0};
   TRotation m_tpcrot;
 
-  // Axisymmetric space-charge correction maps.
-  // Histograms are cloned from the input ROOT file and owned here.
+  // Space-charge correction maps. Histograms are cloned from the input ROOT
+  // files and owned here. If a valid 3D map is loaded for a side, it takes
+  // precedence over the optional axisymmetric map on that side.
   std::string m_electricFieldMap;
+  std::array<std::string, 2> m_electricFieldMap3D{};
   double m_spaceChargeScale_side0{1.0};  // south, z < 0
   double m_spaceChargeScale_side1{1.0};  // north, z > 0
-  double m_CMVoltageDefault{432.8};      // V/cm, nominal TPC field
+  double m_CMVoltageDefault{380.0};      // V/cm, nominal TPC field
   bool m_zerofield{false};
   TH2 *m_erCorrection{nullptr};          // radial correction, input bins in V/m
   TH2 *m_ezCorrection{nullptr};          // local longitudinal correction, input bins in V/m
+  // Component order is Ex, Ey, Ez. Ez is along +|z| in the map.
+  std::array<std::array<TH3 *, 3>, 2> m_field3DCorrection{};
 
   //  These are utilities for a spot check of the overall routine:
   // std::string calibdir;

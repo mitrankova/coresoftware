@@ -13,6 +13,7 @@
 #include <TAxis.h>
 #include <TFile.h>
 #include <TH2.h>
+#include <TH3.h>
 #include <TPolyLine3D.h>
 #include <TRotation.h>
 #include <TVector3.h>
@@ -41,9 +42,12 @@ namespace fs = std::filesystem;
 PHGarfield::PHGarfield(const std::string& name,
                        const std::string& electricFieldMap,
                        double spaceChargeScale_side0,
-                       double spaceChargeScale_side1)
+                       double spaceChargeScale_side1,
+                       const std::string& electricFieldMap3D_side0,
+                       const std::string& electricFieldMap3D_side1)
   : SubsysReco(name)
   , m_electricFieldMap(electricFieldMap)
+  , m_electricFieldMap3D{{electricFieldMap3D_side0, electricFieldMap3D_side1}}
   , m_spaceChargeScale_side0(spaceChargeScale_side0)
   , m_spaceChargeScale_side1(spaceChargeScale_side1)
 {
@@ -58,6 +62,8 @@ PHGarfield::~PHGarfield()
   delete m_gas;
   delete m_erCorrection;
   delete m_ezCorrection;
+  ClearElectricFieldCorrections3D(0);
+  ClearElectricFieldCorrections3D(1);
 }
 
 int PHGarfield::InitRun(PHCompositeNode* /*topNode*/)
@@ -85,6 +91,19 @@ int PHGarfield::InitRun(PHCompositeNode* /*topNode*/)
     {
       std::cout << PHWHERE << " Failed to load electric-field correction map: "
                 << m_electricFieldMap << std::endl;
+    }
+  }
+
+  // Load optional side-separated 3D space-charge correction maps. A valid
+  // 3D map takes precedence over the axisymmetric map on that side.
+  for (std::size_t side = 0; side < m_electricFieldMap3D.size(); ++side)
+  {
+    if (!m_electricFieldMap3D[side].empty() &&
+        !LoadElectricFieldCorrections3D(m_electricFieldMap3D[side], side))
+    {
+      std::cerr << PHWHERE << " Failed to load side " << side
+                << " 3D electric-field correction map: "
+                << m_electricFieldMap3D[side] << std::endl;
     }
   }
 
@@ -348,23 +367,50 @@ void PHGarfield::GetMagneticFieldTesla(double x_cm, double y_cm, double z_cm, do
 void PHGarfield::GetElectricFieldVcm(double x_cm, double y_cm, double z_cm, double& ex_vcm, double& ey_vcm, double& ez_vcm) const
 {
   // NOTE: Garfield uses cm, V/cm, and Tesla.
-  // The notebook maps use cm on their axes and V/m in their bins.
-  // The map is produced for one TPC half using s = |z|, measured from
-  // the central membrane toward the readout plane.
+  // The correction maps use cm (and rad for phi) on their axes and V/m in
+  // their bins. The maps are produced for one TPC half using s = |z|,
+  // measured from the central membrane toward the readout plane.
+  //
+  // SetZeroField only disables B. The electric field, including space-charge
+  // corrections, is intentionally identical in zero-field and field-on runs.
 
   const double r_cm = std::hypot(x_cm, y_cm);
+  const double phi_rad = std::atan2(y_cm, x_cm);
   const double abs_z_cm = std::abs(z_cm);
+  const std::size_t side = z_cm < 0.0 ? 0 : 1;
 
-  // Nominal drift field.  Electrons drift away from the central membrane,
+  // Nominal drift field. Electrons drift away from the central membrane,
   // therefore E_z points toward the central membrane on both sides.
   ex_vcm = 0.0;
   ey_vcm = 0.0;
   ez_vcm = z_cm > 0.0 ? -m_CMVoltageDefault : m_CMVoltageDefault;
 
-  const double spaceChargeScale = (z_cm < 0.0) ? m_spaceChargeScale_side0
-                                               : m_spaceChargeScale_side1;
+  const double spaceChargeScale = side == 0 ? m_spaceChargeScale_side0
+                                             : m_spaceChargeScale_side1;
+  if (spaceChargeScale == 0.0)
+  {
+    return;
+  }
 
-  if (!m_erCorrection || !m_ezCorrection || spaceChargeScale == 0.0)
+  // Prefer the side-specific 3D map when all three Cartesian components are
+  // available. Ex and Ey are already local-TPC Cartesian components. hEz is
+  // stored along the +|z| solver coordinate and must be reflected on side 0.
+  if (HasElectricFieldCorrections3D(side))
+  {
+    ex_vcm += spaceChargeScale *
+              InterpolateCorrectionVcm(m_field3DCorrection[side][0], r_cm, phi_rad, abs_z_cm);
+    ey_vcm += spaceChargeScale *
+              InterpolateCorrectionVcm(m_field3DCorrection[side][1], r_cm, phi_rad, abs_z_cm);
+
+    const double delta_ez_local_vcm = spaceChargeScale *
+                                      InterpolateCorrectionVcm(m_field3DCorrection[side][2], r_cm, phi_rad, abs_z_cm);
+    ez_vcm += z_cm >= 0.0 ? delta_ez_local_vcm : -delta_ez_local_vcm;
+    return;
+  }
+
+  // Fall back to the legacy axisymmetric map if no 3D map is loaded for this
+  // side. This preserves the existing PHGarfield behavior and API.
+  if (!m_erCorrection || !m_ezCorrection)
   {
     return;
   }
@@ -382,7 +428,7 @@ void PHGarfield::GetElectricFieldVcm(double x_cm, double y_cm, double z_cm, doub
   }
 
   // hEzDefault is expressed along the local coordinate s = |z|.
-  // Convert it to the global Cartesian z direction.
+  // Convert it to the local TPC Cartesian z direction.
   ez_vcm += z_cm >= 0.0 ? delta_ez_local_vcm : -delta_ez_local_vcm;
 }
 
@@ -487,6 +533,288 @@ double PHGarfield::InterpolateCorrectionVcm(
 
   // Input histogram is in V/m. Garfield expects V/cm.
   return 0.01 * hist->Interpolate(r_eval, z_eval);
+}
+
+bool PHGarfield::LoadElectricFieldCorrections3D(const std::string& filename, const std::size_t side)
+{
+  if (side >= m_field3DCorrection.size())
+  {
+    std::cerr << PHWHERE << " Invalid TPC side " << side
+              << " for 3D electric-field map " << filename << std::endl;
+    return false;
+  }
+
+  std::unique_ptr<TFile> input(TFile::Open(filename.c_str(), "READ"));
+  if (!input || input->IsZombie())
+  {
+    std::cerr << PHWHERE << " Could not open 3D electric-field map: "
+              << filename << std::endl;
+    return false;
+  }
+
+  std::array<TH3*, 3> source{{
+      dynamic_cast<TH3*>(input->Get("Field3D/hEx")),
+      dynamic_cast<TH3*>(input->Get("Field3D/hEy")),
+      dynamic_cast<TH3*>(input->Get("Field3D/hEz"))}};
+
+  if (!source[0] || !source[1] || !source[2])
+  {
+    std::cerr << PHWHERE
+              << " Missing Field3D/hEx, Field3D/hEy, or Field3D/hEz in "
+              << filename << std::endl;
+    return false;
+  }
+
+  const auto sameAxis = [](const TAxis* lhs, const TAxis* rhs)
+  {
+    if (!lhs || !rhs || lhs->GetNbins() != rhs->GetNbins())
+    {
+      return false;
+    }
+    constexpr double tolerance = 1.0e-9;
+    return std::abs(lhs->GetXmin() - rhs->GetXmin()) < tolerance &&
+           std::abs(lhs->GetXmax() - rhs->GetXmax()) < tolerance;
+  };
+
+  for (std::size_t component = 1; component < source.size(); ++component)
+  {
+    if (!sameAxis(source[0]->GetXaxis(), source[component]->GetXaxis()) ||
+        !sameAxis(source[0]->GetYaxis(), source[component]->GetYaxis()) ||
+        !sameAxis(source[0]->GetZaxis(), source[component]->GetZaxis()))
+    {
+      std::cerr << PHWHERE << " Inconsistent hEx/hEy/hEz axes in "
+                << filename << std::endl;
+      return false;
+    }
+  }
+
+  const TAxis* phiAxis = source[0]->GetYaxis();
+  constexpr double phiTolerance = 1.0e-3;
+  if (std::abs((phiAxis->GetXmax() - phiAxis->GetXmin()) - 2.0 * std::numbers::pi) > phiTolerance)
+  {
+    std::cerr << PHWHERE << " 3D field-map phi axis must span 2*pi radians in "
+              << filename << std::endl;
+    return false;
+  }
+
+  std::array<TH3*, 3> cloned{};
+  constexpr std::array<const char*, 3> componentNames{{"Ex", "Ey", "Ez"}};
+  for (std::size_t component = 0; component < cloned.size(); ++component)
+  {
+    std::ostringstream cloneName;
+    cloneName << "PHGarfield_" << componentNames[component]
+              << "Correction_side" << side;
+    cloned[component] = dynamic_cast<TH3*>(source[component]->Clone(cloneName.str().c_str()));
+    if (!cloned[component])
+    {
+      for (TH3* histogram : cloned)
+      {
+        delete histogram;
+      }
+      return false;
+    }
+    cloned[component]->SetDirectory(nullptr);
+  }
+
+  ClearElectricFieldCorrections3D(side);
+  m_field3DCorrection[side] = cloned;
+
+  std::cout << "Loaded 3D electric-field corrections for side " << side
+            << (side == 0 ? " (south/z<0)" : " (north/z>0)")
+            << " from " << filename << std::endl;
+  std::cout << "  scale k_eff = "
+            << (side == 0 ? m_spaceChargeScale_side0 : m_spaceChargeScale_side1)
+            << std::endl;
+  std::cout << "  r range [cm] = ["
+            << source[0]->GetXaxis()->GetXmin() << ", "
+            << source[0]->GetXaxis()->GetXmax() << "]" << std::endl;
+  std::cout << "  phi range [rad] = ["
+            << source[0]->GetYaxis()->GetXmin() << ", "
+            << source[0]->GetYaxis()->GetXmax() << "]" << std::endl;
+  std::cout << "  |z| range [cm] = ["
+            << source[0]->GetZaxis()->GetXmin() << ", "
+            << source[0]->GetZaxis()->GetXmax() << "]" << std::endl;
+
+  return true;
+}
+
+bool PHGarfield::HasElectricFieldCorrections3D(const std::size_t side) const
+{
+  return side < m_field3DCorrection.size() &&
+         m_field3DCorrection[side][0] &&
+         m_field3DCorrection[side][1] &&
+         m_field3DCorrection[side][2];
+}
+
+void PHGarfield::ClearElectricFieldCorrections3D(const std::size_t side)
+{
+  if (side >= m_field3DCorrection.size())
+  {
+    return;
+  }
+
+  for (TH3*& histogram : m_field3DCorrection[side])
+  {
+    delete histogram;
+    histogram = nullptr;
+  }
+}
+
+double PHGarfield::InterpolateCorrectionVcm(
+    const TH3* hist,
+    const double r_cm,
+    const double phi_rad,
+    const double abs_z_cm) const
+{
+  if (!hist)
+  {
+    return 0.0;
+  }
+
+  const TAxis* rAxis = hist->GetXaxis();
+  const TAxis* phiAxis = hist->GetYaxis();
+  const TAxis* zAxis = hist->GetZaxis();
+  if (!rAxis || !phiAxis || !zAxis)
+  {
+    return 0.0;
+  }
+
+  struct AxisWeights
+  {
+    int low{1};
+    int high{1};
+    double highWeight{0.0};
+  };
+
+  const auto clampedWeights = [](const TAxis* axis, const double value)
+  {
+    AxisWeights result;
+    const int nBins = axis->GetNbins();
+    if (nBins <= 1)
+    {
+      return result;
+    }
+
+    const double firstCenter = axis->GetBinCenter(1);
+    const double lastCenter = axis->GetBinCenter(nBins);
+    if (value <= firstCenter)
+    {
+      result.low = 1;
+      result.high = 1;
+      return result;
+    }
+    if (value >= lastCenter)
+    {
+      result.low = nBins;
+      result.high = nBins;
+      return result;
+    }
+
+    int bin = axis->FindFixBin(value);
+    bin = std::clamp(bin, 1, nBins);
+    const double center = axis->GetBinCenter(bin);
+    if (value >= center)
+    {
+      result.low = bin;
+      result.high = std::min(bin + 1, nBins);
+    }
+    else
+    {
+      result.low = std::max(bin - 1, 1);
+      result.high = bin;
+    }
+
+    const double lowCenter = axis->GetBinCenter(result.low);
+    const double highCenter = axis->GetBinCenter(result.high);
+    if (result.low != result.high)
+    {
+      result.highWeight = (value - lowCenter) / (highCenter - lowCenter);
+    }
+    return result;
+  };
+
+  const auto periodicWeights = [](const TAxis* axis, const double value)
+  {
+    AxisWeights result;
+    const int nBins = axis->GetNbins();
+    if (nBins <= 1)
+    {
+      return result;
+    }
+
+    const double minimum = axis->GetXmin();
+    const double maximum = axis->GetXmax();
+    const double period = maximum - minimum;
+    if (!(period > 0.0))
+    {
+      return result;
+    }
+
+    double wrapped = std::fmod(value - minimum, period);
+    if (wrapped < 0.0)
+    {
+      wrapped += period;
+    }
+    wrapped += minimum;
+
+    int bin = axis->FindFixBin(wrapped);
+    bin = std::clamp(bin, 1, nBins);
+    const double center = axis->GetBinCenter(bin);
+
+    double lowCenter = 0.0;
+    double highCenter = 0.0;
+    if (wrapped >= center)
+    {
+      result.low = bin;
+      result.high = bin == nBins ? 1 : bin + 1;
+      lowCenter = center;
+      highCenter = result.high == 1 ? axis->GetBinCenter(1) + period
+                                    : axis->GetBinCenter(result.high);
+      if (result.high == 1 && wrapped < lowCenter)
+      {
+        wrapped += period;
+      }
+    }
+    else
+    {
+      result.high = bin;
+      result.low = bin == 1 ? nBins : bin - 1;
+      highCenter = center;
+      lowCenter = result.low == nBins ? axis->GetBinCenter(nBins) - period
+                                      : axis->GetBinCenter(result.low);
+    }
+
+    result.highWeight = (wrapped - lowCenter) / (highCenter - lowCenter);
+    result.highWeight = std::clamp(result.highWeight, 0.0, 1.0);
+    return result;
+  };
+
+  const AxisWeights r = clampedWeights(rAxis, r_cm);
+  const AxisWeights phi = periodicWeights(phiAxis, phi_rad);
+  const AxisWeights z = clampedWeights(zAxis, std::abs(abs_z_cm));
+
+  const std::array<int, 2> rBins{{r.low, r.high}};
+  const std::array<int, 2> phiBins{{phi.low, phi.high}};
+  const std::array<int, 2> zBins{{z.low, z.high}};
+  const std::array<double, 2> rWeights{{1.0 - r.highWeight, r.highWeight}};
+  const std::array<double, 2> phiWeights{{1.0 - phi.highWeight, phi.highWeight}};
+  const std::array<double, 2> zWeights{{1.0 - z.highWeight, z.highWeight}};
+
+  double value_vpm = 0.0;
+  for (std::size_t ir = 0; ir < rBins.size(); ++ir)
+  {
+    for (std::size_t iphi = 0; iphi < phiBins.size(); ++iphi)
+    {
+      for (std::size_t iz = 0; iz < zBins.size(); ++iz)
+      {
+        value_vpm += rWeights[ir] * phiWeights[iphi] * zWeights[iz] *
+                     hist->GetBinContent(rBins[ir], phiBins[iphi], zBins[iz]);
+      }
+    }
+  }
+
+  // Input histogram is in V/m. Garfield expects V/cm.
+  return 0.01 * value_vpm;
 }
 
 void PHGarfield::InitializeGas(const std::string& name)
