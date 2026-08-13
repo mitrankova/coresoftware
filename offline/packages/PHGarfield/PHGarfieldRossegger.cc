@@ -37,6 +37,22 @@ namespace
   constexpr std::array<double, nTpcModules> firstLayerRadiusMm{{314.9835971194212, 416.5920253621078, 589.1096334932404}};
   constexpr std::array<double, nTpcModules> layerHeightMm{{5.657908935192669, 10.206891263554285, 10.970474549405283}};
   constexpr double r1GemInnerCm = 22.8;
+  constexpr double frameZThicknessCm = 0.16;
+
+  struct FrameRegion
+  {
+    double inner_min_cm;
+    double inner_max_cm;
+    double outer_min_cm;
+    double outer_max_cm;
+    double left_width_cm;
+    double right_width_cm;
+  };
+
+  constexpr std::array<FrameRegion, nTpcModules> frameRegions{{
+      {21.78, 22.20, 39.79, 40.61, 0.35, 0.52},
+      {40.79, 41.62, 57.01, 57.84, 0.35, 0.52},
+      {58.00, 58.83, 75.84, 76.28, 0.54, 0.54}}};
 
 
   unsigned int src_index(unsigned int ir, unsigned int ip, unsigned int iz, unsigned int np, unsigned int nz)
@@ -213,7 +229,7 @@ bool PHGarfieldRossegger::validateConfig() const
   const double b = m_bCm * cmToM;
   const double smin = m_sourceRMinCm * cmToM;
   const double smax = m_sourceRMaxCm * cmToM;
-  if (!(0.0 < a && a < smin && smin < smax && smax <= b))
+  if (!m_useFrameChargeModel && !(0.0 < a && a < smin && smin < smax && smax <= b))
   {
     std::cout << PHWHERE << " invalid Rossegger geometry/source radii" << std::endl;
     return false;
@@ -239,6 +255,10 @@ bool PHGarfieldRossegger::validateConfig() const
 
 unsigned int PHGarfieldRossegger::effectivePhiMax() const
 {
+  if (m_useRealTpcSourceGeometry || m_useFrameChargeModel)
+  {
+    return m_mPhiMax;
+  }
   const bool uniform = std::fabs(m_m1Amplitude) < 1.0e-15 && std::fabs(m_m12Amplitude) < 1.0e-15;
   return (m_autoAxisymmetric && uniform) ? 0 : m_mPhiMax;
 }
@@ -343,6 +363,43 @@ std::vector<double> PHGarfieldRossegger::legendreRootsAndWeights(unsigned int n_
 
 PHGarfieldRossegger::SourceGrid PHGarfieldRossegger::buildSourceGrid() const
 {
+  if (m_useFrameChargeModel)
+  {
+    SourceGrid source_grid;
+    std::vector<double>& redges = source_grid.r_edges_m;
+    for (const FrameRegion& region : frameRegions)
+    {
+      redges.push_back(region.inner_min_cm * cmToM);
+      redges.push_back(region.inner_max_cm * cmToM);
+      redges.push_back(region.outer_min_cm * cmToM);
+      redges.push_back(region.outer_max_cm * cmToM);
+    }
+    std::sort(redges.begin(), redges.end());
+    redges.erase(std::unique(redges.begin(), redges.end(), [](double lhs, double rhs) { return std::fabs(lhs - rhs) < 1.0e-12; }), redges.end());
+    if (!(m_aCm * cmToM <= redges.front() && redges.back() <= m_bCm * cmToM))
+    {
+      throw std::runtime_error("Frame source radial grid is outside Rossegger field cage geometry");
+    }
+    source_grid.r_centers_m = centers(redges);
+    source_grid.module_index.assign(source_grid.r_centers_m.size(), -1);
+    source_grid.layer_index.assign(source_grid.r_centers_m.size(), -1);
+    source_grid.is_antenna.assign(source_grid.r_centers_m.size(), false);
+    for (unsigned int ir = 0; ir < source_grid.r_centers_m.size(); ++ir)
+    {
+      const double rcm = source_grid.r_centers_m[ir] * mToCm;
+      for (unsigned int module = 0; module < frameRegions.size(); ++module)
+      {
+        const FrameRegion& region = frameRegions[module];
+        if (rcm >= region.inner_min_cm && rcm <= region.outer_max_cm)
+        {
+          source_grid.module_index[ir] = module;
+          source_grid.layer_index[ir] = module;
+        }
+      }
+    }
+    return source_grid;
+  }
+
   if (!m_useRealTpcSourceGeometry)
   {
     SourceGrid source_grid;
@@ -584,7 +641,7 @@ std::vector<double> PHGarfieldRossegger::makeChargeDensity(const SourceGrid& sou
           const auto active_segments = periodic_segments(positive_start, interval.angular_width);
           const double overlap = segment_overlap_length(bin_segments, active_segments) / bin_width;
           fraction += overlap;
-          weighted += overlap / gain[side][sector][layer];
+          weighted += overlap * gain[side][sector][layer];
         }
         if (fraction > 1.0 + 1.0e-8)
         {
@@ -642,6 +699,91 @@ std::vector<double> PHGarfieldRossegger::makeChargeDensity(const SourceGrid& sou
   return rho;
 }
 
+std::vector<double> PHGarfieldRossegger::makeFrameChargeDensity(const SourceGrid& source_grid,
+                                                                const std::vector<double>& phi_source_edges,
+                                                                const std::vector<double>& z_source_edges_m,
+                                                                unsigned int side) const
+{
+  const unsigned int nr = source_grid.r_centers_m.size();
+  const unsigned int nphi = phi_source_edges.size() - 1;
+  const unsigned int nz = z_source_edges_m.size() - 1;
+  const double rho_value = m_kEff * m_rhoReferenceNCPerM3 * 1.0e-9;
+  std::vector<double> rho(nr * nphi * nz, 0.0);
+
+  double frame_volume = 0.0;
+  double total_charge = 0.0;
+  constexpr double sector_width = std::numbers::pi / 6.0;
+  const double frame_z_min_m = std::max(0.0, m_lCm - frameZThicknessCm) * cmToM;
+  const double frame_z_max_m = m_lCm * cmToM;
+
+  for (unsigned int ir = 0; ir < nr; ++ir)
+  {
+    const int module = source_grid.module_index[ir];
+    if (module < 0) { continue; }
+
+    const FrameRegion& region = frameRegions[module];
+    const double r_cm = source_grid.r_centers_m[ir] * mToCm;
+    const double rvol = 0.5 * (source_grid.r_edges_m[ir + 1] * source_grid.r_edges_m[ir + 1] - source_grid.r_edges_m[ir] * source_grid.r_edges_m[ir]);
+    const bool in_radial_bar = (r_cm >= region.inner_min_cm && r_cm < region.inner_max_cm) ||
+                               (r_cm >= region.outer_min_cm && r_cm < region.outer_max_cm);
+    const double left_width_phi = region.left_width_cm / r_cm;
+    const double right_width_phi = region.right_width_cm / r_cm;
+
+    for (unsigned int ip = 0; ip < nphi; ++ip)
+    {
+      const double bin_width = phi_source_edges[ip + 1] - phi_source_edges[ip];
+      const auto bin_segments = periodic_segments(phi_source_edges[ip], bin_width);
+      double frame_fraction = 0.0;
+
+      for (unsigned int mapped_sector = 0; mapped_sector < nTpcSectors; ++mapped_sector)
+      {
+        const double phi = ((side == 1U ? 1.0 : -1.0) * (m_frameReferencePhi - std::numbers::pi / 2.0)) +
+                           (static_cast<double>(mapped_sector) * sector_width);
+        const double center = wrap_phi(phi);
+        const double sector_low = center - 0.5 * sector_width;
+
+        std::vector<std::pair<double, double>> frame_segments;
+        if (in_radial_bar)
+        {
+          frame_segments = periodic_segments(sector_low, sector_width);
+        }
+        else
+        {
+          const auto left_segments = periodic_segments(sector_low, left_width_phi);
+          const auto right_segments = periodic_segments(sector_low + sector_width - right_width_phi, right_width_phi);
+          frame_segments.insert(frame_segments.end(), left_segments.begin(), left_segments.end());
+          frame_segments.insert(frame_segments.end(), right_segments.begin(), right_segments.end());
+        }
+
+        frame_fraction += segment_overlap_length(bin_segments, frame_segments) / bin_width;
+      }
+
+      frame_fraction = std::clamp(frame_fraction, 0.0, 1.0);
+      if (frame_fraction <= 0.0) { continue; }
+
+      for (unsigned int iz = 0; iz < nz; ++iz)
+      {
+        const double dz = z_source_edges_m[iz + 1] - z_source_edges_m[iz];
+        const double z_overlap = std::max(0.0, std::min(z_source_edges_m[iz + 1], frame_z_max_m) -
+                                               std::max(z_source_edges_m[iz], frame_z_min_m));
+        const double z_fraction = z_overlap / dz;
+        if (z_fraction <= 0.0) { continue; }
+
+        const unsigned int idx = src_index(ir, ip, iz, nphi, nz);
+        rho[idx] = rho_value * frame_fraction * z_fraction;
+        const double cell_frame_volume = rvol * bin_width * dz * frame_fraction * z_fraction;
+        frame_volume += cell_frame_volume;
+        total_charge += rho_value * cell_frame_volume;
+      }
+    }
+  }
+
+  std::cout << "  frame rho side " << side << " = " << rho_value << " C/m^3, z thickness = " << frameZThicknessCm
+            << " cm, frame volume = " << frame_volume
+            << " m^3, charge = " << total_charge << " C, ions = " << total_charge / elementaryCharge << std::endl;
+  return rho;
+}
+
 int PHGarfieldRossegger::calculate()
 {
   if (!validateConfig()) { return Fun4AllReturnCodes::ABORTRUN; }
@@ -655,15 +797,19 @@ int PHGarfieldRossegger::calculate()
 
     std::cout << Name() << " Rossegger field calculation" << std::endl;
     std::cout << "  radial job " << m_jobIndex << "/" << m_nJobs << " bins [" << r_begin << ", " << r_end << ")" << std::endl;
-    if (m_useRealTpcSourceGeometry)
+    if (m_useFrameChargeModel)
+    {
+      std::cout << "  using constant-charge frame source geometry" << std::endl;
+    }
+    else if (m_useRealTpcSourceGeometry)
     {
       std::cout << "  using real TPC radial source geometry and layer/sector gain maps" << std::endl;
     }
 
     const SourceGrid source_grid = buildSourceGrid();
     const unsigned int nr_source = source_grid.r_centers_m.size();
-    const auto pse = m_useRealTpcSourceGeometry ? phi_edges(m_nphiSource, -std::numbers::pi) : phi_edges(m_nphiSource);
-    const auto zse = edges(0.0, len, m_nzSource);
+    const auto pse = (m_useRealTpcSourceGeometry || m_useFrameChargeModel) ? phi_edges(m_nphiSource, -std::numbers::pi) : phi_edges(m_nphiSource);
+    auto zse = edges(0.0, len, m_nzSource);
     const auto roe = edges(a, b, m_nrObs);
     const auto poe = m_writePHGarfieldField3D ? phi_edges(m_nphiObs, -std::numbers::pi) : phi_edges(m_nphiObs);
     const auto zoe = edges(0.0, len, m_nzObs);
@@ -710,7 +856,7 @@ int PHGarfieldRossegger::calculate()
     for (unsigned int side = 0; side < nTpcSides; ++side)
     {
       if (!run_side[side]) { continue; }
-      const std::vector<double> rho = makeChargeDensity(source_grid, pse, zse, side);
+      const std::vector<double> rho = m_useFrameChargeModel ? makeFrameChargeDensity(source_grid, pse, zse, side) : makeChargeDensity(source_grid, pse, zse, side);
 
       std::vector<std::vector<double>> mc(mmax + 1), ms(mmax + 1);
       for (unsigned int im = 0; im <= mmax; ++im)
@@ -798,7 +944,7 @@ int PHGarfieldRossegger::calculate()
         writeGarfieldRootFile(roe, zoe, er, ez, r_begin, r_end);
         if (m_writeField3D) { writeField3DRootFile(source_grid.r_edges_m, roe, pse, poe, zse, zoe, rho, phi, er, ep, ez, r_begin, r_end); }
       }
-      if (m_writePHGarfieldField3D) { writePHGarfieldField3DRootFile(roe, poe, zoe, er, ep, ez, side, r_begin, r_end); }
+      if (m_writePHGarfieldField3D) { writePHGarfieldField3DRootFile(roe, poe, zoe, phi, er, ep, ez, side, r_begin, r_end); }
     }
 
     if (m_verifyOutput && !verifyOutput()) { return Fun4AllReturnCodes::ABORTRUN; }
@@ -890,7 +1036,8 @@ void PHGarfieldRossegger::writeField3DRootFile(const std::vector<double>& r_sour
 void PHGarfieldRossegger::writePHGarfieldField3DRootFile(const std::vector<double>& r_obs_edges_m,
                                                          const std::vector<double>& phi_obs_edges,
                                                          const std::vector<double>& z_obs_edges_m,
-                                                         const std::vector<double>& er,
+                                                         const std::vector<double>& potential,
+							 const std::vector<double>& er,
                                                          const std::vector<double>& ephi,
                                                          const std::vector<double>& ez,
                                                          unsigned int side,
@@ -909,6 +1056,9 @@ void PHGarfieldRossegger::writePHGarfieldField3DRootFile(const std::vector<doubl
   if (!dir) { throw std::runtime_error("Could not create Field3D in " + filename); }
   dir->cd();
 
+  TH3D hPhi("hPhi",std::format("TPC electric potential, side {};r [cm];#phi [rad];|z| [cm]", side).c_str(),m_nrObs, rcm.data(), m_nphiObs, phi_obs_edges.data(), m_nzObs, zcm.data());
+  TH3D hEr("hEr",std::format("TPC radial electric-field correction, side {};r [cm];#phi [rad];|z| [cm]", side).c_str(),m_nrObs, rcm.data(), m_nphiObs, phi_obs_edges.data(), m_nzObs, zcm.data());
+  TH3D hEphi("hEphi",std::format("TPC azimuthal electric-field correction, side {};r [cm];#phi [rad];|z| [cm]", side).c_str(),m_nrObs, rcm.data(), m_nphiObs, phi_obs_edges.data(), m_nzObs, zcm.data());
   TH3D hEx("hEx", std::format("Local TPC E_{{x}} correction, side {};r [cm];#phi [rad];|z| [cm]", side).c_str(), m_nrObs, rcm.data(), m_nphiObs, phi_obs_edges.data(), m_nzObs, zcm.data());
   TH3D hEy("hEy", std::format("Local TPC E_{{y}} correction, side {};r [cm];#phi [rad];|z| [cm]", side).c_str(), m_nrObs, rcm.data(), m_nphiObs, phi_obs_edges.data(), m_nzObs, zcm.data());
   TH3D hEz("hEz", std::format("TPC E_{{z}} correction in +|z| solver coordinate, side {};r [cm];#phi [rad];|z| [cm]", side).c_str(), m_nrObs, rcm.data(), m_nphiObs, phi_obs_edges.data(), m_nzObs, zcm.data());
@@ -926,6 +1076,9 @@ void PHGarfieldRossegger::writePHGarfieldField3DRootFile(const std::vector<doubl
       for (unsigned int iz = 0; iz < m_nzObs; ++iz)
       {
         const unsigned int idx = fld_index(ir, ip, iz, m_nphiObs, m_nzObs);
+	hPhi.SetBinContent(ir + 1, ip + 1, iz + 1, potential[idx]);
+	hEr.SetBinContent(ir + 1, ip + 1, iz + 1, er[idx]);
+	hEphi.SetBinContent(ir + 1, ip + 1, iz + 1, ephi[idx]);
         hEx.SetBinContent(ir + 1, ip + 1, iz + 1, er[idx] * cphi - ephi[idx] * sphi);
         hEy.SetBinContent(ir + 1, ip + 1, iz + 1, er[idx] * sphi + ephi[idx] * cphi);
         hEz.SetBinContent(ir + 1, ip + 1, iz + 1, ez[idx]);
@@ -933,9 +1086,15 @@ void PHGarfieldRossegger::writePHGarfieldField3DRootFile(const std::vector<doubl
     }
   }
 
+  hPhi.SetEntries(static_cast<double>(m_nrObs) * static_cast<double>(m_nphiObs) * static_cast<double>(m_nzObs));
+  hEr.SetEntries(hPhi.GetEntries());
+  hEphi.SetEntries(hPhi.GetEntries());
   hEx.SetEntries(static_cast<double>(m_nrObs) * static_cast<double>(m_nphiObs) * static_cast<double>(m_nzObs));
   hEy.SetEntries(hEx.GetEntries());
   hEz.SetEntries(hEx.GetEntries());
+  hPhi.Write("hPhi", TObject::kOverwrite);
+  hEr.Write("hEr", TObject::kOverwrite);
+  hEphi.Write("hEphi", TObject::kOverwrite);
   hEx.Write("hEx", TObject::kOverwrite);
   hEy.Write("hEy", TObject::kOverwrite);
   hEz.Write("hEz", TObject::kOverwrite);

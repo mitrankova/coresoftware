@@ -1,5 +1,9 @@
 AUTOMAKE_OPTIONS = foreign
 
+EXTRA_DIST = \
+  RunPHGarfieldRossegger.C \
+  RunPHGarfieldRosseggerFrames.C
+
 AM_CPPFLAGS = \
   -I$(includedir) \
   -isystem$(OFFLINE_MAIN)/include \

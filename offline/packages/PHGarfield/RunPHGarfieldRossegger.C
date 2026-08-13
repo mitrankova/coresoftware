@@ -3,6 +3,9 @@
 // Example, from a built sPHENIX environment:
 //   root -b -q 'RunPHGarfieldRossegger.C()'
 //
+// Constant-charge frame source, no pad/gain input needed:
+//   root -b -q 'RunPHGarfieldRossegger.C("frame_2d.root", false, true, 0.0, "", "", true, "frame_debug.root", false)'
+//
 // Real TPC source geometry mode expects the pad-placement text file and the
 // layer/sector gain ROOT file to exist at the paths passed below.
 
@@ -22,6 +25,8 @@ namespace fs = std::filesystem;
 int RunPHGarfieldRossegger(
     const std::string& garfield_output = "simple_2d_rossegger.root",
     const bool use_real_tpc_source_geometry = true,
+    const bool use_frame_charge_model = false,
+    const double frame_reference_phi = 0.0,
     const std::string& pad_placement_file = "input/TPC_pad_placement.txt",
     const std::string& gain_map_file = "input/layer_gain_79513_Mariia_side01.root",
     const bool write_diagnostic_field_3d = true,
@@ -54,13 +59,15 @@ int RunPHGarfieldRossegger(
 
   // Geometry in cm. These match the newer direct-Green-function notebook.
   rossegger->setGeometryCm(21.78, 76.28, 102.325);
-  rossegger->setSourceRadiusCm(22.8, 75.43);
+  rossegger->setSourceRadiusCm(use_frame_charge_model ? 21.78 : 22.8, use_frame_charge_model ? 76.28 : 75.43);
 
   // Charge model: reference density [nC/m^3], k_eff, radial power alpha.
-  rossegger->setDensity(20.0, 1.0, 1.22);
+  rossegger->setDensity(20.0, 1.0, 1.23);
   rossegger->setPhiModulation(0.0, 0.0, 0.0, 0.0);
 
   // Notebook development grid. Increase these for production-quality maps.
+  // In frame-charge mode, the source radial grid is replaced by exact frame boundaries;
+  // only source Nphi and Nz are taken from this call.
   rossegger->setSourceGrid(18, 72, 16);
   rossegger->setObservationGrid(32, 36, 16);
   rossegger->setModeTruncation(24, 7, 7);
@@ -69,7 +76,9 @@ int RunPHGarfieldRossegger(
   rossegger->setTpcSide(tpc_side_for_2d_output);
   rossegger->setRadialJob(radial_job_index, n_radial_jobs);
 
-  rossegger->setUseRealTpcSourceGeometry(use_real_tpc_source_geometry);
+  rossegger->setUseRealTpcSourceGeometry(use_real_tpc_source_geometry && !use_frame_charge_model);
+  rossegger->setUseFrameChargeModel(use_frame_charge_model);
+  rossegger->setFrameReferencePhi(frame_reference_phi);
   rossegger->setPadPlacementFile(pad_placement_file);
   rossegger->setGainMapFile(gain_map_file);
   rossegger->setGainHistograms("hGainMap_side0_South", "hGainMap_side1_North");
