@@ -68,8 +68,10 @@ int RunPHGarfieldRossegger(
   // Notebook development grid. Increase these for production-quality maps.
   // In frame-charge mode, the source radial grid is replaced by exact frame boundaries;
   // only source Nphi and Nz are taken from this call.
-  rossegger->setSourceGrid(18, 72, 16);
-  rossegger->setObservationGrid(32, 36, 16);
+  //rossegger->setSourceGrid(18, 72, 16);
+  //rossegger->setObservationGrid(32, 36, 16);
+  rossegger->setSourceGrid(18, 216, 48);
+  rossegger->setObservationGrid(96, 108, 48);
   rossegger->setModeTruncation(24, 7, 7);
   rossegger->setAutoAxisymmetric(false);
 
