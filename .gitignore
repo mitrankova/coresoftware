@@ -92,3 +92,5 @@ tmtags
 *.app
 /.cproject
 /.project
+offline/packages/PHGarfield/include/*
+offline/packages/PHGarfield/*.root
