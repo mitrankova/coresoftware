@@ -1044,6 +1044,20 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
   }
 
   const unsigned int nassembled = m_assembledTracks->size();
+  const auto status_has_assigned_crossing = [](const unsigned char status)
+  {
+    switch (static_cast<TpcCrossingStatus>(status))
+    {
+    case TpcCrossingStatus::SelectedByContainment:
+    case TpcCrossingStatus::SelectedByVertex:
+    case TpcCrossingStatus::SelectedByVertexAmbiguous:
+    case TpcCrossingStatus::SelectedByVertexLoose:
+    case TpcCrossingStatus::SelectedByContainmentAmbiguous:
+      return true;
+    default:
+      return false;
+    }
+  };
   for (unsigned int iassembled = 0; iassembled < nassembled; ++iassembled)
   {
     const Tpc_AssembledTrack* assembled = m_assembledTracks->get_track(iassembled);
@@ -1052,11 +1066,32 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
 
     TpcCrossingDecisionv1* decision = new TpcCrossingDecisionv1();
     std::vector<TpcCrossingCandidate> candidate_qa_records;
-    auto add_decision_with_candidates = [&candidate_qa_records, decision, this]()
+    auto add_decision_with_candidates = [&candidate_qa_records, decision, status_has_assigned_crossing, iassembled, assembled, this]()
     {
       for (const TpcCrossingCandidate& candidate : candidate_qa_records) { decision->add_candidate(candidate);
 }
       m_decisions->add_decision(decision);
+      if (Verbosity() > 0)
+      {
+        std::cout << Name() << "::process_event - event " << m_event
+                  << " assembled_track_index=" << iassembled
+                  << " assembled_track_id=" << assembled->get_track_id();
+        if (status_has_assigned_crossing(decision->get_status()))
+        {
+          std::cout << " assigned_crossing=" << decision->get_selected_crossing();
+        }
+        else
+        {
+          std::cout << " assigned_crossing=none";
+        }
+        std::cout << " status=" << static_cast<int>(decision->get_status())
+                  << " available=" << decision->get_number_of_available_crossings()
+                  << " allowed=" << decision->get_number_of_allowed_crossings()
+                  << " tested=" << decision->get_number_of_tested_crossings()
+                  << " tpc_valid=" << decision->get_number_of_tpc_valid_crossings()
+                  << " vertex_compatible=" << decision->get_number_of_vertex_compatible_crossings()
+                  << std::endl;
+      }
     };
     decision->set_assembled_track_id(assembled->get_track_id());
     decision->set_number_of_available_crossings(static_cast<unsigned short>(std::min<std::size_t>(available_crossings.size(), std::numeric_limits<unsigned short>::max())));
