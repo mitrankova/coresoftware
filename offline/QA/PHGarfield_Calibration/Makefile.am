@@ -11,12 +11,14 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib64
 
 pkginclude_HEADERS = \
+  PHGarfieldRawHitsQA.h \
   PHGarfieldPolyResidualQA.h
 
 lib_LTLIBRARIES = \
   libPHGarfieldCalibrationQA.la
 
 libPHGarfieldCalibrationQA_la_SOURCES = \
+  PHGarfieldRawHitsQA.cc \
   PHGarfieldPolyResidualQA.cc
 
 libPHGarfieldCalibrationQA_la_LIBADD = \
