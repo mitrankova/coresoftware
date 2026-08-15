@@ -84,6 +84,27 @@ class PHGarfield : public SubsysReco
   }
   void SetElectricFieldMap3DSide0(const std::string &filename) { m_electricFieldMap3D[0] = filename; }
   void SetElectricFieldMap3DSide1(const std::string &filename) { m_electricFieldMap3D[1] = filename; }
+
+  // Optional frame-charge correction maps are added on top of the existing
+  // space-charge correction. The 2D format is QA/hErDefault + QA/hEzDefault;
+  // the side-separated 3D format may be either Field3D/hEx + hEy + hEz
+  // or the Rossegger cylindrical format hEr + hEphi + hEz at file root.
+  void SetFrameElectricFieldMap(const std::string &filename) { m_frameElectricFieldMap = filename; }
+  void SetFrameElectricFieldMap3D(const std::string &side0_filename, const std::string &side1_filename)
+  {
+    m_frameElectricFieldMap3D[0] = side0_filename;
+    m_frameElectricFieldMap3D[1] = side1_filename;
+  }
+  void SetFrameElectricFieldMap3DSide0(const std::string &filename) { m_frameElectricFieldMap3D[0] = filename; }
+  void SetFrameElectricFieldMap3DSide1(const std::string &filename) { m_frameElectricFieldMap3D[1] = filename; }
+  void SetFrameChargeScale(double value)
+  {
+    m_frameChargeScale_side0 = value;
+    m_frameChargeScale_side1 = value;
+  }
+  void SetFrameChargeScaleSide0(double value) { m_frameChargeScale_side0 = value; }
+  void SetFrameChargeScaleSide1(double value) { m_frameChargeScale_side1 = value; }
+
   void SetSpaceChargeScale(double value)
   {
     m_spaceChargeScale_side0 = value;
@@ -106,6 +127,14 @@ class PHGarfield : public SubsysReco
   bool LoadElectricFieldCorrections3D(const std::string &filename, std::size_t side);
   bool HasElectricFieldCorrections3D(std::size_t side) const;
   void ClearElectricFieldCorrections3D(std::size_t side);
+
+  bool LoadFrameElectricFieldCorrections(const std::string &filename);
+  bool LoadFrameElectricFieldCorrections3D(const std::string &filename, std::size_t side);
+  bool HasFrameElectricFieldCorrections3D(std::size_t side) const;
+  void ClearFrameElectricFieldCorrections3D(std::size_t side);
+  void AddFrameElectricFieldCorrections(double r_cm, double phi_rad, double z_cm,
+                                        double &ex_vcm, double &ey_vcm, double &ez_vcm) const;
+
   double InterpolateCorrectionVcm(const TH2 *hist, double r_cm, double abs_z_cm) const;
   double InterpolateCorrectionVcm(const TH3 *hist, double r_cm, double phi_rad, double abs_z_cm) const;
   TVector3 TpcPointToGlobalPoint(double x_cm, double y_cm, double z_cm) const;
@@ -144,6 +173,19 @@ class PHGarfield : public SubsysReco
   TH2 *m_ezCorrection{nullptr};          // local longitudinal correction, input bins in V/m
   // Component order is Ex, Ey, Ez. Ez is along +|z| in the map.
   std::array<std::array<TH3 *, 3>, 2> m_field3DCorrection{};
+
+  // Optional frame-charge field correction, added independently on top of the
+  // ordinary space-charge field. A side-specific 3D frame map takes precedence
+  // over the optional axisymmetric frame map on that side.
+  std::string m_frameElectricFieldMap;
+  std::array<std::string, 2> m_frameElectricFieldMap3D{};
+  double m_frameChargeScale_side0{1.0};
+  double m_frameChargeScale_side1{1.0};
+  TH2 *m_frameErCorrection{nullptr};
+  TH2 *m_frameEzCorrection{nullptr};
+  std::array<std::array<TH3 *, 3>, 2> m_frameField3DCorrection{};
+  // false: Ex,Ey,Ez Cartesian format; true: Er,Ephi,Ez cylindrical Rossegger format.
+  std::array<bool, 2> m_frameField3DIsCylindrical{{false, false}};
 
   //  These are utilities for a spot check of the overall routine:
   // std::string calibdir;

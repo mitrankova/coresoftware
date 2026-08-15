@@ -1,8 +1,7 @@
-// ROOT macro to create a PHGarfield Rossegger map from frame charge only.
+// ROOT macro to create a PHGarfield Rossegger map from frame boundary potential only.
 //
 // This launcher intentionally does not use the analytic radial source model,
-// pad-placement source geometry, or layer/sector gain maps. The charge density
-// is constant inside the frame material and zero elsewhere.
+// pad-placement source geometry, layer/sector gain maps, or a frame volume charge density.
 //
 // Example:
 //   root -b -q 'RunPHGarfieldRosseggerFrames.C()'
@@ -21,11 +20,14 @@ R__LOAD_LIBRARY(libPHGarfield.so)
 namespace fs = std::filesystem;
 
 int RunPHGarfieldRosseggerFrames(
-    const std::string& garfield_output = "frames_only_2d_rossegger.root",
-    const std::string& diagnostic_field_3d_output = "frames_only_fields_3d.root",
+    const std::string& garfield_output = "frames_side1_2d_rossegger_v5.root",
+    const std::string& diagnostic_field_3d_output = "frames_side1_3d_v5.root",
     const double frame_reference_phi = 0.0,
     const bool write_diagnostic_field_3d = true,
-    const unsigned int tpc_side_for_2d_output = 0,
+    const unsigned int tpc_side_for_2d_output = 1,
+    const unsigned int mode_phi_max = 24,
+    const unsigned int n_radial_modes = 32,
+    const unsigned int n_longitudinal_modes = 12,
     const unsigned int radial_job_index = 0,
     const unsigned int n_radial_jobs = 1)
 {
@@ -44,18 +46,20 @@ int RunPHGarfieldRosseggerFrames(
   rossegger->setGeometryCm(21.78, 76.28, 102.325);
   rossegger->setSourceRadiusCm(21.78, 76.28);
 
-  // Constant frame charge density: reference density [nC/m^3], k_eff, alpha.
-  // Alpha is ignored by the frame-only charge model.
-  rossegger->setDensity(20.0, 5.0, 0.0);
   rossegger->setPhiModulation(0.0, 0.0, 0.0, 0.0);
 
-  // Frame mode replaces the source radial grid with exact frame radial edges.
-  // Only source Nphi and Nz are used here.
-  //rossegger->setSourceGrid(18, 72, 16);
-  //rossegger->setObservationGrid(32, 36, 16);
-  rossegger->setSourceGrid(18, 216, 48);
-  rossegger->setObservationGrid(96, 108, 48);
-  rossegger->setModeTruncation(24, 7, 7);
+  // Frame mode keeps exact frame source radial edges; source Nphi and observation bins remain the active resolution knobs.
+//  rossegger->setSourceGrid(18, 72, 16);
+//  rossegger->setObservationGrid(32, 36, 16);
+ // rossegger->setModeTruncation(24, 12, 12);
+
+  rossegger->setSourceGrid(18, 144, 24);
+  rossegger->setObservationGrid(192, 240, 24);
+  rossegger->setModeTruncation(mode_phi_max, n_radial_modes, n_longitudinal_modes);
+
+  //rossegger->setSourceGrid(18, 288, 24);
+  //rossegger->setObservationGrid(48, 180, 24);
+ // rossegger->setModeTruncation(48, 48, 24);
   rossegger->setAutoAxisymmetric(false);
 
   rossegger->setTpcSide(tpc_side_for_2d_output);
@@ -65,6 +69,9 @@ int RunPHGarfieldRosseggerFrames(
   rossegger->setUseRealTpcSourceGeometry(false);
   rossegger->setUseFrameChargeModel(true);
   rossegger->setFrameReferencePhi(frame_reference_phi);
+  rossegger->setFrameBoundaryPotential(1.0);
+  rossegger->setFrameChargeWeighting(
+      PHGarfieldRossegger::FrameChargeWeighting::ProportionalToArea);
   rossegger->setDivideChargeByGain(false);
   rossegger->setNormalizeGainWeightedTotal(false);
 

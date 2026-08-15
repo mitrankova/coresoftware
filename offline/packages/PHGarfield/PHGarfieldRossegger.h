@@ -42,6 +42,13 @@ class PHGarfieldRossegger : public SubsysReco
 
   void setUseFrameChargeModel(bool value) { m_useFrameChargeModel = value; }
   void setFrameReferencePhi(double value) { m_frameReferencePhi = value; }
+  enum class FrameChargeWeighting
+  {
+    EqualChargePerPiece,
+    ProportionalToArea
+  };
+  void setFrameBoundaryPotential(double value) { m_frameBoundaryPotential = value; }
+  void setFrameChargeWeighting(FrameChargeWeighting mode) { m_frameChargeWeighting = mode; }
 
   // Split observation radial bins across condor jobs. Histograms keep full
   // binning, so PART files can be merged with hadd.
@@ -74,10 +81,17 @@ class PHGarfieldRossegger : public SubsysReco
   using PadGeometry = std::array<std::array<std::array<PadInterval, 12>, 2>, 3>;
   using GainMap = std::array<std::array<std::array<double, 48>, 12>, 2>;
 
+  struct FrameBoundaryPattern
+  {
+    std::vector<double> geometry_fraction;
+    std::vector<double> weight;
+    std::vector<double> boundary_potential;
+  };
+
   int calculate();
   bool validateConfig() const;
   unsigned int effectivePhiMax() const;
-  std::pair<unsigned int, unsigned int> radialRange() const;
+  std::pair<unsigned int, unsigned int> radialRange(unsigned int nr_obs) const;
 
   double radialBoundaryFunction(double kval, unsigned int mode_m) const;
   double radialBasis(double kval, unsigned int mode_m, double radius_m) const;
@@ -91,10 +105,9 @@ class PHGarfieldRossegger : public SubsysReco
                                         const std::vector<double>& phi_source_edges,
                                         const std::vector<double>& z_source_edges_m,
                                         unsigned int side) const;
-  std::vector<double> makeFrameChargeDensity(const SourceGrid& source_grid,
-                                             const std::vector<double>& phi_source_edges,
-                                             const std::vector<double>& z_source_edges_m,
-                                             unsigned int side) const;
+  FrameBoundaryPattern makeFrameBoundaryPattern(const SourceGrid& source_grid,
+                                                const std::vector<double>& phi_source_edges,
+                                                unsigned int side) const;
 
   void writeGarfieldRootFile(const std::vector<double>& r_edges_m,
                              const std::vector<double>& z_edges_m,
@@ -116,6 +129,19 @@ class PHGarfieldRossegger : public SubsysReco
                             const std::vector<double>& ez,
                             unsigned int r_begin,
                             unsigned int r_end) const;
+
+  void writeFrameBoundaryField3DRootFile(const std::vector<double>& r_source_edges_m,
+                                         const std::vector<double>& r_obs_edges_m,
+                                         const std::vector<double>& phi_source_edges,
+                                         const std::vector<double>& phi_obs_edges,
+                                         const std::vector<double>& z_obs_edges_m,
+                                         const FrameBoundaryPattern& frame_pattern,
+                                         const std::vector<double>& potential,
+                                         const std::vector<double>& er,
+                                         const std::vector<double>& ephi,
+                                         const std::vector<double>& ez,
+                                         unsigned int r_begin,
+                                         unsigned int r_end) const;
 
   void writePHGarfieldField3DRootFile(const std::vector<double>& r_obs_edges_m,
                                       const std::vector<double>& phi_obs_edges,
@@ -158,6 +184,8 @@ class PHGarfieldRossegger : public SubsysReco
   bool m_useRealTpcSourceGeometry{false};
   bool m_useFrameChargeModel{false};
   double m_frameReferencePhi{0.0};
+  double m_frameBoundaryPotential{1.0};
+  FrameChargeWeighting m_frameChargeWeighting{FrameChargeWeighting::ProportionalToArea};
   std::string m_padPlacementFile{"input/TPC_pad_placement.txt"};
   std::string m_gainMapFile{"input/layer_gain_79513_Mariia_side01.root"};
   std::array<std::string, 2> m_gainHistograms{{"hGainMap_side0_South", "hGainMap_side1_North"}};

@@ -64,6 +64,10 @@ PHGarfield::~PHGarfield()
   delete m_ezCorrection;
   ClearElectricFieldCorrections3D(0);
   ClearElectricFieldCorrections3D(1);
+  delete m_frameErCorrection;
+  delete m_frameEzCorrection;
+  ClearFrameElectricFieldCorrections3D(0);
+  ClearFrameElectricFieldCorrections3D(1);
 }
 
 int PHGarfield::InitRun(PHCompositeNode* /*topNode*/)
@@ -104,6 +108,26 @@ int PHGarfield::InitRun(PHCompositeNode* /*topNode*/)
       std::cerr << PHWHERE << " Failed to load side " << side
                 << " 3D electric-field correction map: "
                 << m_electricFieldMap3D[side] << std::endl;
+    }
+  }
+
+  // Load optional frame-charge maps independently. They are additive and do
+  // not alter the existing space-charge-map selection or k_eff flow.
+  if (!m_frameElectricFieldMap.empty() &&
+      !LoadFrameElectricFieldCorrections(m_frameElectricFieldMap))
+  {
+    std::cerr << PHWHERE << " Failed to load frame electric-field correction map: "
+              << m_frameElectricFieldMap << std::endl;
+  }
+
+  for (std::size_t side = 0; side < m_frameElectricFieldMap3D.size(); ++side)
+  {
+    if (!m_frameElectricFieldMap3D[side].empty() &&
+        !LoadFrameElectricFieldCorrections3D(m_frameElectricFieldMap3D[side], side))
+    {
+      std::cerr << PHWHERE << " Failed to load side " << side
+                << " 3D frame electric-field correction map: "
+                << m_frameElectricFieldMap3D[side] << std::endl;
     }
   }
 
@@ -389,6 +413,7 @@ void PHGarfield::GetElectricFieldVcm(double x_cm, double y_cm, double z_cm, doub
                                              : m_spaceChargeScale_side1;
   if (spaceChargeScale == 0.0)
   {
+    AddFrameElectricFieldCorrections(r_cm, phi_rad, z_cm, ex_vcm, ey_vcm, ez_vcm);
     return;
   }
 
@@ -405,6 +430,7 @@ void PHGarfield::GetElectricFieldVcm(double x_cm, double y_cm, double z_cm, doub
     const double delta_ez_local_vcm = spaceChargeScale *
                                       InterpolateCorrectionVcm(m_field3DCorrection[side][2], r_cm, phi_rad, abs_z_cm);
     ez_vcm += z_cm >= 0.0 ? delta_ez_local_vcm : -delta_ez_local_vcm;
+    AddFrameElectricFieldCorrections(r_cm, phi_rad, z_cm, ex_vcm, ey_vcm, ez_vcm);
     return;
   }
 
@@ -412,6 +438,7 @@ void PHGarfield::GetElectricFieldVcm(double x_cm, double y_cm, double z_cm, doub
   // side. This preserves the existing PHGarfield behavior and API.
   if (!m_erCorrection || !m_ezCorrection)
   {
+    AddFrameElectricFieldCorrections(r_cm, phi_rad, z_cm, ex_vcm, ey_vcm, ez_vcm);
     return;
   }
 
@@ -430,6 +457,8 @@ void PHGarfield::GetElectricFieldVcm(double x_cm, double y_cm, double z_cm, doub
   // hEzDefault is expressed along the local coordinate s = |z|.
   // Convert it to the local TPC Cartesian z direction.
   ez_vcm += z_cm >= 0.0 ? delta_ez_local_vcm : -delta_ez_local_vcm;
+
+  AddFrameElectricFieldCorrections(r_cm, phi_rad, z_cm, ex_vcm, ey_vcm, ez_vcm);
 }
 
 bool PHGarfield::LoadElectricFieldCorrections(const std::string& filename)
@@ -658,6 +687,231 @@ void PHGarfield::ClearElectricFieldCorrections3D(const std::size_t side)
     delete histogram;
     histogram = nullptr;
   }
+}
+
+bool PHGarfield::LoadFrameElectricFieldCorrections(const std::string& filename)
+{
+  std::unique_ptr<TFile> input(TFile::Open(filename.c_str(), "READ"));
+  if (!input || input->IsZombie())
+  {
+    std::cerr << PHWHERE << " Could not open frame electric-field map: "
+              << filename << std::endl;
+    return false;
+  }
+
+  auto* er = dynamic_cast<TH2*>(input->Get("QA/hErDefault"));
+  auto* ez = dynamic_cast<TH2*>(input->Get("QA/hEzDefault"));
+  if (!er) { er = dynamic_cast<TH2*>(input->Get("hErDefault")); }
+  if (!ez) { ez = dynamic_cast<TH2*>(input->Get("hEzDefault")); }
+
+  if (!er || !ez)
+  {
+    std::cerr << PHWHERE
+              << " Missing QA/hErDefault or QA/hEzDefault in frame map "
+              << filename << std::endl;
+    return false;
+  }
+
+  TH2* erClone = dynamic_cast<TH2*>(er->Clone("PHGarfield_FrameErCorrection"));
+  TH2* ezClone = dynamic_cast<TH2*>(ez->Clone("PHGarfield_FrameEzCorrection"));
+  if (!erClone || !ezClone)
+  {
+    delete erClone;
+    delete ezClone;
+    return false;
+  }
+  erClone->SetDirectory(nullptr);
+  ezClone->SetDirectory(nullptr);
+
+  delete m_frameErCorrection;
+  delete m_frameEzCorrection;
+  m_frameErCorrection = erClone;
+  m_frameEzCorrection = ezClone;
+
+  std::cout << "Loaded axisymmetric frame electric-field corrections from "
+            << filename << std::endl;
+  std::cout << "  frame k_eff side0/side1 = "
+            << m_frameChargeScale_side0 << "/" << m_frameChargeScale_side1
+            << std::endl;
+  return true;
+}
+
+bool PHGarfield::LoadFrameElectricFieldCorrections3D(const std::string& filename, const std::size_t side)
+{
+  if (side >= m_frameField3DCorrection.size())
+  {
+    std::cerr << PHWHERE << " Invalid TPC side " << side
+              << " for 3D frame electric-field map " << filename << std::endl;
+    return false;
+  }
+
+  std::unique_ptr<TFile> input(TFile::Open(filename.c_str(), "READ"));
+  if (!input || input->IsZombie())
+  {
+    std::cerr << PHWHERE << " Could not open 3D frame electric-field map: "
+              << filename << std::endl;
+    return false;
+  }
+
+  // Accept both PHGarfield Cartesian maps and the native Rossegger 3D output.
+  // Rossegger writes hEr, hEphi, hEz at the ROOT-file top level.
+  std::array<TH3*, 3> source{{
+      dynamic_cast<TH3*>(input->Get("Field3D/hEx")),
+      dynamic_cast<TH3*>(input->Get("Field3D/hEy")),
+      dynamic_cast<TH3*>(input->Get("Field3D/hEz"))}};
+  bool cylindrical = false;
+
+  if (!source[0] || !source[1] || !source[2])
+  {
+    source = {{
+        dynamic_cast<TH3*>(input->Get("hEr")),
+        dynamic_cast<TH3*>(input->Get("hEphi")),
+        dynamic_cast<TH3*>(input->Get("hEz"))}};
+    cylindrical = true;
+  }
+
+  if (!source[0] || !source[1] || !source[2])
+  {
+    std::cerr << PHWHERE
+              << " Missing either Field3D/hEx,hEy,hEz or hEr,hEphi,hEz in frame map "
+              << filename << std::endl;
+    return false;
+  }
+
+  const auto sameAxis = [](const TAxis* lhs, const TAxis* rhs)
+  {
+    if (!lhs || !rhs || lhs->GetNbins() != rhs->GetNbins()) { return false; }
+    constexpr double tolerance = 1.0e-9;
+    return std::abs(lhs->GetXmin() - rhs->GetXmin()) < tolerance &&
+           std::abs(lhs->GetXmax() - rhs->GetXmax()) < tolerance;
+  };
+
+  for (std::size_t component = 1; component < source.size(); ++component)
+  {
+    if (!sameAxis(source[0]->GetXaxis(), source[component]->GetXaxis()) ||
+        !sameAxis(source[0]->GetYaxis(), source[component]->GetYaxis()) ||
+        !sameAxis(source[0]->GetZaxis(), source[component]->GetZaxis()))
+    {
+      std::cerr << PHWHERE << " Inconsistent 3D frame-map axes in "
+                << filename << std::endl;
+      return false;
+    }
+  }
+
+  const TAxis* phiAxis = source[0]->GetYaxis();
+  constexpr double phiTolerance = 1.0e-3;
+  if (std::abs((phiAxis->GetXmax() - phiAxis->GetXmin()) - 2.0 * std::numbers::pi) > phiTolerance)
+  {
+    std::cerr << PHWHERE << " 3D frame-map phi axis must span 2*pi radians in "
+              << filename << std::endl;
+    return false;
+  }
+
+  std::array<TH3*, 3> cloned{};
+  const std::array<const char*, 3> componentNames =
+      cylindrical ? std::array<const char*, 3>{{"Er", "Ephi", "Ez"}}
+                  : std::array<const char*, 3>{{"Ex", "Ey", "Ez"}};
+  for (std::size_t component = 0; component < cloned.size(); ++component)
+  {
+    std::ostringstream cloneName;
+    cloneName << "PHGarfield_Frame" << componentNames[component]
+              << "Correction_side" << side;
+    cloned[component] = dynamic_cast<TH3*>(source[component]->Clone(cloneName.str().c_str()));
+    if (!cloned[component])
+    {
+      for (TH3* histogram : cloned) { delete histogram; }
+      return false;
+    }
+    cloned[component]->SetDirectory(nullptr);
+  }
+
+  ClearFrameElectricFieldCorrections3D(side);
+  m_frameField3DCorrection[side] = cloned;
+  m_frameField3DIsCylindrical[side] = cylindrical;
+
+  std::cout << "Loaded 3D frame electric-field corrections for side " << side
+            << (side == 0 ? " (south/z<0)" : " (north/z>0)")
+            << " from " << filename << std::endl;
+  std::cout << "  format = " << (cylindrical ? "Rossegger Er/Ephi/Ez" : "Cartesian Ex/Ey/Ez")
+            << ", frame k_eff = "
+            << (side == 0 ? m_frameChargeScale_side0 : m_frameChargeScale_side1)
+            << std::endl;
+  return true;
+}
+
+bool PHGarfield::HasFrameElectricFieldCorrections3D(const std::size_t side) const
+{
+  return side < m_frameField3DCorrection.size() &&
+         m_frameField3DCorrection[side][0] &&
+         m_frameField3DCorrection[side][1] &&
+         m_frameField3DCorrection[side][2];
+}
+
+void PHGarfield::ClearFrameElectricFieldCorrections3D(const std::size_t side)
+{
+  if (side >= m_frameField3DCorrection.size()) { return; }
+  for (TH3*& histogram : m_frameField3DCorrection[side])
+  {
+    delete histogram;
+    histogram = nullptr;
+  }
+  m_frameField3DIsCylindrical[side] = false;
+}
+
+void PHGarfield::AddFrameElectricFieldCorrections(const double r_cm,
+                                                   const double phi_rad,
+                                                   const double z_cm,
+                                                   double& ex_vcm,
+                                                   double& ey_vcm,
+                                                   double& ez_vcm) const
+{
+  const std::size_t side = z_cm < 0.0 ? 0 : 1;
+  const double frameScale = side == 0 ? m_frameChargeScale_side0
+                                       : m_frameChargeScale_side1;
+  if (frameScale == 0.0) { return; }
+
+  const double abs_z_cm = std::abs(z_cm);
+
+  // As for the ordinary space-charge field, prefer a valid side-specific 3D
+  // frame map over the optional axisymmetric frame map.
+  if (HasFrameElectricFieldCorrections3D(side))
+  {
+    if (m_frameField3DIsCylindrical[side])
+    {
+      const double deltaErVcm = frameScale *
+                                InterpolateCorrectionVcm(m_frameField3DCorrection[side][0], r_cm, phi_rad, abs_z_cm);
+      const double deltaEphiVcm = frameScale *
+                                  InterpolateCorrectionVcm(m_frameField3DCorrection[side][1], r_cm, phi_rad, abs_z_cm);
+      ex_vcm += deltaErVcm * std::cos(phi_rad) - deltaEphiVcm * std::sin(phi_rad);
+      ey_vcm += deltaErVcm * std::sin(phi_rad) + deltaEphiVcm * std::cos(phi_rad);
+    }
+    else
+    {
+      ex_vcm += frameScale *
+                InterpolateCorrectionVcm(m_frameField3DCorrection[side][0], r_cm, phi_rad, abs_z_cm);
+      ey_vcm += frameScale *
+                InterpolateCorrectionVcm(m_frameField3DCorrection[side][1], r_cm, phi_rad, abs_z_cm);
+    }
+
+    const double deltaEzLocalVcm = frameScale *
+                                   InterpolateCorrectionVcm(m_frameField3DCorrection[side][2], r_cm, phi_rad, abs_z_cm);
+    ez_vcm += z_cm >= 0.0 ? deltaEzLocalVcm : -deltaEzLocalVcm;
+    return;
+  }
+
+  if (!m_frameErCorrection || !m_frameEzCorrection) { return; }
+
+  const double deltaErVcm = frameScale *
+                            InterpolateCorrectionVcm(m_frameErCorrection, r_cm, abs_z_cm);
+  const double deltaEzLocalVcm = frameScale *
+                                 InterpolateCorrectionVcm(m_frameEzCorrection, r_cm, abs_z_cm);
+
+  if (r_cm > 0.0)
+  {
+    ex_vcm += deltaErVcm * std::cos(phi_rad);
+    ey_vcm += deltaErVcm * std::sin(phi_rad);
+  }
+  ez_vcm += z_cm >= 0.0 ? deltaEzLocalVcm : -deltaEzLocalVcm;
 }
 
 double PHGarfield::InterpolateCorrectionVcm(

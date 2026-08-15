@@ -62,7 +62,7 @@ int RunPHGarfieldRossegger(
   rossegger->setSourceRadiusCm(use_frame_charge_model ? 21.78 : 22.8, use_frame_charge_model ? 76.28 : 75.43);
 
   // Charge model: reference density [nC/m^3], k_eff, radial power alpha.
-  rossegger->setDensity(20.0, 1.0, 1.23);
+  rossegger->setDensity(20.0, 1.0, 2.0);//1.23);
   rossegger->setPhiModulation(0.0, 0.0, 0.0, 0.0);
 
   // Notebook development grid. Increase these for production-quality maps.
@@ -70,9 +70,9 @@ int RunPHGarfieldRossegger(
   // only source Nphi and Nz are taken from this call.
   //rossegger->setSourceGrid(18, 72, 16);
   //rossegger->setObservationGrid(32, 36, 16);
-  rossegger->setSourceGrid(18, 216, 48);
-  rossegger->setObservationGrid(96, 108, 48);
-  rossegger->setModeTruncation(24, 7, 7);
+  rossegger->setSourceGrid(48, 216, 48);
+  rossegger->setObservationGrid(96, 108, 48);///takes like 5 min but it is too precise
+  rossegger->setModeTruncation(24, 12, 12);
   rossegger->setAutoAxisymmetric(false);
 
   rossegger->setTpcSide(tpc_side_for_2d_output);
