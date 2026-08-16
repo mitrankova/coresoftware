@@ -40,6 +40,10 @@ class PHGarfieldRossegger : public SubsysReco
   void setDivideChargeByGain(bool value) { m_divideChargeByGain = value; }
   void setNormalizeGainWeightedTotal(bool value) { m_normalizeGainWeightedTotal = value; }
 
+  void setUseDensityMap(bool value) { m_useDensityMap = value; }
+  void setDensityMapFile(const std::string& filename, const std::string& side0_histogram, const std::string& side1_histogram);
+  void setNormalizeDensityMap(bool value) { m_normalizeDensityMap = value; }
+
   void setUseFrameChargeModel(bool value) { m_useFrameChargeModel = value; }
   void setFrameReferencePhi(double value) { m_frameReferencePhi = value; }
   enum class FrameChargeWeighting
@@ -110,8 +114,10 @@ class PHGarfieldRossegger : public SubsysReco
                                                 unsigned int side) const;
 
   void writeGarfieldRootFile(const std::vector<double>& r_edges_m,
+                             const std::vector<double>& phi_edges,
                              const std::vector<double>& z_edges_m,
                              const std::vector<double>& er,
+                             const std::vector<double>& ephi,
                              const std::vector<double>& ez,
                              unsigned int r_begin,
                              unsigned int r_end) const;
@@ -191,6 +197,11 @@ class PHGarfieldRossegger : public SubsysReco
   std::array<std::string, 2> m_gainHistograms{{"hGainMap_side0_South", "hGainMap_side1_North"}};
   bool m_divideChargeByGain{true};
   bool m_normalizeGainWeightedTotal{true};
+
+  bool m_useDensityMap{false};
+  bool m_normalizeDensityMap{true};
+  std::string m_densityMapFile;
+  std::array<std::string, 2> m_densityMapHistograms{{"h_ibf_final_rphi_side0", "h_ibf_final_rphi_side1"}};
 
   unsigned int m_jobIndex{0};
   unsigned int m_nJobs{1};
