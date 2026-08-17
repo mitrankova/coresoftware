@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <format>
 #include <fstream>
 #include <iostream>
@@ -21,7 +22,9 @@
 #include <memory>
 #include <numbers>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace
 {
@@ -103,29 +106,6 @@ namespace
   {
     std::sort(edges_m.begin(), edges_m.end());
     edges_m.erase(std::unique(edges_m.begin(), edges_m.end(), [](double lhs, double rhs) { return std::fabs(lhs - rhs) < 1.0e-12; }), edges_m.end());
-  }
-
-  double frame_radial_rail_area_cm2(double r_min_cm, double r_max_cm, double width_cm)
-  {
-    constexpr unsigned int n_steps = 256;
-    const double dr_cm = (r_max_cm - r_min_cm) / static_cast<double>(n_steps);
-    double area_cm2 = 0.0;
-    for (unsigned int i = 0; i < n_steps; ++i)
-    {
-      const double r_cm = r_min_cm + (static_cast<double>(i) + 0.5) * dr_cm;
-      area_cm2 += r_cm * std::asin(width_cm / r_cm) * dr_cm;
-    }
-    return area_cm2;
-  }
-
-  double frame_area_m2(unsigned int module)
-  {
-    const FrameDimensions& f = frameDimensions[module];
-    const double inner_area_cm2 = frameHalfAngle * (f.inner_r_max_cm * f.inner_r_max_cm - f.inner_r_min_cm * f.inner_r_min_cm);
-    const double outer_area_cm2 = frameHalfAngle * (f.outer_r_max_cm * f.outer_r_max_cm - f.outer_r_min_cm * f.outer_r_min_cm);
-    const double left_area_cm2 = frame_radial_rail_area_cm2(f.inner_r_max_cm, f.outer_r_min_cm, f.left_width_cm);
-    const double right_area_cm2 = frame_radial_rail_area_cm2(f.inner_r_max_cm, f.outer_r_min_cm, f.right_width_cm);
-    return (inner_area_cm2 + outer_area_cm2 + left_area_cm2 + right_area_cm2) * 1.0e-4;
   }
 
   std::vector<double> frame_observation_r_edges(double inner_cm, double outer_cm)
@@ -1010,41 +990,93 @@ std::vector<double> PHGarfieldRossegger::makeChargeDensity(const SourceGrid& sou
 }
 
 
-namespace
+bool PHGarfieldRossegger::pointInPolygon(const std::vector<Point2D>& polygon, double x_cm, double y_cm)
 {
-  bool point_in_frame_geometry(unsigned int module, double r_cm, double phi_rel)
+  bool inside = false;
+  const std::size_t n = polygon.size();
+  if (n < 3) { return false; }
+
+  for (std::size_t i = 0, j = n - 1; i < n; j = i++)
   {
-    const FrameDimensions& f = frameDimensions[module];
-
-    if (r_cm < f.inner_r_min_cm || r_cm > f.outer_r_max_cm)
-    {
-      return false;
-    }
-
-    if (r_cm >= f.inner_r_min_cm && r_cm <= f.inner_r_max_cm &&
-        phi_rel >= -frameHalfAngle && phi_rel <= frameHalfAngle)
-    {
-      return true;
-    }
-
-    if (r_cm >= f.outer_r_min_cm && r_cm <= f.outer_r_max_cm &&
-        phi_rel >= -frameHalfAngle && phi_rel <= frameHalfAngle)
-    {
-      return true;
-    }
-
-    if (r_cm <= f.inner_r_max_cm || r_cm >= f.outer_r_min_cm)
-    {
-      return false;
-    }
-
-    const double dphi_left = std::asin(f.left_width_cm / r_cm);
-    const double dphi_right = std::asin(f.right_width_cm / r_cm);
-    const bool in_left = phi_rel >= -frameHalfAngle && phi_rel <= -frameHalfAngle + dphi_left;
-    const bool in_right = phi_rel <= frameHalfAngle && phi_rel >= frameHalfAngle - dphi_right;
-    return in_left || in_right;
+    const double xi = polygon[i].x_cm;
+    const double yi = polygon[i].y_cm;
+    const double xj = polygon[j].x_cm;
+    const double yj = polygon[j].y_cm;
+    const bool intersects = ((yi > y_cm) != (yj > y_cm)) &&
+                            (x_cm < (xj - xi) * (y_cm - yi) / (yj - yi) + xi);
+    if (intersects) { inside = !inside; }
   }
-}  // namespace
+  return inside;
+}
+
+double PHGarfieldRossegger::polygonAreaCm2(const std::vector<Point2D>& polygon)
+{
+  const std::size_t n = polygon.size();
+  if (n < 3) { return 0.0; }
+
+  double area = 0.0;
+  for (std::size_t i = 0, j = n - 1; i < n; j = i++)
+  {
+    area += polygon[j].x_cm * polygon[i].y_cm - polygon[i].x_cm * polygon[j].y_cm;
+  }
+  return 0.5 * std::fabs(area);
+}
+
+void PHGarfieldRossegger::loadFramePolygons() const
+{
+  if (m_framePolygonsLoaded) { return; }
+
+  FramePolygons polygons{};
+  std::ifstream input(m_frameGeometryFile);
+  if (!input.is_open()) { throw std::runtime_error("Could not open frame geometry CSV " + m_frameGeometryFile); }
+
+  std::string line;
+  std::getline(input, line);
+  while (std::getline(input, line))
+  {
+    if (line.empty()) { continue; }
+
+    std::stringstream ss(line);
+    std::array<std::string, 5> fields{};
+    for (std::string& field : fields)
+    {
+      if (!std::getline(ss, field, ',')) { throw std::runtime_error("Malformed frame geometry CSV row: " + line); }
+    }
+
+    const unsigned int module = std::stoul(fields[0]);
+    if (module >= nTpcModules) { throw std::runtime_error("Frame geometry CSV has invalid module " + fields[0]); }
+
+    std::vector<Point2D>* polygon = nullptr;
+    if (fields[1] == "inner") { polygon = &polygons[module].inner; }
+    else if (fields[1] == "outer") { polygon = &polygons[module].outer; }
+    else { throw std::runtime_error("Frame geometry CSV has invalid boundary " + fields[1]); }
+
+    polygon->push_back({std::stod(fields[3]) / 10.0, std::stod(fields[4]) / 10.0});
+  }
+
+  for (unsigned int module = 0; module < nTpcModules; ++module)
+  {
+    if (polygons[module].inner.size() < 3 || polygons[module].outer.size() < 3)
+    {
+      throw std::runtime_error(std::format("Frame geometry CSV missing inner/outer polygon for module {}", module));
+    }
+  }
+
+  m_framePolygons = std::move(polygons);
+  m_framePolygonsLoaded = true;
+}
+
+bool PHGarfieldRossegger::pointInFrameGeometry(const FramePolygon& frame, double r_cm, double phi_rel) const
+{
+  const double x_cm = r_cm * std::sin(phi_rel);
+  const double y_cm = r_cm * std::cos(phi_rel);
+  return pointInPolygon(frame.outer, x_cm, y_cm) && !pointInPolygon(frame.inner, x_cm, y_cm);
+}
+
+double PHGarfieldRossegger::frameAreaM2(const FramePolygon& frame) const
+{
+  return (polygonAreaCm2(frame.outer) - polygonAreaCm2(frame.inner)) * 1.0e-4;
+}
 
 PHGarfieldRossegger::FrameBoundaryPattern PHGarfieldRossegger::makeFrameBoundaryPattern(const SourceGrid& source_grid,
                                                                                          const std::vector<double>& phi_source_edges,
@@ -1057,11 +1089,23 @@ PHGarfieldRossegger::FrameBoundaryPattern PHGarfieldRossegger::makeFrameBoundary
   pattern.weight.assign(nr * nphi, 0.0);
   pattern.boundary_potential.assign(nr * nphi, 0.0);
 
+  loadFramePolygons();
   std::array<double, nTpcModules> frame_area_by_module_m2{};
   double reference_piece_area = 0.0;
   for (unsigned int module = 0; module < nTpcModules; ++module)
   {
-    frame_area_by_module_m2[module] = frame_area_m2(module);
+    const double inner_area_m2 = polygonAreaCm2(m_framePolygons[module].inner) * 1.0e-4;
+    const double outer_area_m2 = polygonAreaCm2(m_framePolygons[module].outer) * 1.0e-4;
+    frame_area_by_module_m2[module] = outer_area_m2 - inner_area_m2;
+    if (frame_area_by_module_m2[module] <= 0.0)
+    {
+      throw std::runtime_error(std::format("Frame geometry CSV gives non-positive area for module {}", module));
+    }
+    std::cout << "  frame geometry module " << module
+              << ": outer area = " << outer_area_m2
+              << " m^2, inner opening area = " << inner_area_m2
+              << " m^2, frame area = " << frame_area_by_module_m2[module]
+              << " m^2" << std::endl;
     reference_piece_area += frame_area_by_module_m2[module];
   }
   reference_piece_area /= static_cast<double>(nTpcModules);
@@ -1097,7 +1141,7 @@ PHGarfieldRossegger::FrameBoundaryPattern PHGarfieldRossegger::makeFrameBoundary
           for (unsigned int sector = 0; sector < nTpcSectors; ++sector)
           {
             const double phi_rel = local_frame_phi(side, sector, phi, m_frameReferencePhi);
-            if (!point_in_frame_geometry(static_cast<unsigned int>(module), r_cm, phi_rel)) { continue; }
+            if (!pointInFrameGeometry(m_framePolygons[static_cast<unsigned int>(module)], r_cm, phi_rel)) { continue; }
             geometry_fraction += inv_samples;
             if (m_frameChargeWeighting == FrameChargeWeighting::EqualChargePerPiece)
             {
@@ -1122,6 +1166,7 @@ PHGarfieldRossegger::FrameBoundaryPattern PHGarfieldRossegger::makeFrameBoundary
   std::cout << "  frame boundary potential side " << side << " = " << m_frameBoundaryPotential
             << " V, weighting = "
             << (m_frameChargeWeighting == FrameChargeWeighting::EqualChargePerPiece ? "EqualChargePerPiece" : "ProportionalToArea")
+            << ", frame geometry = " << m_frameGeometryFile
             << ", frame reference sector = " << frameReferenceSector
             << ", weighted transverse area = " << weighted_area << " m^2" << std::endl;
   return pattern;

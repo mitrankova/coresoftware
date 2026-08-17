@@ -46,6 +46,7 @@ class PHGarfieldRossegger : public SubsysReco
 
   void setUseFrameChargeModel(bool value) { m_useFrameChargeModel = value; }
   void setFrameReferencePhi(double value) { m_frameReferencePhi = value; }
+  void setFrameGeometryFile(const std::string& filename) { m_frameGeometryFile = filename; m_framePolygonsLoaded = false; }
   enum class FrameChargeWeighting
   {
     EqualChargePerPiece,
@@ -85,6 +86,20 @@ class PHGarfieldRossegger : public SubsysReco
   using PadGeometry = std::array<std::array<std::array<PadInterval, 12>, 2>, 3>;
   using GainMap = std::array<std::array<std::array<double, 48>, 12>, 2>;
 
+  struct Point2D
+  {
+    double x_cm{0.0};
+    double y_cm{0.0};
+  };
+
+  struct FramePolygon
+  {
+    std::vector<Point2D> inner;
+    std::vector<Point2D> outer;
+  };
+
+  using FramePolygons = std::array<FramePolygon, 3>;
+
   struct FrameBoundaryPattern
   {
     std::vector<double> geometry_fraction;
@@ -109,6 +124,11 @@ class PHGarfieldRossegger : public SubsysReco
                                         const std::vector<double>& phi_source_edges,
                                         const std::vector<double>& z_source_edges_m,
                                         unsigned int side) const;
+  void loadFramePolygons() const;
+  static bool pointInPolygon(const std::vector<Point2D>& polygon, double x_cm, double y_cm);
+  static double polygonAreaCm2(const std::vector<Point2D>& polygon);
+  bool pointInFrameGeometry(const FramePolygon& frame, double r_cm, double phi_rel) const;
+  double frameAreaM2(const FramePolygon& frame) const;
   FrameBoundaryPattern makeFrameBoundaryPattern(const SourceGrid& source_grid,
                                                 const std::vector<double>& phi_source_edges,
                                                 unsigned int side) const;
@@ -190,6 +210,9 @@ class PHGarfieldRossegger : public SubsysReco
   bool m_useRealTpcSourceGeometry{false};
   bool m_useFrameChargeModel{false};
   double m_frameReferencePhi{0.0};
+  std::string m_frameGeometryFile{"tpc_frame_geometry.csv"};
+  mutable FramePolygons m_framePolygons;
+  mutable bool m_framePolygonsLoaded{false};
   double m_frameBoundaryPotential{1.0};
   FrameChargeWeighting m_frameChargeWeighting{FrameChargeWeighting::ProportionalToArea};
   std::string m_padPlacementFile{"input/TPC_pad_placement.txt"};
