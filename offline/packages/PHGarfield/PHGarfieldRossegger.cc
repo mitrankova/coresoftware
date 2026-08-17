@@ -195,7 +195,12 @@ namespace
 
   std::vector<double> frame_phi_edges(unsigned int, unsigned int side, double frame_reference_phi, double lo)
   {
-    constexpr double fine_half_width = 0.012;
+    double fine_half_width = 0.0;
+    for (const FrameDimensions& f : frameDimensions)
+    {
+      fine_half_width = std::max(fine_half_width, std::asin(f.left_width_cm / f.inner_r_max_cm));
+      fine_half_width = std::max(fine_half_width, std::asin(f.right_width_cm / f.inner_r_max_cm));
+    }
     constexpr double fine_step = 0.0015;
     constexpr double coarse_step = 0.05;
     const double hi = lo + 2.0 * std::numbers::pi;
@@ -631,7 +636,7 @@ PHGarfieldRossegger::SourceGrid PHGarfieldRossegger::buildSourceGrid() const
     return source_grid;
   }
 
-  if (m_useDensityMap || !m_useRealTpcSourceGeometry)
+  if (!m_useDensityMap && !m_useRealTpcSourceGeometry)
   {
     SourceGrid source_grid;
     source_grid.r_edges_m = edges(m_sourceRMinCm * cmToM, m_sourceRMaxCm * cmToM, m_nrSource);
@@ -655,7 +660,7 @@ PHGarfieldRossegger::SourceGrid PHGarfieldRossegger::buildSourceGrid() const
   SourceGrid source_grid;
   std::vector<double>& redges = source_grid.r_edges_m;
 
-  // In real-TPC geometry mode m_nrSource is intentionally unused; radial bins come from detector geometry.
+  // In real-TPC and density-map modes m_nrSource is intentionally unused; radial bins come from detector geometry.
   redges.push_back(r1GemInnerCm * cmToM);
   std::vector<double> inner_r1_edges_cm;
   for (double edge_cm = first_low[0] - pitch_cm[0]; edge_cm > r1GemInnerCm + 1.0e-12; edge_cm -= pitch_cm[0])
@@ -904,6 +909,7 @@ std::vector<double> PHGarfieldRossegger::makeChargeDensity(const SourceGrid& sou
   {
     const PadGeometry pad_geometry = parsePadPlacementFile();
     const GainMap gain = readGainMap();
+    const auto ps = phi_centers(nphi);
     std::vector<double> geometry_fraction(nr * nphi, 0.0);
     std::vector<double> inverse_gain_weight(nr * nphi, 0.0);
 
@@ -949,9 +955,19 @@ std::vector<double> PHGarfieldRossegger::makeChargeDensity(const SourceGrid& sou
         {
           const unsigned int idx = src_index(ir, ip, iz, nphi, nz);
           volumes[idx] = rvol * (phi_source_edges[ip + 1] - phi_source_edges[ip]) * (z_source_edges_m[iz + 1] - z_source_edges_m[iz]);
-          const double base_raw = rshape * geometry_fraction[ir * nphi + ip];
-          const double gain_raw = m_divideChargeByGain ? rshape * inverse_gain_weight[ir * nphi + ip] : base_raw;
-          raw[idx] = gain_raw;
+          //const double base_raw = rshape * geometry_fraction[ir * nphi + ip];
+          //const double gain_raw = m_divideChargeByGain ? rshape * inverse_gain_weight[ir * nphi + ip] : base_raw;
+	  const double pshape = 1.0 + m_m1Amplitude * std::cos(ps[ip] - m_m1Phase) + m_m12Amplitude * std::cos(12.0 * (ps[ip] - m_m12Phase));
+
+	  if (pshape < 0.0)
+	  {
+	    throw std::runtime_error("Phi modulation makes rho negative");
+	  }
+
+	  const double base_raw = rshape * pshape * geometry_fraction[ir * nphi + ip];
+	  const double gain_raw = m_divideChargeByGain ? rshape * pshape * inverse_gain_weight[ir * nphi + ip] : base_raw;
+
+	  raw[idx] = gain_raw;
           base_integral += base_raw * volumes[idx];
           corrected_integral += gain_raw * volumes[idx];
           volume_sum += volumes[idx];
@@ -1235,6 +1251,10 @@ int PHGarfieldRossegger::calculate()
             mc[im][in] = cproj / (norms[im][in] * anorm);
             ms[im][in] = im == 0 ? 0.0 : sproj / (norms[im][in] * anorm);
           }
+        }
+        for (unsigned int in = 0; in < std::min(3U, m_nRadialModes); ++in)
+        {
+          mc[0][in] = 0.0;
         }
 
         const unsigned int fsize = m_nrObs * m_nphiObs * m_nzObs;
