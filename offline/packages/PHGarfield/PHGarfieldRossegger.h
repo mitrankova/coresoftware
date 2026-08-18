@@ -52,8 +52,26 @@ class PHGarfieldRossegger : public SubsysReco
     EqualChargePerPiece,
     ProportionalToArea
   };
+  enum class FrameChargePieces
+  {
+    FullFrame,
+    RadialRails,
+    SideRails,
+    InnerRadialRail,
+    OuterRadialRail,
+    LeftSideRail,
+    RightSideRail
+  };
   void setFrameBoundaryPotential(double value) { m_frameBoundaryPotential = value; }
+  void setFrameSurfaceChargeDensity(double sigma_nC_per_m2) { m_frameSurfaceChargeDensityNCPerM2 = sigma_nC_per_m2; }
+  void setFrameSheetThicknessCm(double value) { m_frameSheetThicknessCm = value; }
   void setFrameChargeWeighting(FrameChargeWeighting mode) { m_frameChargeWeighting = mode; }
+  void setFrameChargePieces(FrameChargePieces pieces) { m_frameChargePieces = pieces; }
+  void setFrameRailWeights(double radial_rail_weight, double side_rail_weight)
+  {
+    m_frameRadialRailWeight = radial_rail_weight;
+    m_frameSideRailWeight = side_rail_weight;
+  }
 
   // Split observation radial bins across condor jobs. Histograms keep full
   // binning, so PART files can be merged with hadd.
@@ -107,6 +125,14 @@ class PHGarfieldRossegger : public SubsysReco
     std::vector<double> boundary_potential;
   };
 
+  struct FrameSourceCell
+  {
+    unsigned int ir{0};
+    unsigned int ip{0};
+    double weighted_area_m2{0.0};
+    double weight{0.0};
+  };
+
   int calculate();
   bool validateConfig() const;
   unsigned int effectivePhiMax() const;
@@ -123,15 +149,21 @@ class PHGarfieldRossegger : public SubsysReco
   std::vector<double> makeChargeDensity(const SourceGrid& source_grid,
                                         const std::vector<double>& phi_source_edges,
                                         const std::vector<double>& z_source_edges_m,
-                                        unsigned int side) const;
+                                        unsigned int side,
+                                        const std::vector<FrameSourceCell>* frame_source_cells = nullptr) const;
   void loadFramePolygons() const;
   static bool pointInPolygon(const std::vector<Point2D>& polygon, double x_cm, double y_cm);
   static double polygonAreaCm2(const std::vector<Point2D>& polygon);
   bool pointInFrameGeometry(const FramePolygon& frame, double r_cm, double phi_rel) const;
+  bool pointInFramePiece(const FramePolygon& frame, unsigned int module, double r_cm, double phi_rel) const;
+  double frameRailWeight(const FramePolygon& frame, unsigned int module, double r_cm, double phi_rel) const;
   double frameAreaM2(const FramePolygon& frame) const;
   FrameBoundaryPattern makeFrameBoundaryPattern(const SourceGrid& source_grid,
                                                 const std::vector<double>& phi_source_edges,
                                                 unsigned int side) const;
+  std::vector<FrameSourceCell> buildFrameSourceCells(const SourceGrid& source_grid,
+                                                     const std::vector<double>& phi_source_edges,
+                                                     unsigned int side) const;
 
   void writeGarfieldRootFile(const std::vector<double>& r_edges_m,
                              const std::vector<double>& phi_edges,
@@ -214,7 +246,12 @@ class PHGarfieldRossegger : public SubsysReco
   mutable FramePolygons m_framePolygons;
   mutable bool m_framePolygonsLoaded{false};
   double m_frameBoundaryPotential{1.0};
+  double m_frameSurfaceChargeDensityNCPerM2{200000.0};
+  double m_frameSheetThicknessCm{0.16};
   FrameChargeWeighting m_frameChargeWeighting{FrameChargeWeighting::ProportionalToArea};
+  FrameChargePieces m_frameChargePieces{FrameChargePieces::FullFrame};
+  double m_frameRadialRailWeight{1.0};
+  double m_frameSideRailWeight{0.0};
   std::string m_padPlacementFile{"input/TPC_pad_placement.txt"};
   std::string m_gainMapFile{"input/layer_gain_79513_Mariia_side01.root"};
   std::array<std::string, 2> m_gainHistograms{{"hGainMap_side0_South", "hGainMap_side1_North"}};
