@@ -59,6 +59,7 @@ namespace
       {40.79, 41.14, 57.49, 57.84, 0.35, 0.52},
       {58.00, 58.35, 75.84, 76.28, 0.54, 0.54}}};
   constexpr double frameHalfAngle = 15.0 * std::numbers::pi / 180.0;
+  constexpr double frameFieldZeroBelowZCm = 90.0;
 
 
 
@@ -146,11 +147,59 @@ namespace
   std::vector<double> frame_observation_z_edges(double half_length_cm)
   {
     const double near_padplane_cm = std::max(0.0, half_length_cm - 2.0);
-    const double transition_cm = std::max(0.0, half_length_cm - 10.0);
+    const double zero_field_cm = std::clamp(frameFieldZeroBelowZCm, 0.0, half_length_cm);
+    std::vector<double> out;
+    append_uniform_edges_cm(out, 0.0, zero_field_cm, 5.0);
+    append_uniform_edges_cm(out, zero_field_cm, near_padplane_cm, 0.50);
+    append_uniform_edges_cm(out, near_padplane_cm, half_length_cm, 0.08);
+    sort_unique_edges(out);
+    return out;
+  }
+
+  double frame_z_falloff_weight(double z_m, double half_length_cm)
+  {
+    const double z_cm = z_m * mToCm;
+    const double zero_field_cm = std::clamp(frameFieldZeroBelowZCm, 0.0, half_length_cm);
+    if (zero_field_cm >= half_length_cm) { return 0.0; }
+    if (z_cm <= zero_field_cm) { return 0.0; }
+    if (z_cm >= half_length_cm) { return 1.0; }
+
+    const double x = (z_cm - zero_field_cm) / (half_length_cm - zero_field_cm);
+    return x * x * (3.0 - 2.0 * x);
+  }
+
+  double frame_z_thickness_cm(const FrameDimensions& f)
+  {
+    return std::max({f.inner_r_max_cm - f.inner_r_min_cm,
+                     f.outer_r_max_cm - f.outer_r_min_cm,
+                     f.left_width_cm,
+                     f.right_width_cm});
+  }
+
+  double max_frame_z_thickness_cm()
+  {
+    double thickness_cm = 0.0;
+    for (const FrameDimensions& f : frameDimensions)
+    {
+      thickness_cm = std::max(thickness_cm, frame_z_thickness_cm(f));
+    }
+    return thickness_cm;
+  }
+
+  std::vector<double> frame_source_z_edges(double half_length_cm)
+  {
+    const double max_thickness_cm = max_frame_z_thickness_cm();
+    const double frame_start_cm = std::max(0.0, half_length_cm - max_thickness_cm);
+    const double transition_cm = std::max(0.0, frame_start_cm - 5.0);
+
     std::vector<double> out;
     append_uniform_edges_cm(out, 0.0, transition_cm, 5.0);
-    append_uniform_edges_cm(out, transition_cm, near_padplane_cm, 0.50);
-    append_uniform_edges_cm(out, near_padplane_cm, half_length_cm, 0.08);
+    append_uniform_edges_cm(out, transition_cm, frame_start_cm, 0.50);
+    append_uniform_edges_cm(out, frame_start_cm, half_length_cm, 0.05);
+    for (const FrameDimensions& f : frameDimensions)
+    {
+      append_edge_cm(out, std::max(0.0, half_length_cm - frame_z_thickness_cm(f)));
+    }
     sort_unique_edges(out);
     return out;
   }
@@ -311,20 +360,6 @@ namespace
   double yprime(unsigned int m, double x)
   {
     return m == 0 ? -std::cyl_neumann(1, x) : 0.5 * (std::cyl_neumann(m - 1, x) - std::cyl_neumann(m + 1, x));
-  }
-
-  double sinh_ratio(double k, double z, double len)
-  {
-    const double klen = k * len;
-    if (klen < 50.0) { return std::sinh(k * z) / std::sinh(klen); }
-    return std::exp(k * (z - len)) * (1.0 - std::exp(-2.0 * k * z)) / (1.0 - std::exp(-2.0 * klen));
-  }
-
-  double dz_sinh_ratio(double k, double z, double len)
-  {
-    const double klen = k * len;
-    if (klen < 50.0) { return k * std::cosh(k * z) / std::sinh(klen); }
-    return k * std::exp(k * (z - len)) * (1.0 + std::exp(-2.0 * k * z)) / (1.0 - std::exp(-2.0 * klen));
   }
 
   void scale_to_cm(std::vector<double>& values)
@@ -826,13 +861,59 @@ std::vector<double> PHGarfieldRossegger::makeChargeDensity(const SourceGrid& sou
   const unsigned int nr = source_grid.r_centers_m.size();
   const unsigned int nphi = phi_source_edges.size() - 1;
   const unsigned int nz = z_source_edges_m.size() - 1;
-  const double target_rho = m_kEff * m_rhoReferenceNCPerM3 * 1.0e-9;
+  const double target_rho = m_kEff * m_rhoReferenceNCPerM3 * 1.0e-9 * (m_useFrameChargeModel ? m_frameBoundaryPotential : 1.0);
+  const double len = m_lCm * cmToM;
 
   std::vector<double> volumes(nr * nphi * nz, 0.0);
   std::vector<double> raw(nr * nphi * nz, 0.0);
   double volume_sum = 0.0;
 
-  if (m_useDensityMap)
+  if (m_useFrameChargeModel)
+  {
+    const FrameBoundaryPattern frame_pattern = makeFrameBoundaryPattern(source_grid, phi_source_edges, side);
+    std::array<double, nTpcModules> frame_thickness_m{};
+    for (unsigned int module = 0; module < nTpcModules; ++module)
+    {
+      frame_thickness_m[module] = frame_z_thickness_cm(frameDimensions[module]) * cmToM;
+    }
+
+    double active_volume = 0.0;
+    double raw_integral = 0.0;
+    for (unsigned int ir = 0; ir < nr; ++ir)
+    {
+      const int module = source_grid.module_index[ir];
+      const double rvol = 0.5 * (source_grid.r_edges_m[ir + 1] * source_grid.r_edges_m[ir + 1] - source_grid.r_edges_m[ir] * source_grid.r_edges_m[ir]);
+      for (unsigned int ip = 0; ip < nphi; ++ip)
+      {
+        const double dphi = phi_source_edges[ip + 1] - phi_source_edges[ip];
+        const double transverse_weight = frame_pattern.weight[ir * nphi + ip];
+        for (unsigned int iz = 0; iz < nz; ++iz)
+        {
+          const unsigned int idx = src_index(ir, ip, iz, nphi, nz);
+          const double dz = z_source_edges_m[iz + 1] - z_source_edges_m[iz];
+          volumes[idx] = rvol * dphi * dz;
+          volume_sum += volumes[idx];
+
+          if (module < 0 || transverse_weight <= 0.0) { continue; }
+          const double z_start = std::max(0.0, len - frame_thickness_m[static_cast<unsigned int>(module)]);
+          const double z_overlap = std::max(0.0, std::min(z_source_edges_m[iz + 1], len) - std::max(z_source_edges_m[iz], z_start));
+          if (z_overlap <= 0.0) { continue; }
+
+          const double z_fraction = z_overlap / dz;
+          raw[idx] = transverse_weight * z_fraction;
+          active_volume += volumes[idx] * z_fraction;
+          raw_integral += raw[idx] * volumes[idx];
+        }
+      }
+    }
+
+    if (active_volume <= 0.0 || raw_integral == 0.0) { throw std::runtime_error("Frame charge model has zero charged frame volume"); }
+    std::cout << "  frame charge slab side " << side
+              << ": max z thickness = " << max_frame_z_thickness_cm()
+              << " cm, active volume = " << active_volume
+              << " m^3, source scale = " << m_frameBoundaryPotential << std::endl;
+  }
+  else if (m_useDensityMap)
   {
     std::unique_ptr<TFile> file(TFile::Open(m_densityMapFile.c_str(), "READ"));
     if (!file || file->IsZombie()) { throw std::runtime_error("Cannot open density-map file " + m_densityMapFile); }
@@ -1163,8 +1244,8 @@ PHGarfieldRossegger::FrameBoundaryPattern PHGarfieldRossegger::makeFrameBoundary
     }
   }
 
-  std::cout << "  frame boundary potential side " << side << " = " << m_frameBoundaryPotential
-            << " V, weighting = "
+  std::cout << "  frame charge pattern side " << side << " scale = " << m_frameBoundaryPotential
+            << ", weighting = "
             << (m_frameChargeWeighting == FrameChargeWeighting::EqualChargePerPiece ? "EqualChargePerPiece" : "ProportionalToArea")
             << ", frame geometry = " << m_frameGeometryFile
             << ", frame reference sector = " << frameReferenceSector
@@ -1185,7 +1266,9 @@ int PHGarfieldRossegger::calculate()
     std::cout << Name() << " Rossegger field calculation" << std::endl;
     if (m_useFrameChargeModel)
     {
-      std::cout << "  using frame boundary-potential source geometry" << std::endl;
+      std::cout << "  using charged frame volume source geometry" << std::endl;
+      std::cout << "  frame field longitudinal taper: zero for |z| <= " << frameFieldZeroBelowZCm
+                << " cm, smooth rise to pad plane at " << m_lCm << " cm" << std::endl;
     }
     else if (m_useDensityMap)
     {
@@ -1200,7 +1283,7 @@ int PHGarfieldRossegger::calculate()
     const SourceGrid source_grid = buildSourceGrid();
     const unsigned int nr_source = source_grid.r_centers_m.size();
     auto pse = m_useFrameChargeModel ? frame_phi_edges(m_nphiSource, m_tpcSide, m_frameReferencePhi, -std::numbers::pi) : ((m_useDensityMap || m_useRealTpcSourceGeometry) ? phi_edges(m_nphiSource, -std::numbers::pi) : phi_edges(m_nphiSource));
-    auto zse = edges(0.0, len, m_nzSource);
+    auto zse = m_useFrameChargeModel ? frame_source_z_edges(m_lCm) : edges(0.0, len, m_nzSource);
     auto roe = m_useFrameChargeModel ? frame_observation_r_edges(m_aCm, m_bCm) : edges(a, b, m_nrObs);
     auto poe = m_useFrameChargeModel ? frame_phi_edges(m_nphiObs, m_tpcSide, m_frameReferencePhi, -std::numbers::pi) : ((m_useDensityMap || m_writePHGarfieldField3D) ? phi_edges(m_nphiObs, -std::numbers::pi) : phi_edges(m_nphiObs));
     auto zoe = m_useFrameChargeModel ? frame_observation_z_edges(m_lCm) : edges(0.0, len, m_nzObs);
@@ -1248,106 +1331,6 @@ int PHGarfieldRossegger::calculate()
       run_side[1] = true;
     }
 
-    if (m_useFrameChargeModel)
-    {
-      std::vector<double> wg_source;
-      const auto xg_source = legendreRootsAndWeights(8, wg_source);
-      for (unsigned int side = 0; side < nTpcSides; ++side)
-      {
-        if (!run_side[side]) { continue; }
-        const FrameBoundaryPattern frame_pattern = makeFrameBoundaryPattern(source_grid, pse, side);
-
-        std::vector<std::vector<double>> mc(mmax + 1), ms(mmax + 1);
-        for (unsigned int im = 0; im <= mmax; ++im)
-        {
-          const double anorm = im == 0 ? 2.0 * std::numbers::pi : std::numbers::pi;
-          mc[im].assign(m_nRadialModes, 0.0);
-          ms[im].assign(m_nRadialModes, 0.0);
-          for (unsigned int in = 0; in < m_nRadialModes; ++in)
-          {
-            double cproj = 0.0;
-            double sproj = 0.0;
-            for (unsigned int irs = 0; irs < nr_source; ++irs)
-            {
-              const double r1 = source_grid.r_edges_m[irs];
-              const double r2 = source_grid.r_edges_m[irs + 1];
-              const double radial_jac = 0.5 * (r2 - r1);
-              const double radial_center = 0.5 * (r2 + r1);
-              double radial_integral = 0.0;
-              for (unsigned int ig = 0; ig < xg_source.size(); ++ig)
-              {
-                const double r = radial_jac * xg_source[ig] + radial_center;
-                const double rb = radialBasis(km[im][in], im, r);
-                radial_integral += wg_source[ig] * r * rb;
-              }
-              radial_integral *= radial_jac;
-              for (unsigned int ips = 0; ips < m_nphiSource; ++ips)
-              {
-                const unsigned int idx = irs * m_nphiSource + ips;
-                const double boundary_potential = frame_pattern.boundary_potential[idx];
-                if (boundary_potential == 0.0) { continue; }
-                const double cp = std::cos(static_cast<double>(im) * ps[ips]);
-                const double sp = std::sin(static_cast<double>(im) * ps[ips]);
-                const double dphi = pse[ips + 1] - pse[ips];
-                cproj += boundary_potential * cp * dphi * radial_integral;
-                sproj += boundary_potential * sp * dphi * radial_integral;
-              }
-            }
-            mc[im][in] = cproj / (norms[im][in] * anorm);
-            ms[im][in] = im == 0 ? 0.0 : sproj / (norms[im][in] * anorm);
-          }
-        }
-        for (unsigned int in = 0; in < std::min(3U, m_nRadialModes); ++in)
-        {
-          mc[0][in] = 0.0;
-        }
-
-        const unsigned int fsize = m_nrObs * m_nphiObs * m_nzObs;
-        std::vector<double> phi(fsize, 0.0), er(fsize, 0.0), ep(fsize, 0.0), ez(fsize, 0.0);
-        for (unsigned int iro = r_begin; iro < r_end; ++iro)
-        {
-          for (unsigned int im = 0; im <= mmax; ++im)
-          {
-            std::vector<double> rb(m_nRadialModes, 0.0), drb(m_nRadialModes, 0.0);
-            for (unsigned int in = 0; in < m_nRadialModes; ++in)
-            {
-              rb[in] = radialBasis(km[im][in], im, ro[iro]);
-              drb[in] = radialBasisDerivative(km[im][in], im, ro[iro]);
-            }
-            for (unsigned int ipo = 0; ipo < m_nphiObs; ++ipo)
-            {
-              const double cp = std::cos(static_cast<double>(im) * po[ipo]);
-              const double sp = std::sin(static_cast<double>(im) * po[ipo]);
-              for (unsigned int izo = 0; izo < m_nzObs; ++izo)
-              {
-                const unsigned int idx = fld_index(iro, ipo, izo, m_nphiObs, m_nzObs);
-                for (unsigned int in = 0; in < m_nRadialModes; ++in)
-                {
-                  const double kval = km[im][in];
-                  const double ac = mc[im][in];
-                  const double as = ms[im][in];
-                  const double amp = ac * cp + as * sp;
-                  const double zfac = sinh_ratio(kval, zo[izo], len);
-                  const double dzfac = dz_sinh_ratio(kval, zo[izo], len);
-                  phi[idx] += rb[in] * zfac * amp;
-                  er[idx] -= drb[in] * zfac * amp;
-                  ez[idx] -= rb[in] * dzfac * amp;
-                  if (im > 0) { ep[idx] += (static_cast<double>(im) / ro[iro]) * rb[in] * zfac * (ac * sp - as * cp); }
-                }
-              }
-            }
-          }
-        }
-
-        if (side == m_tpcSide)
-        {
-          writeGarfieldRootFile(roe, poe, zoe, er, ep, ez, r_begin, r_end);
-          if (m_writeField3D) { writeFrameBoundaryField3DRootFile(source_grid.r_edges_m, roe, pse, poe, zoe, frame_pattern, phi, er, ep, ez, r_begin, r_end); }
-        }
-        if (m_writePHGarfieldField3D) { writePHGarfieldField3DRootFile(roe, poe, zoe, phi, er, ep, ez, side, r_begin, r_end); }
-      }
-    }
-    else
     {
       std::vector<double> q(m_nLongitudinalModes, 0.0);
       for (unsigned int il = 0; il < m_nLongitudinalModes; ++il) { q[il] = static_cast<double>(il + 1) * std::numbers::pi / len; }
@@ -1433,6 +1416,25 @@ int PHGarfieldRossegger::calculate()
                     if (im > 0) { ep[idx] += (static_cast<double>(im) / ro[iro]) * rb[in] * sz * (ac * sp - as * cp); }
                   }
                 }
+              }
+            }
+          }
+        }
+
+        if (m_useFrameChargeModel)
+        {
+          for (unsigned int iro = r_begin; iro < r_end; ++iro)
+          {
+            for (unsigned int izo = 0; izo < m_nzObs; ++izo)
+            {
+              const double z_weight = frame_z_falloff_weight(zo[izo], m_lCm);
+              for (unsigned int ipo = 0; ipo < m_nphiObs; ++ipo)
+              {
+                const unsigned int idx = fld_index(iro, ipo, izo, m_nphiObs, m_nzObs);
+                phi[idx] *= z_weight;
+                er[idx] *= z_weight;
+                ep[idx] *= z_weight;
+                ez[idx] *= z_weight;
               }
             }
           }

@@ -1,7 +1,7 @@
-// ROOT macro to create a PHGarfield Rossegger map from frame boundary potential only.
+// ROOT macro to create a PHGarfield Rossegger map from charged frame volumes.
 //
-// This launcher intentionally does not use the analytic radial source model,
-// pad-placement source geometry, layer/sector gain maps, or a frame volume charge density.
+// Frame charge uses the ordinary Rossegger volume-source boundary conditions,
+// with each frame protruding into z by its own thickness.
 //
 // Example:
 //   root -b -q 'RunPHGarfieldRosseggerFrames.C()'
@@ -20,16 +20,17 @@ R__LOAD_LIBRARY(libPHGarfield.so)
 namespace fs = std::filesystem;
 
 int RunPHGarfieldRosseggerFrames(
-    const std::string& garfield_output = "frames_side1_2d_rossegger_geom_v10.root",
-    const std::string& diagnostic_field_3d_output = "frames_side1_3d_geom_v10.root",
+    const std::string& garfield_output = "frames_side1_2d_rossegger_geom_v14.root",
+    const std::string& diagnostic_field_3d_output = "frames_side1_3d_geom_v14.root",
     const double frame_reference_phi = 0.0,
     const bool write_diagnostic_field_3d = true,
     const unsigned int tpc_side_for_2d_output = 1,
     const unsigned int mode_phi_max = 24,
-    const unsigned int n_radial_modes = 32,
-    const unsigned int n_longitudinal_modes = 12,
+    const unsigned int n_radial_modes = 15,
+    const unsigned int n_longitudinal_modes = 2,
     const unsigned int radial_job_index = 0,
-    const unsigned int n_radial_jobs = 1)
+    const unsigned int n_radial_jobs = 1,
+    const std::string& frame_geometry_file = "tpc_frame_geometry.csv")
 {
   if (fs::exists(garfield_output) &&
       (!write_diagnostic_field_3d || fs::exists(diagnostic_field_3d_output)))
@@ -65,11 +66,12 @@ int RunPHGarfieldRosseggerFrames(
   rossegger->setTpcSide(tpc_side_for_2d_output);
   rossegger->setRadialJob(radial_job_index, n_radial_jobs);
 
-  // This is the important part: frames only, no previous charge model.
+  // Frames only: charged frame volume, no previous IBF charge model.
   rossegger->setUseRealTpcSourceGeometry(false);
   rossegger->setUseFrameChargeModel(true);
   rossegger->setFrameReferencePhi(frame_reference_phi);
-  rossegger->setFrameBoundaryPotential(1.0);
+  rossegger->setFrameGeometryFile(frame_geometry_file);
+  rossegger->setFrameBoundaryPotential(1.0);  // frame source-strength scale
   rossegger->setFrameChargeWeighting(
       PHGarfieldRossegger::FrameChargeWeighting::ProportionalToArea);
   rossegger->setDivideChargeByGain(false);
