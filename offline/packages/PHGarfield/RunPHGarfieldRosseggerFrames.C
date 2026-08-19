@@ -20,8 +20,8 @@ R__LOAD_LIBRARY(libPHGarfield.so)
 namespace fs = std::filesystem;
 
 int RunPHGarfieldRosseggerFrames(
-    const std::string& garfield_output = "frames_side1_2d_rossegger_v6_Test.root",
-    const std::string& diagnostic_field_3d_output = "frames_side1_3d_v6_Test.root",
+    const std::string& garfield_output = "frames_side1_2d_rossegger_v6_1_geom.root",
+    const std::string& diagnostic_field_3d_output = "frames_side1_3d_v6_1_geom.root",
     const double frame_reference_phi = 0.0,
     const bool write_diagnostic_field_3d = true,
     const unsigned int tpc_side_for_2d_output = 1,
