@@ -15,6 +15,11 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib64
 
 pkginclude_HEADERS = \
+  Full_PolyTrack.h \
+  Full_PolyTrackv1.h \
+  Full_PolyTrackContainer.h \
+  Full_PolyTrackContainerv1.h \
+  Full_PolyTrackMatcher.h \
   Tpc_ModuleTrackReco.h \
   Tpc_ModuleTrack.h \
   Tpc_ModuleTrackv1.h \
@@ -55,6 +60,10 @@ pkginclude_HEADERS = \
 
 
 ROOTDICTS = \
+  Full_PolyTrack_Dict.cc \
+  Full_PolyTrackContainer_Dict.cc \
+  Full_PolyTrackContainerv1_Dict.cc \
+  Full_PolyTrackv1_Dict.cc \
   Tpc_AssembledTrack_Dict.cc \
   Tpc_AssembledTrackContainer_Dict.cc \
   Tpc_AssembledTrackContainerv1_Dict.cc \
@@ -85,6 +94,9 @@ pcmdir = $(libdir)
 nobase_dist_pcm_DATA = $(ROOTDICTS:.cc=_rdict.pcm)
 
 libtpctrackreco_la_SOURCES = \
+  Full_PolyTrackv1.cc \
+  Full_PolyTrackContainerv1.cc \
+  Full_PolyTrackMatcher.cc \
   Tpc_ModuleTrackReco.cc \
   Tpc_ModuleTrackv1.cc \
   Tpc_ModuleTrackContainerv1.cc \

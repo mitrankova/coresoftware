@@ -11,6 +11,7 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib64
 
 pkginclude_HEADERS = \
+  Full_PolyTrackDisplay.h \
   Tpc_ModuleTrackDisplay.h \
   Tpc_AssembledTrackDisplay.h \
   Tpc_PolyClusterDisplay.h \
@@ -28,6 +29,7 @@ lib_LTLIBRARIES = \
   libTrackingDiagnostics.la
 
 libTrackingDiagnostics_la_SOURCES = \
+  Full_PolyTrackDisplay.cc \
   Tpc_ModuleTrackDisplay.cc \
   Tpc_AssembledTrackDisplay.cc \
   Tpc_PolyClusterDisplay.cc \
