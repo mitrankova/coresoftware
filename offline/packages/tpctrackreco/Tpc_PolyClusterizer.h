@@ -29,7 +29,7 @@ class Tpc_PolyClusterizer : public SubsysReco
   int InitRun(PHCompositeNode*) override;
   int process_event(PHCompositeNode*) override;
 
-  static constexpr unsigned int NPhiSamples = 3;
+  static constexpr unsigned int NPhiSamples = 24;
 
   void setInputNodeName(const std::string& n) { m_inputNodeName = n; }
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }

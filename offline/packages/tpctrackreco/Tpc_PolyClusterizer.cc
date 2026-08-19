@@ -189,15 +189,17 @@ void Tpc_PolyClusterizer::configure_garfield(PHGarfield* garfield) const
   {
     return;
   }
-  const std::string field3DSide0 = "/sphenix/user/mitrankov/garf/include/ibf_side0_3d.root";
-  const std::string field3DSide1 = "/sphenix/user/mitrankov/garf/include/ibf_side1_3d.root";
-  const std::string FramesSide0 = "/sphenix/user/mitrankov/garf/include/frames_side0_3d_v5.root";
-  const std::string FramesSide1 = "/sphenix/user/mitrankov/garf/include/frames_side1_3d_v5.root";
+  const std::string field3DSide0 = "/sphenix/user/mitrankov/garf/include/ibf_side0_3d_r1p8_phi_v0.root";
+  //notebook_ibf_field_side0_South.root ibf_side0_3d_r1p8_phi_v1.root
+  const std::string field3DSide1 = "/sphenix/user/mitrankov/garf/include/ibf_side1_3d_r1p8_phi_v0.root";
+  //notebook_ibf_field_side1_North.root ibf_side1_3d_r1p8_phi_v1.root
+  const std::string FramesSide0 = "/sphenix/user/mitrankov/garf/include/frames_side0_3d_v6_1_geom.root";
+  const std::string FramesSide1 = "/sphenix/user/mitrankov/garf/include/frames_side1_3d_v6_1_geom.root";
 
   garfield->SetElectricFieldMap3D( field3DSide0, field3DSide1);
   garfield->SetFrameElectricFieldMap3D( FramesSide0, FramesSide1);
 
-  garfield->SetFrameChargeScale(-150);
+  garfield->SetFrameChargeScale(-180);
 
   garfield->MoveTpc(m_tpcMove[0], m_tpcMove[1], m_tpcMove[2]);
   for (const auto& rotation : m_tpcRotations)
