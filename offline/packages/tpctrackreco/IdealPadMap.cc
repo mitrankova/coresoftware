@@ -153,6 +153,14 @@ int IdealPadMap::load_from_cdb(const int /*verbosity*/)
         }
       }
     }
+        for (unsigned int ilayer = 0; ilayer < N_LAYERS; ++ilayer)
+        {
+          std::cout << " region " << (int)ilayer/16
+                    << " layer " << ilayer
+                    << " radius " <<  m_radius_cm_by_layer[ilayer]
+                    << std::endl;
+        }
+
   }
 
   return 0;
