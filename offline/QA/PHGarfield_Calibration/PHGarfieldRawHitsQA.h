@@ -10,6 +10,7 @@
 
 class IdealPadMap;
 class PHCompositeNode;
+class TH1;
 class TH2;
 class TrkrHitSetContainer;
 
@@ -38,6 +39,8 @@ class PHGarfieldRawHitsQA : public SubsysReco
 
   TrkrHitSetContainer* m_hits{nullptr};
   IdealPadMap* m_idealPadMap{nullptr};
+
+  TH1* m_hNEvents{nullptr};
 
   std::array<std::array<std::array<TH2*, 12>, 3>, 2> m_hAdcPadVsLayer{};
   std::array<TH2*, 2> m_hAdcPhiVsRadius{};
