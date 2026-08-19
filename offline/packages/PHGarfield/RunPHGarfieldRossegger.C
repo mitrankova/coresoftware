@@ -62,8 +62,13 @@ int RunPHGarfieldRossegger(
   rossegger->setSourceRadiusCm(use_frame_charge_model ? 21.78 : 22.8, use_frame_charge_model ? 76.28 : 75.43);
 
   // Charge model: reference density [nC/m^3], k_eff, radial power alpha.
-  rossegger->setDensity(20.0, 1.0, 2.0);//1.23);
-  rossegger->setPhiModulation(0.0, 0.0, 0.0, 0.0);
+  //rossegger->setDensity(20.0, 1.0, 2.0);//1.23);
+  //rossegger->setPhiModulation(0.0, 0.0, 0.0, 0.0);
+
+  rossegger->setDensity(20.0,1.0,1.8);
+  //rossegger->setPhiModulation(0.0, 0.0, 0.0, 0.0);
+  //rossegger->setPhiModulation(-0.13857,0.69786,0.0,0.0);
+  rossegger->setPhiModulation(0.07815,2.08148,0.0,0.0);
 
   // Notebook development grid. Increase these for production-quality maps.
   // In frame-charge mode, the source radial grid is replaced by exact frame boundaries;
