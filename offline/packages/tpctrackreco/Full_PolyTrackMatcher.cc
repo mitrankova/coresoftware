@@ -25,8 +25,7 @@
 #include <trackbase/TrkrDefs.h>
 
 #include <TFile.h>
-#include <TH2F.h>
-#include <TTree.h>
+#include <TH3F.h>
 
 #include <algorithm>
 #include <cmath>
@@ -152,35 +151,10 @@ void Full_PolyTrackMatcher::createQaObjects()
   }
 
   m_qaFile = new TFile(m_qaFileName.c_str(), "RECREATE");
-  m_candidateTree = new TTree("full_polytrack_candidates", "Full_PolyTrack silicon association candidates");
-  m_candidateTree->Branch("event", &m_qaRow.event, "event/i");
-  m_candidateTree->Branch("tpc_track_id", &m_qaRow.tpc_track_id, "tpc_track_id/i");
-  m_candidateTree->Branch("source_assembled_track_id", &m_qaRow.source_assembled_track_id, "source_assembled_track_id/i");
-  m_candidateTree->Branch("crossing", &m_qaRow.crossing, "crossing/I");
-  m_candidateTree->Branch("layer", &m_qaRow.layer, "layer/i");
-  m_candidateTree->Branch("ladder", &m_qaRow.ladder, "ladder/i");
-  m_candidateTree->Branch("sensor", &m_qaRow.sensor, "sensor/i");
-  m_candidateTree->Branch("cluster_key", &m_qaRow.cluster_key, "cluster_key/l");
-  m_candidateTree->Branch("x", &m_qaRow.x, "x/F");
-  m_candidateTree->Branch("y", &m_qaRow.y, "y/F");
-  m_candidateTree->Branch("z", &m_qaRow.z, "z/F");
-  m_candidateTree->Branch("r", &m_qaRow.r, "r/F");
-  m_candidateTree->Branch("phi", &m_qaRow.phi, "phi/F");
-  m_candidateTree->Branch("pred_x", &m_qaRow.pred_x, "pred_x/F");
-  m_candidateTree->Branch("pred_y", &m_qaRow.pred_y, "pred_y/F");
-  m_candidateTree->Branch("pred_z", &m_qaRow.pred_z, "pred_z/F");
-  m_candidateTree->Branch("pred_phi", &m_qaRow.pred_phi, "pred_phi/F");
-  m_candidateTree->Branch("rdphi", &m_qaRow.rdphi, "rdphi/F");
-  m_candidateTree->Branch("dz", &m_qaRow.dz, "dz/F");
-  m_candidateTree->Branch("chi2", &m_qaRow.chi2, "chi2/F");
-  m_candidateTree->Branch("chain_chi2", &m_qaRow.chain_chi2, "chain_chi2/F");
-  m_candidateTree->Branch("chain_ndf", &m_qaRow.chain_ndf, "chain_ndf/F");
-  m_candidateTree->Branch("chain_score", &m_qaRow.chain_score, "chain_score/F");
-  m_candidateTree->Branch("chain_silicon_clusters", &m_qaRow.chain_silicon_clusters, "chain_silicon_clusters/i");
-  m_candidateTree->Branch("chain_missing_layers", &m_qaRow.chain_missing_layers, "chain_missing_layers/i");
-  m_candidateTree->Branch("chain_missing_mask", &m_qaRow.chain_missing_mask, "chain_missing_mask/i");
-  m_candidateTree->Branch("accepted", &m_qaRow.accepted, "accepted/I");
-  m_candidateTree->Branch("selected", &m_qaRow.selected, "selected/I");
+  if (!m_qaFile || m_qaFile->IsZombie())
+  {
+    std::cerr << Name() << "::createQaObjects - cannot open QA file " << m_qaFileName << std::endl;
+  }
 }
 
 double Full_PolyTrackMatcher::wrapPhi(double phi) const
@@ -398,56 +372,68 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::extendMissing(const Chain& c
   return out;
 }
 
-void Full_PolyTrackMatcher::fillQaRow(const QaRow& row)
+void Full_PolyTrackMatcher::fillQaDphiCorrelation(const Tpc_PolyTrack& track, const Chain& chain,
+                                                        const SpacePoint& point, double current_dphi)
 {
-  if (!m_writeQA || !m_candidateTree)
+  if (!m_writeQA || !m_qaFile || chain.hits.empty())
+  {
+    return;
+  }
+  const ChainHit& previous_hit = chain.hits.back();
+  if (previous_hit.point.r <= 0.0 || !std::isfinite(current_dphi))
   {
     return;
   }
 
-  m_qaRow = row;
-  m_candidateTree->Fill();
-  if (row.accepted == 0)
+  const double previous_dphi = previous_hit.rdphi / previous_hit.point.r;
+  const double pt = std::hypot(track.get_px(), track.get_py());
+  if (!std::isfinite(previous_dphi) || !std::isfinite(pt))
   {
     return;
   }
 
-  const unsigned int hist_key = row.layer * 10000U + row.ladder * 100U + row.sensor;
-  auto make_hist = [&](std::map<unsigned int, TH2F*>& histmap, const char* prefix, const char* title,
-                       int ny, double ymin, double ymax) -> TH2F* {
-    auto found = histmap.find(hist_key);
-    if (found != histmap.end())
-    {
-      return found->second;
-    }
-    std::ostringstream name;
-    name << prefix << "_l" << row.layer << "_lad" << row.ladder << "_sen" << row.sensor;
-    std::ostringstream htitle;
-    htitle << title << " layer " << row.layer << " ladder " << row.ladder << " sensor " << row.sensor;
-    TH2F* hist = new TH2F(name.str().c_str(), htitle.str().c_str(), 120, -15.0, 15.0, ny, ymin, ymax);
-    histmap[hist_key] = hist;
-    return hist;
-  };
-  auto make_phi_hist = [&](std::map<unsigned int, TH2F*>& histmap, const char* prefix, const char* title,
-                           int ny, double ymin, double ymax) -> TH2F* {
-    auto found = histmap.find(hist_key);
-    if (found != histmap.end())
-    {
-      return found->second;
-    }
-    std::ostringstream name;
-    name << prefix << "_l" << row.layer << "_lad" << row.ladder << "_sen" << row.sensor;
-    std::ostringstream htitle;
-    htitle << title << " layer " << row.layer << " ladder " << row.ladder << " sensor " << row.sensor;
-    TH2F* hist = new TH2F(name.str().c_str(), htitle.str().c_str(), 128, -M_PI, M_PI, ny, ymin, ymax);
-    histmap[hist_key] = hist;
-    return hist;
-  };
+  const unsigned int side = point.z >= 0.0 ? 1U : 0U;
+  const int charge_bin = track.get_charge() < 0.0 ? -1 : 1;
+  double phi = wrapPhi(point.phi);
+  if (phi < 0.0)
+  {
+    phi += 2.0 * M_PI;
+  }
+  unsigned int phi_bin = static_cast<unsigned int>(m_qaPhiBins * phi / (2.0 * M_PI));
+  if (phi_bin >= m_qaPhiBins)
+  {
+    phi_bin = m_qaPhiBins - 1U;
+  }
 
-  make_hist(m_hRdphiVsZ, "h_rdphi_vs_z", "r*dphi vs z", 160, -m_looseRdphiWindow, m_looseRdphiWindow)->Fill(row.z, row.rdphi);
-  make_hist(m_hDzVsZ, "h_dz_vs_z", "dz vs z", 160, -m_looseDzWindow, m_looseDzWindow)->Fill(row.z, row.dz);
-  make_phi_hist(m_hRdphiVsPhi, "h_rdphi_vs_phi", "r*dphi vs phi", 160, -m_looseRdphiWindow, m_looseRdphiWindow)->Fill(row.phi, row.rdphi);
-  make_phi_hist(m_hDzVsPhi, "h_dz_vs_phi", "dz vs phi", 160, -m_looseDzWindow, m_looseDzWindow)->Fill(row.phi, row.dz);
+  std::ostringstream key;
+  key << "h_dphi_curr_prev_pt_l" << point.layer
+      << "_side" << side
+      << "_q" << (charge_bin < 0 ? "neg" : "pos")
+      << "_phibin" << phi_bin;
+
+  TH3F* hist = nullptr;
+  auto found = m_hDphiCurrentVsPreviousVsPt.find(key.str());
+  if (found != m_hDphiCurrentVsPreviousVsPt.end())
+  {
+    hist = found->second;
+  }
+  else
+  {
+    std::ostringstream title;
+    title << "current dphi vs previous dphi vs pT layer " << point.layer
+          << " side " << side
+          << " q " << (charge_bin < 0 ? "-" : "+")
+          << " phi bin " << phi_bin
+          << ";#Delta#phi current layer [rad];#Delta#phi previous accepted layer [rad];p_{T} [GeV]";
+    hist = new TH3F(key.str().c_str(), title.str().c_str(),
+                    static_cast<int>(m_qaDphiBins), m_qaDphiMin, m_qaDphiMax,
+                    static_cast<int>(m_qaDphiBins), m_qaDphiMin, m_qaDphiMax,
+                    static_cast<int>(m_qaPtBins), m_qaPtMin, m_qaPtMax);
+    hist->SetDirectory(nullptr);
+    m_hDphiCurrentVsPreviousVsPt[key.str()] = hist;
+  }
+
+  hist->Fill(current_dphi, previous_dphi, pt);
 }
 
 std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
@@ -509,8 +495,6 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
   }
   std::vector<Chain> chains{seed};
 
-  const TpcCrossingDecision* crossing = findCrossingDecision(track.get_source_assembled_track_id());
-  const int selected_crossing = crossing ? crossing->get_selected_crossing() : 0;
 
   for (unsigned int layer : m_matchLayers)
   {
@@ -546,36 +530,7 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
                             square(dz / std::max(m_sigmaDz, 1.0e-9));
         layer_extensions.push_back(extendWithHit(chain, point, pred_phi, pred_z, pred_x, pred_y, rdphi, dz, chi2));
 
-        QaRow row;
-        row.event = m_event;
-        row.tpc_track_id = track.get_track_id();
-        row.source_assembled_track_id = track.get_source_assembled_track_id();
-        row.crossing = selected_crossing;
-        row.layer = point.layer;
-        row.ladder = point.ladder;
-        row.sensor = point.sensor;
-        row.cluster_key = static_cast<unsigned long long>(point.key);
-        row.x = finite_float(point.x);
-        row.y = finite_float(point.y);
-        row.z = finite_float(point.z);
-        row.r = finite_float(point.r);
-        row.phi = finite_float(point.phi);
-        row.pred_x = finite_float(pred_x);
-        row.pred_y = finite_float(pred_y);
-        row.pred_z = finite_float(pred_z);
-        row.pred_phi = finite_float(pred_phi);
-        row.rdphi = finite_float(rdphi);
-        row.dz = finite_float(dz);
-        row.chi2 = finite_float(chi2);
-        row.chain_chi2 = finite_float(chain.chi2 + chi2);
-        row.chain_ndf = finite_float(chain.ndf + 2.0);
-        row.chain_score = finite_float(chain.chi2 + chi2 + m_missingLayerPenalty * chain.n_missing);
-        row.chain_silicon_clusters = static_cast<unsigned int>(chain.hits.size() + 1U);
-        row.chain_missing_layers = chain.n_missing;
-        row.chain_missing_mask = chain.missing_mask;
-        row.accepted = 1;
-        row.selected = 0;
-        fillQaRow(row);
+        fillQaDphiCorrelation(track, chain, point, dphi);
       }
 
       std::sort(layer_extensions.begin(), layer_extensions.end(), [](const Chain& a, const Chain& b) {
@@ -623,77 +578,6 @@ const Full_PolyTrackMatcher::Chain* Full_PolyTrackMatcher::selectBestChain(const
   return best;
 }
 
-void Full_PolyTrackMatcher::fillQaForChain(unsigned int tpc_track_id, unsigned int source_id, int crossing,
-                                           const Chain& chain, bool selected)
-{
-  for (const ChainHit& hit : chain.hits)
-  {
-    QaRow row;
-    row.event = m_event;
-    row.tpc_track_id = tpc_track_id;
-    row.source_assembled_track_id = source_id;
-    row.crossing = crossing;
-    row.layer = hit.point.layer;
-    row.ladder = hit.point.ladder;
-    row.sensor = hit.point.sensor;
-    row.cluster_key = static_cast<unsigned long long>(hit.point.key);
-    row.x = finite_float(hit.point.x);
-    row.y = finite_float(hit.point.y);
-    row.z = finite_float(hit.point.z);
-    row.r = finite_float(hit.point.r);
-    row.phi = finite_float(hit.point.phi);
-    row.pred_x = finite_float(hit.pred_x);
-    row.pred_y = finite_float(hit.pred_y);
-    row.pred_z = finite_float(hit.pred_z);
-    row.pred_phi = finite_float(hit.pred_phi);
-    row.rdphi = finite_float(hit.rdphi);
-    row.dz = finite_float(hit.dz);
-    row.chi2 = finite_float(hit.chi2);
-    row.chain_chi2 = finite_float(chain.chi2);
-    row.chain_ndf = finite_float(chain.ndf);
-    row.chain_score = finite_float(chain.score);
-    row.chain_silicon_clusters = static_cast<unsigned int>(chain.hits.size());
-    row.chain_missing_layers = chain.n_missing;
-    row.chain_missing_mask = chain.missing_mask;
-    row.accepted = 1;
-    row.selected = selected ? 1 : 0;
-    fillQaRow(row);
-  }
-}
-
-void Full_PolyTrackMatcher::fillQaForUnmatchedSeed(const Tpc_PolyTrack& tpc_track, int crossing, const Chain& chain)
-{
-  QaRow row;
-  row.event = m_event;
-  row.tpc_track_id = tpc_track.get_track_id();
-  row.source_assembled_track_id = tpc_track.get_source_assembled_track_id();
-  row.crossing = crossing;
-  row.layer = 999U;
-  row.ladder = 999U;
-  row.sensor = 999U;
-  row.cluster_key = static_cast<unsigned long long>(TrkrDefs::CLUSKEYMAX);
-  row.x = finite_float(tpc_track.get_seed_x0());
-  row.y = finite_float(tpc_track.get_seed_y0());
-  row.z = finite_float(tpc_track.get_seed_z0());
-  row.r = finite_float(std::hypot(tpc_track.get_seed_x0(), tpc_track.get_seed_y0()));
-  row.phi = finite_float(tpc_track.get_seed_phi());
-  row.pred_x = row.x;
-  row.pred_y = row.y;
-  row.pred_z = row.z;
-  row.pred_phi = row.phi;
-  row.rdphi = 0.0F;
-  row.dz = 0.0F;
-  row.chi2 = 0.0F;
-  row.chain_chi2 = finite_float(chain.chi2);
-  row.chain_ndf = finite_float(chain.ndf);
-  row.chain_score = finite_float(chain.score);
-  row.chain_silicon_clusters = static_cast<unsigned int>(chain.hits.size());
-  row.chain_missing_layers = chain.n_missing;
-  row.chain_missing_mask = chain.missing_mask;
-  row.accepted = 0;
-  row.selected = 1;
-  fillQaRow(row);
-}
 
 void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chain& chain)
 {
@@ -796,17 +680,6 @@ int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
     }
 
     fillTrack(*tpc_track, *selected_chain);
-    const TpcCrossingDecision* crossing = findCrossingDecision(tpc_track->get_source_assembled_track_id());
-    const int selected_crossing = crossing ? crossing->get_selected_crossing() : 0;
-    if (best)
-    {
-      fillQaForChain(tpc_track->get_track_id(), tpc_track->get_source_assembled_track_id(),
-                     selected_crossing, *best, true);
-    }
-    else
-    {
-      fillQaForUnmatchedSeed(*tpc_track, selected_crossing, *selected_chain);
-    }
   }
 
   if (Verbosity() > 0)
@@ -826,14 +699,13 @@ int Full_PolyTrackMatcher::End(PHCompositeNode*)
   if (m_qaFile)
   {
     m_qaFile->cd();
-    if (m_candidateTree)
+    for (auto& item : m_hDphiCurrentVsPreviousVsPt)
     {
-      m_candidateTree->Write();
+      if (item.second)
+      {
+        item.second->Write();
+      }
     }
-    for (auto& item : m_hRdphiVsZ) { item.second->Write(); }
-    for (auto& item : m_hDzVsZ) { item.second->Write(); }
-    for (auto& item : m_hRdphiVsPhi) { item.second->Write(); }
-    for (auto& item : m_hDzVsPhi) { item.second->Write(); }
     m_qaFile->Close();
     delete m_qaFile;
     m_qaFile = nullptr;

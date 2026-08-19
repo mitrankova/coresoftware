@@ -14,8 +14,7 @@ class ActsGeometry;
 class Full_PolyTrackContainer;
 class PHCompositeNode;
 class TFile;
-class TH2F;
-class TTree;
+class TH3F;
 class TpcCrossingDecision;
 class TpcCrossingDecisionContainer;
 class Tpc_PolyCluster;
@@ -105,45 +104,12 @@ class Full_PolyTrackMatcher : public SubsysReco
     unsigned int n_missing{0};
   };
 
-  struct QaRow
-  {
-    unsigned int event{0};
-    unsigned int tpc_track_id{0};
-    unsigned int source_assembled_track_id{0};
-    int crossing{0};
-    unsigned int layer{0};
-    unsigned int ladder{0};
-    unsigned int sensor{0};
-    unsigned long long cluster_key{0};
-    float x{0.0F};
-    float y{0.0F};
-    float z{0.0F};
-    float r{0.0F};
-    float phi{0.0F};
-    float pred_x{0.0F};
-    float pred_y{0.0F};
-    float pred_z{0.0F};
-    float pred_phi{0.0F};
-    float rdphi{0.0F};
-    float dz{0.0F};
-    float chi2{0.0F};
-    float chain_chi2{0.0F};
-    float chain_ndf{0.0F};
-    float chain_score{0.0F};
-    unsigned int chain_silicon_clusters{0};
-    unsigned int chain_missing_layers{0};
-    unsigned int chain_missing_mask{0};
-    int accepted{0};
-    int selected{0};
-  };
 
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
   void createQaObjects();
-  void fillQaRow(const QaRow&);
-  void fillQaForChain(unsigned int tpc_track_id, unsigned int source_id, int crossing,
-                      const Chain& chain, bool selected);
-  void fillQaForUnmatchedSeed(const Tpc_PolyTrack& tpc_track, int crossing, const Chain& chain);
+  void fillQaDphiCorrelation(const Tpc_PolyTrack& track, const Chain& chain,
+                             const SpacePoint& point, double current_dphi);
   std::vector<SpacePoint> collectSiliconClusters() const;
   std::map<unsigned int, std::vector<const Tpc_PolyCluster*>> collectTpcClustersByTrack() const;
   const TpcCrossingDecision* findCrossingDecision(unsigned int source_assembled_track_id) const;
@@ -193,12 +159,14 @@ class Full_PolyTrackMatcher : public SubsysReco
   unsigned int m_event{0};
 
   TFile* m_qaFile{nullptr};
-  TTree* m_candidateTree{nullptr};
-  QaRow m_qaRow;
-  std::map<unsigned int, TH2F*> m_hRdphiVsZ;
-  std::map<unsigned int, TH2F*> m_hDzVsZ;
-  std::map<unsigned int, TH2F*> m_hRdphiVsPhi;
-  std::map<unsigned int, TH2F*> m_hDzVsPhi;
+  unsigned int m_qaPhiBins{8};
+  unsigned int m_qaDphiBins{32};
+  unsigned int m_qaPtBins{24};
+  double m_qaDphiMin{-0.08};
+  double m_qaDphiMax{0.08};
+  double m_qaPtMin{0.0};
+  double m_qaPtMax{12.0};
+  std::map<std::string, TH3F*> m_hDphiCurrentVsPreviousVsPt;
 };
 
 #endif
