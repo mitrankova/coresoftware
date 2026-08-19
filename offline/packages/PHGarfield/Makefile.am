@@ -2,7 +2,8 @@ AUTOMAKE_OPTIONS = foreign
 
 EXTRA_DIST = \
   RunPHGarfieldRossegger.C \
-  RunPHGarfieldRosseggerFrames.C
+  RunPHGarfieldRosseggerFrames.C \
+  tpc_frame_geometry.csv
 
 AM_CPPFLAGS = \
   -I$(includedir) \
