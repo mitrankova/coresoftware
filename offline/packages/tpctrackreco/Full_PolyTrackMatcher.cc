@@ -396,11 +396,11 @@ double Full_PolyTrackMatcher::dynamicMeanPhi(unsigned int layer, double previous
   return m_dynamicPhiMeanOffset[layer] + m_dynamicPhiMeanSlope[layer] * previous_dphi;
 }
 
-double Full_PolyTrackMatcher::dynamicSigmaPhi(unsigned int layer, bool has_previous) const
+double Full_PolyTrackMatcher::dynamicSigmaPhi(double pt) const
 {
-  (void) layer;
-  (void) has_previous;
-  return std::max(m_sigmaPhi, 1.0e-9);
+  (void) pt;
+  const double dphi_window = 0.15;
+  return std::max(dphi_window / std::max(m_phiWindowSigma, 1.0e-9), 1.0e-9);
 }
 
 double Full_PolyTrackMatcher::dynamicMeanTheta(unsigned int layer, double previous_dtheta, bool has_previous) const
@@ -412,11 +412,18 @@ double Full_PolyTrackMatcher::dynamicMeanTheta(unsigned int layer, double previo
   return m_dynamicThetaMeanOffset[layer] + m_dynamicThetaMeanSlope[layer] * previous_dtheta;
 }
 
-double Full_PolyTrackMatcher::dynamicSigmaTheta(unsigned int layer, bool has_previous) const
+double Full_PolyTrackMatcher::dynamicSigmaTheta(double pt, double pred_theta) const
 {
-  (void) layer;
-  (void) has_previous;
-  return std::max(m_sigmaTheta, 1.0e-9);
+  const double safe_pt = std::max(pt, 0.25);
+  const double deta_window = std::max(-0.014 + 0.0331 * std::exp(0.48 / safe_pt), 0.03);
+  const double theta_window = deta_window * std::max(std::sin(pred_theta), 1.0e-9);
+  return std::max(theta_window / std::max(m_thetaWindowSigma, 1.0e-9), 1.0e-9);
+}
+
+double Full_PolyTrackMatcher::dynamicDzWindow(double pt) const
+{
+  const double safe_pt = std::max(pt, 0.25);
+  return 1.138 + 0.3919 * std::exp(0.84 / safe_pt);
 }
 
 bool Full_PolyTrackMatcher::predictAtRadius(const TrajectoryState& state, double r,
@@ -504,6 +511,9 @@ void Full_PolyTrackMatcher::fillQaDphiCorrelation(const Tpc_PolyTrack& track, co
     phi_bin = m_qaPhiBins - 1U;
   }
 
+  const double phi_bin_min = 2.0 * M_PI * static_cast<double>(phi_bin) / static_cast<double>(m_qaPhiBins);
+  const double phi_bin_max = 2.0 * M_PI * static_cast<double>(phi_bin + 1U) / static_cast<double>(m_qaPhiBins);
+
   std::ostringstream key;
   key << "h_dphi_curr_prev_pt_l" << point.layer
       << "_side" << side
@@ -522,7 +532,7 @@ void Full_PolyTrackMatcher::fillQaDphiCorrelation(const Tpc_PolyTrack& track, co
     title << "current dphi vs previous dphi vs pT layer " << point.layer
           << " side " << side
           << " q " << (charge_bin < 0 ? "-" : "+")
-          << " phi bin " << phi_bin
+          << " phi bin " << phi_bin << " [" << phi_bin_min << ", " << phi_bin_max << ") rad"
           << ";#Delta#phi current layer [rad];#Delta#phi previous accepted layer [rad];p_{T} [GeV]";
     hist = new TH3F(key.str().c_str(), title.str().c_str(),
                     static_cast<int>(m_qaDphiBins), m_qaDphiMin, m_qaDphiMax,
@@ -541,6 +551,8 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
     const std::vector<SpacePoint>& silicon_points)
 {
   Chain seed;
+  seed.pt = std::hypot(track.get_px(), track.get_py());
+  seed.charge = track.get_charge();
   seed.fit_points.reserve(tpc_clusters.size());
   for (const Tpc_PolyCluster* cluster : tpc_clusters)
   {
@@ -621,16 +633,16 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
         const double dtheta = pointTheta(point) - pred_theta;
         const double dz = point.z - pred_z;
         const double mean_phi = dynamicMeanPhi(layer, chain.previous_dphi, chain.has_previous_residual);
-        const double sigma_phi = dynamicSigmaPhi(layer, chain.has_previous_residual);
+        const double sigma_phi = dynamicSigmaPhi(chain.pt);
         const double mean_theta = dynamicMeanTheta(layer, chain.previous_dtheta, chain.has_previous_residual);
-        const double sigma_theta = dynamicSigmaTheta(layer, chain.has_previous_residual);
+        const double sigma_theta = dynamicSigmaTheta(chain.pt, pred_theta);
         const double sdphi = (dphi - mean_phi) / sigma_phi;
         const double sdtheta = (dtheta - mean_theta) / sigma_theta;
         if (std::fabs(sdphi) > m_phiWindowSigma || std::fabs(sdtheta) > m_thetaWindowSigma)
         {
           continue;
         }
-        if (std::fabs(dz) > m_looseDzWindow)
+        if (std::fabs(dz) > dynamicDzWindow(chain.pt))
         {
           continue;
         }
@@ -713,7 +725,7 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
 
     for (const SpacePoint& point : silicon_points)
     {
-      if (point.layer != layer || TrkrDefs::getTrkrId(point.key) != TrkrDefs::inttId)
+      if (point.layer != layer || static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(point.key)) != TrkrDefs::inttId)
       {
         continue;
       }
@@ -732,16 +744,16 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
       const double dtheta = pointTheta(point) - pred_theta;
       const double dz = point.z - pred_z;
       const double mean_phi = dynamicMeanPhi(layer, out.previous_dphi, out.has_previous_residual);
-      const double sigma_phi = dynamicSigmaPhi(layer, out.has_previous_residual);
+      const double sigma_phi = dynamicSigmaPhi(out.pt);
       const double mean_theta = dynamicMeanTheta(layer, out.previous_dtheta, out.has_previous_residual);
-      const double sigma_theta = dynamicSigmaTheta(layer, out.has_previous_residual);
+      const double sigma_theta = dynamicSigmaTheta(out.pt, pred_theta);
       const double sdphi = (dphi - mean_phi) / sigma_phi;
       const double sdtheta = (dtheta - mean_theta) / sigma_theta;
       if (std::fabs(sdphi) > m_phiWindowSigma || std::fabs(sdtheta) > m_thetaWindowSigma)
       {
         continue;
       }
-      if (std::fabs(dz) > m_looseDzWindow)
+      if (std::fabs(dz) > dynamicDzWindow(out.pt))
       {
         continue;
       }

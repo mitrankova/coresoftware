@@ -132,6 +132,8 @@ class Full_PolyTrackMatcher : public SubsysReco
     double previous_dphi{0.0};
     double previous_dtheta{0.0};
     bool has_previous_residual{false};
+    double pt{0.0};
+    double charge{0.0};
   };
 
 
@@ -165,9 +167,10 @@ class Full_PolyTrackMatcher : public SubsysReco
   double predictSagittaPhi(double r, const TrajectoryState& state) const;
   double pointTheta(const SpacePoint& point) const;
   double dynamicMeanPhi(unsigned int layer, double previous_dphi, bool has_previous) const;
-  double dynamicSigmaPhi(unsigned int layer, bool has_previous) const;
+  double dynamicSigmaPhi(double pt) const;
   double dynamicMeanTheta(unsigned int layer, double previous_dtheta, bool has_previous) const;
-  double dynamicSigmaTheta(unsigned int layer, bool has_previous) const;
+  double dynamicSigmaTheta(double pt, double pred_theta) const;
+  double dynamicDzWindow(double pt) const;
   unsigned int layerBit(unsigned int layer) const;
 
   std::string m_tpcTrackNodeName{"TPC_POLYTRACKS"};
@@ -215,7 +218,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   double m_qaDphiMin{-0.08};
   double m_qaDphiMax{0.08};
   double m_qaPtMin{0.0};
-  double m_qaPtMax{12.0};
+  double m_qaPtMax{5.0};
   std::map<std::string, TH3F*> m_hDphiCurrentVsPreviousVsPt;
 };
 
