@@ -407,6 +407,7 @@ Full_PolyTrackDisplay::Full_PolyTrackDisplay(const std::string& name,
   , m_xymax(85.0)
   , m_magneticFieldTesla(1.4)
   , m_unusedSiliconSeedMarkerSize(0.25)
+  , m_minTrackPt(0.1)
   , m_drawTrackLines(true)
   , m_useStraightLineTracks(false)
   , m_drawTpcOnlyFullPolyTracks(true)
@@ -562,6 +563,12 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
   {
     const Full_PolyTrack* trk = m_fullTracks->get_track(itrack);
     if (!trk || !trk->isValid())
+    {
+      continue;
+    }
+
+    const double track_pt = std::hypot(trk->get_seed_px(), trk->get_seed_py());
+    if (!std::isfinite(track_pt) || track_pt < m_minTrackPt)
     {
       continue;
     }

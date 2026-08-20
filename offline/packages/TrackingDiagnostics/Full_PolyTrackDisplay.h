@@ -43,6 +43,7 @@ class Full_PolyTrackDisplay : public SubsysReco
   void setSkipTpcOnlyFullPolyTracks(bool v) { m_drawTpcOnlyFullPolyTracks = !v; }
   void setDrawUnusedSiliconSeeds(bool v) { m_drawUnusedSiliconSeeds = v; }
   void setUnusedSiliconSeedMarkerSize(double v) { m_unusedSiliconSeedMarkerSize = v; }
+  void setMinTrackPt(double v) { m_minTrackPt = v; }
   void setMinMvtxHits(unsigned int v) { m_minMvtxHits = v; }
   void setMinInttHits(unsigned int v) { m_minInttHits = v; }
   void setMinSiliconHits(unsigned int mvtx, unsigned int intt)
@@ -69,6 +70,7 @@ class Full_PolyTrackDisplay : public SubsysReco
   double m_xymax;
   double m_magneticFieldTesla;
   double m_unusedSiliconSeedMarkerSize;
+  double m_minTrackPt;
   bool m_drawTrackLines;
   bool m_useStraightLineTracks;
   bool m_drawTpcOnlyFullPolyTracks;
