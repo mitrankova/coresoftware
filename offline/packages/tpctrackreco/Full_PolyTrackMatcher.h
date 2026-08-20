@@ -6,6 +6,7 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -56,6 +57,23 @@ class Full_PolyTrackMatcher : public SubsysReco
   void setMaxBranchesPerLayer(unsigned int v) { m_maxBranchesPerLayer = v; }
   void setMaxChains(unsigned int v) { m_maxChains = v; }
   void setMinSiliconClusters(unsigned int v) { m_minSiliconClusters = v; }
+  void setUseSagittaPhiFit(bool v) { m_useSagittaPhiFit = v; }
+  void setPhiThetaWindowSigma(double phi, double theta)
+  {
+    m_phiWindowSigma = phi;
+    m_thetaWindowSigma = theta;
+  }
+  void setAngularResidualSigma(double phi, double theta)
+  {
+    m_sigmaPhi = phi;
+    m_sigmaTheta = theta;
+  }
+  void setUseDynamicResiduals(bool v) { m_useDynamicResiduals = v; }
+  void setDynamicResidualMeanSlope(double phi, double theta)
+  {
+    m_dynamicPhiMeanSlope.fill(phi);
+    m_dynamicThetaMeanSlope.fill(theta);
+  }
 
  private:
   struct SpacePoint
@@ -75,8 +93,14 @@ class Full_PolyTrackMatcher : public SubsysReco
   {
     double phi_intercept{0.0};
     double phi_slope{0.0};
+    double phi_S{0.0};
+    double phi_x0{0.0};
+    double phi_invR{0.0};
+    double phi_theta{0.0};
+    double phi_bline{0.0};
     double z_intercept{0.0};
     double z_slope{0.0};
+    bool phi_sagitta_ok{false};
     bool valid{false};
   };
 
@@ -85,8 +109,11 @@ class Full_PolyTrackMatcher : public SubsysReco
     SpacePoint point;
     double pred_phi{0.0};
     double pred_z{0.0};
+    double pred_theta{0.0};
     double pred_x{0.0};
     double pred_y{0.0};
+    double dphi{0.0};
+    double dtheta{0.0};
     double rdphi{0.0};
     double dz{0.0};
     double chi2{0.0};
@@ -102,6 +129,9 @@ class Full_PolyTrackMatcher : public SubsysReco
     double score{0.0};
     unsigned int missing_mask{0};
     unsigned int n_missing{0};
+    double previous_dphi{0.0};
+    double previous_dtheta{0.0};
+    bool has_previous_residual{false};
   };
 
 
@@ -122,14 +152,22 @@ class Full_PolyTrackMatcher : public SubsysReco
                                  const std::vector<const Tpc_PolyCluster*>& tpc_clusters,
                                  const std::vector<SpacePoint>& silicon_points);
   Chain extendWithHit(const Chain& chain, const SpacePoint& point,
-                      double pred_phi, double pred_z,
+                      double pred_phi, double pred_z, double pred_theta,
                       double pred_x, double pred_y,
-                      double rdphi, double dz, double chi2) const;
+                      double dphi, double dtheta, double rdphi, double dz, double chi2) const;
   Chain extendMissing(const Chain& chain, unsigned int layer) const;
   const Chain* selectBestChain(const std::vector<Chain>& chains) const;
+  Chain attachClosestInttClusters(const Chain& mvtx_chain,
+                                 const std::vector<SpacePoint>& silicon_points) const;
   void fillTrack(const Tpc_PolyTrack& tpc_track, const Chain& chain);
   double wrapPhi(double phi) const;
   double unwrapPhiNear(double phi, double reference) const;
+  double predictSagittaPhi(double r, const TrajectoryState& state) const;
+  double pointTheta(const SpacePoint& point) const;
+  double dynamicMeanPhi(unsigned int layer, double previous_dphi, bool has_previous) const;
+  double dynamicSigmaPhi(unsigned int layer, bool has_previous) const;
+  double dynamicMeanTheta(unsigned int layer, double previous_dtheta, bool has_previous) const;
+  double dynamicSigmaTheta(unsigned int layer, bool has_previous) const;
   unsigned int layerBit(unsigned int layer) const;
 
   std::string m_tpcTrackNodeName{"TPC_POLYTRACKS"};
@@ -151,11 +189,23 @@ class Full_PolyTrackMatcher : public SubsysReco
   double m_looseDzWindow{5.0};
   double m_sigmaRdphi{0.15};
   double m_sigmaDz{1.0};
+  double m_sigmaPhi{0.015};
+  double m_sigmaTheta{0.02};
+  double m_phiWindowSigma{3.0};
+  double m_thetaWindowSigma{3.0};
   double m_missingLayerPenalty{6.0};
+  bool m_useSagittaPhiFit{true};
+  bool m_useDynamicResiduals{true};
+  std::array<double, 7> m_dynamicPhiMeanOffset{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  std::array<double, 7> m_dynamicPhiMeanSlope{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
+  std::array<double, 7> m_dynamicThetaMeanOffset{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  std::array<double, 7> m_dynamicThetaMeanSlope{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
   unsigned int m_maxBranchesPerLayer{8};
   unsigned int m_maxChains{256};
   unsigned int m_minSiliconClusters{1};
-  std::vector<unsigned int> m_matchLayers{6, 5, 4, 3, 2, 1, 0};
+  std::vector<unsigned int> m_matchLayers{2, 1, 0};
+  std::vector<unsigned int> m_inttMatchLayers{3, 4, 5, 6};
+  std::vector<unsigned int> m_siliconSearchLayers{6, 5, 4, 3, 2, 1, 0};
   unsigned int m_event{0};
 
   TFile* m_qaFile{nullptr};
