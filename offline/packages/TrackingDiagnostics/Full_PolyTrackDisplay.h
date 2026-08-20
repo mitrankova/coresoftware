@@ -37,6 +37,19 @@ class Full_PolyTrackDisplay : public SubsysReco
   }
   void setXYRange(double xymax) { m_xymax = xymax; }
   void setDrawTrackLines(bool v) { m_drawTrackLines = v; }
+  void setMagneticFieldTesla(double b) { m_magneticFieldTesla = b; }
+  void setUseStraightLineTracks(bool v) { m_useStraightLineTracks = v; }
+  void setDrawTpcOnlyFullPolyTracks(bool v) { m_drawTpcOnlyFullPolyTracks = v; }
+  void setSkipTpcOnlyFullPolyTracks(bool v) { m_drawTpcOnlyFullPolyTracks = !v; }
+  void setDrawUnusedSiliconSeeds(bool v) { m_drawUnusedSiliconSeeds = v; }
+  void setUnusedSiliconSeedMarkerSize(double v) { m_unusedSiliconSeedMarkerSize = v; }
+  void setMinMvtxHits(unsigned int v) { m_minMvtxHits = v; }
+  void setMinInttHits(unsigned int v) { m_minInttHits = v; }
+  void setMinSiliconHits(unsigned int mvtx, unsigned int intt)
+  {
+    m_minMvtxHits = mvtx;
+    m_minInttHits = intt;
+  }
 
  private:
   bool get_nodes(PHCompositeNode* topNode);
@@ -49,10 +62,17 @@ class Full_PolyTrackDisplay : public SubsysReco
   unsigned int m_maxEventDisplays;
   unsigned int m_evt;
   unsigned int m_eventsSaved;
+  unsigned int m_minMvtxHits;
+  unsigned int m_minInttHits;
   double m_zmin;
   double m_zmax;
   double m_xymax;
+  double m_magneticFieldTesla;
+  double m_unusedSiliconSeedMarkerSize;
   bool m_drawTrackLines;
+  bool m_useStraightLineTracks;
+  bool m_drawTpcOnlyFullPolyTracks;
+  bool m_drawUnusedSiliconSeeds;
 
   TFile* m_outfile;
   Full_PolyTrackContainer* m_fullTracks;

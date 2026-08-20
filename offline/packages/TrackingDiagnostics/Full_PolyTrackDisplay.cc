@@ -25,10 +25,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <format>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace
@@ -90,6 +92,16 @@ namespace
     return marker;
   }
 
+  TPolyMarker3D* make_unused_silicon_seed_marker(const DisplayPoint& point, const double marker_size)
+  {
+    TPolyMarker3D* marker = new TPolyMarker3D(1);
+    marker->SetPoint(0, point.z, point.x, point.y);
+    marker->SetMarkerColor(kGray + 1);
+    marker->SetMarkerStyle(20);
+    marker->SetMarkerSize(marker_size);
+    return marker;
+  }
+
   TPolyMarker3D* make_tpc_cluster_marker(const DisplayPoint& point, const int color)
   {
     TPolyMarker3D* marker = new TPolyMarker3D(1);
@@ -146,6 +158,233 @@ namespace
     line->SetLineWidth(2);
     return line;
   }
+
+
+  bool point_group_z_range(const std::vector<DisplayPoint>& points,
+                           const double display_zmin,
+                           const double display_zmax,
+                           double& zmin,
+                           double& zmax)
+  {
+    if (points.empty())
+    {
+      return false;
+    }
+
+    zmin = std::numeric_limits<double>::max();
+    zmax = -std::numeric_limits<double>::max();
+    for (const DisplayPoint& point : points)
+    {
+      if (!finite_point(point))
+      {
+        continue;
+      }
+      zmin = std::min(zmin, point.z);
+      zmax = std::max(zmax, point.z);
+    }
+
+    if (zmin == std::numeric_limits<double>::max() || zmax == -std::numeric_limits<double>::max())
+    {
+      return false;
+    }
+
+    zmin = std::max(zmin, display_zmin);
+    zmax = std::min(zmax, display_zmax);
+    if (zmin > zmax)
+    {
+      return false;
+    }
+    if (zmin == zmax)
+    {
+      zmin = std::max(zmin - 0.1, display_zmin);
+      zmax = std::min(zmax + 0.1, display_zmax);
+    }
+    return zmin < zmax;
+  }
+
+  void extend_z_range_to_tpc_seed_point(const Full_PolyTrack* trk,
+                                          const double display_zmin,
+                                          const double display_zmax,
+                                          double& zmin,
+                                          double& zmax)
+  {
+    if (!trk)
+    {
+      return;
+    }
+    const double z = trk->get_seed_z();
+    if (!std::isfinite(z))
+    {
+      return;
+    }
+    const double clipped_z = std::max(display_zmin, std::min(display_zmax, z));
+    zmin = std::min(zmin, clipped_z);
+    zmax = std::max(zmax, clipped_z);
+  }
+
+  bool tpc_seed_xy_at_z(const Full_PolyTrack* trk,
+                          const double z,
+                          const double magnetic_field_tesla,
+                          const double arc_direction,
+                          const bool use_straight_line,
+                          double& x,
+                          double& y)
+  {
+    if (!trk || trk->get_fit_status() == 0 || !std::isfinite(z))
+    {
+      return false;
+    }
+
+    const double x0 = trk->get_seed_x();
+    const double y0 = trk->get_seed_y();
+    const double z0 = trk->get_seed_z();
+    const double px = trk->get_seed_px();
+    const double py = trk->get_seed_py();
+    const double pz = trk->get_seed_pz();
+    const double charge = trk->get_charge();
+    if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(z0) ||
+        !std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz) ||
+        !std::isfinite(charge))
+    {
+      return false;
+    }
+
+    const double dz = z - z0;
+    if (use_straight_line || std::fabs(charge * magnetic_field_tesla) < 1.0e-12)
+    {
+      if (std::fabs(pz) < 1.0e-12)
+      {
+        return false;
+      }
+      x = x0 + arc_direction * px / pz * dz;
+      y = y0 + arc_direction * py / pz * dz;
+      return std::isfinite(x) && std::isfinite(y);
+    }
+
+    const double pt = std::hypot(px, py);
+    if (pt <= 0.0 || std::fabs(pz) < 1.0e-12)
+    {
+      return false;
+    }
+
+    const double signed_radius = pt / (0.003 * charge * magnetic_field_tesla);
+    const double radius = std::fabs(signed_radius);
+    if (!std::isfinite(radius) || radius <= 0.0)
+    {
+      return false;
+    }
+
+    const double tx = px / pt;
+    const double ty = py / pt;
+    const double sign = signed_radius > 0.0 ? 1.0 : -1.0;
+    const double xc = x0 + sign * radius * ty;
+    const double yc = y0 - sign * radius * tx;
+    const double phi0 = std::atan2(y0 - yc, x0 - xc);
+    const double dzds = pz / pt;
+    if (std::fabs(dzds) < 1.0e-12)
+    {
+      return false;
+    }
+
+    const double arc = arc_direction * dz / dzds;
+    const double phi = phi0 - sign * arc / radius;
+    x = xc + radius * std::cos(phi);
+    y = yc + radius * std::sin(phi);
+    return std::isfinite(x) && std::isfinite(y);
+  }
+
+  double tpc_seed_line_residual2(const Full_PolyTrack* trk,
+                              const std::vector<DisplayPoint>& points,
+                              const double magnetic_field_tesla,
+                              const double arc_direction,
+                              const bool use_straight_line)
+  {
+    if (!trk || points.empty())
+    {
+      return std::numeric_limits<double>::max();
+    }
+
+    double sum = 0.0;
+    unsigned int n = 0;
+    for (const DisplayPoint& point : points)
+    {
+      if (!finite_point(point))
+      {
+        continue;
+      }
+
+      double x = 0.0;
+      double y = 0.0;
+      if (!tpc_seed_xy_at_z(trk, point.z, magnetic_field_tesla, arc_direction, use_straight_line, x, y))
+      {
+        continue;
+      }
+
+      const double dx = x - point.x;
+      const double dy = y - point.y;
+      sum += dx * dx + dy * dy;
+      ++n;
+    }
+
+    return n > 0 ? sum / static_cast<double>(n) : std::numeric_limits<double>::max();
+  }
+
+  TPolyLine3D* make_tpc_seed_fit_line(const Full_PolyTrack* trk,
+                                        const double zmin,
+                                        const double zmax,
+                                        const double xymax,
+                                        const double magnetic_field_tesla,
+                                        const double arc_direction,
+                                        const bool use_straight_line,
+                                        const int color)
+  {
+    if (!trk || trk->get_fit_status() == 0)
+    {
+      return nullptr;
+    }
+
+    std::vector<double> zs;
+    std::vector<double> xs;
+    std::vector<double> ys;
+    const unsigned int nsteps = 80;
+    zs.reserve(nsteps + 1);
+    xs.reserve(nsteps + 1);
+    ys.reserve(nsteps + 1);
+
+    for (unsigned int istep = 0; istep <= nsteps; ++istep)
+    {
+      const double f = static_cast<double>(istep) / static_cast<double>(nsteps);
+      const double z = zmin + f * (zmax - zmin);
+      double x = 0.0;
+      double y = 0.0;
+      if (!tpc_seed_xy_at_z(trk, z, magnetic_field_tesla, arc_direction, use_straight_line, x, y))
+      {
+        continue;
+      }
+      if (std::fabs(x) > xymax || std::fabs(y) > xymax)
+      {
+        continue;
+      }
+      zs.push_back(z);
+      xs.push_back(x);
+      ys.push_back(y);
+    }
+
+    if (zs.size() < 2)
+    {
+      return nullptr;
+    }
+    TPolyLine3D* line = new TPolyLine3D(static_cast<int>(zs.size()));
+    for (unsigned int i = 0; i < zs.size(); ++i)
+    {
+      line->SetPoint(static_cast<int>(i), zs[i], xs[i], ys[i]);
+    }
+    line->SetLineColor(color);
+    line->SetLineStyle(2);
+    line->SetLineWidth(3);
+    return line;
+  }
+
 }  // namespace
 
 Full_PolyTrackDisplay::Full_PolyTrackDisplay(const std::string& name,
@@ -161,10 +400,17 @@ Full_PolyTrackDisplay::Full_PolyTrackDisplay(const std::string& name,
   , m_maxEventDisplays(maxEventDisplays)
   , m_evt(0)
   , m_eventsSaved(0)
+  , m_minMvtxHits(3)
+  , m_minInttHits(0)
   , m_zmin(-102.0)
   , m_zmax(102.0)
   , m_xymax(85.0)
+  , m_magneticFieldTesla(1.4)
+  , m_unusedSiliconSeedMarkerSize(0.25)
   , m_drawTrackLines(true)
+  , m_useStraightLineTracks(false)
+  , m_drawTpcOnlyFullPolyTracks(true)
+  , m_drawUnusedSiliconSeeds(false)
   , m_outfile(nullptr)
   , m_fullTracks(nullptr)
   , m_tpcClusters(nullptr)
@@ -282,22 +528,24 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
   std::vector<TPolyMarker3D*> cluster_markers;
   std::vector<TPolyMarker3D*> tpc_cluster_markers;
   std::vector<TPolyMarker3D*> seed_markers;
+  std::vector<TPolyMarker3D*> unused_silicon_seed_markers;
   std::vector<TPolyLine3D*> lines;
-  std::map<int, std::vector<TPolyMarker3D*> > cluster_markers_by_crossing;
-  std::map<int, std::vector<TPolyMarker3D*> > tpc_cluster_markers_by_crossing;
-  std::map<int, std::vector<TPolyMarker3D*> > seed_markers_by_crossing;
-  std::map<int, std::vector<TPolyLine3D*> > lines_by_crossing;
+  std::vector<TPolyLine3D*> fit_lines;
   std::map<int, std::vector<TPolyMarker3D*> > cluster_track_markers_by_crossing;
   std::map<int, std::vector<TPolyMarker3D*> > tpc_cluster_track_markers_by_crossing;
   std::map<int, std::vector<TPolyMarker3D*> > seed_track_markers_by_crossing;
   std::map<int, std::vector<TPolyLine3D*> > track_lines_by_crossing;
+  std::map<int, std::vector<TPolyLine3D*> > fit_lines_by_crossing;
   std::map<int, bool> crossings_to_draw;
+  std::set<TrkrDefs::cluskey> used_silicon_keys;
 
   unsigned int ntracks_selected = 0;
   unsigned int nclusters_selected = 0;
   unsigned int nclusters_plotted = 0;
   unsigned int ntpc_clusters_selected = 0;
   unsigned int ntpc_clusters_plotted = 0;
+  unsigned int nunused_silicon_seeds_selected = 0;
+  unsigned int nunused_silicon_seeds_plotted = 0;
   std::map<unsigned int, std::vector<const Tpc_PolyCluster*> > tpc_clusters_by_source_id;
   const unsigned int ntpc_clusters_total = m_tpcClusters ? m_tpcClusters->size() : 0;
   for (unsigned int icluster = 0; icluster < ntpc_clusters_total; ++icluster)
@@ -317,28 +565,8 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
     {
       continue;
     }
-    ++ntracks_selected;
 
     const unsigned int source_id = trk->get_source_assembled_track_id();
-    const auto crossing_iter = crossing_by_source_id.find(source_id);
-    const int crossing = crossing_iter != crossing_by_source_id.end()
-                             ? crossing_iter->second
-                             : static_cast<int>(source_id);
-    const int color = crossing_color(crossing);
-    const int per_crossing_color = track_color(source_id);
-    crossings_to_draw[crossing] = true;
-
-    TPolyMarker3D* seed_marker = make_track_seed_marker(trk, color);
-    if (seed_marker)
-    {
-      seed_markers.push_back(seed_marker);
-      seed_markers_by_crossing[crossing].push_back(seed_marker);
-      TPolyMarker3D* seed_track_marker = make_track_seed_marker(trk, per_crossing_color);
-      if (seed_track_marker)
-      {
-        seed_track_markers_by_crossing[crossing].push_back(seed_track_marker);
-      }
-    }
 
     std::vector<DisplayPoint> points;
     std::vector<DisplayPoint> tpc_points;
@@ -394,6 +622,70 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
       }
     }
 
+    unsigned int nmvtx_hits = 0;
+    unsigned int nintt_hits = 0;
+    for (const DisplayPoint& point : points)
+    {
+      if (point.key != TrkrDefs::CLUSKEYMAX)
+      {
+        const TrkrDefs::TrkrId trkrid = static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(point.key));
+        if (trkrid == TrkrDefs::mvtxId)
+        {
+          ++nmvtx_hits;
+        }
+        else if (trkrid == TrkrDefs::inttId)
+        {
+          ++nintt_hits;
+        }
+      }
+      else if (point.layer <= 2U)
+      {
+        ++nmvtx_hits;
+      }
+      else if (point.layer >= 3U && point.layer <= 6U)
+      {
+        ++nintt_hits;
+      }
+    }
+    if (nmvtx_hits < m_minMvtxHits || nintt_hits < m_minInttHits)
+    {
+      continue;
+    }
+
+    if (!m_drawTpcOnlyFullPolyTracks && points.empty())
+    {
+      continue;
+    }
+
+    for (const DisplayPoint& point : points)
+    {
+      if (point.key != TrkrDefs::CLUSKEYMAX)
+      {
+        used_silicon_keys.insert(point.key);
+      }
+    }
+
+    ++ntracks_selected;
+
+    const auto crossing_iter = crossing_by_source_id.find(source_id);
+    const int crossing = crossing_iter != crossing_by_source_id.end()
+                             ? crossing_iter->second
+                             : static_cast<int>(source_id);
+    const int color = crossing_color(crossing);
+    const int per_crossing_color = track_color(source_id);
+    crossings_to_draw[crossing] = true;
+
+    TPolyMarker3D* seed_marker = make_track_seed_marker(trk, color);
+    if (seed_marker)
+    {
+      seed_markers.push_back(seed_marker);
+      TPolyMarker3D* seed_track_marker = make_track_seed_marker(trk, per_crossing_color);
+      if (seed_track_marker)
+      {
+        seed_track_markers_by_crossing[crossing].push_back(seed_track_marker);
+      }
+    }
+
     for (const DisplayPoint& point : tpc_points)
     {
       ++ntpc_clusters_selected;
@@ -408,7 +700,6 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
       }
       TPolyMarker3D* marker = make_tpc_cluster_marker(point, color);
       tpc_cluster_markers.push_back(marker);
-      tpc_cluster_markers_by_crossing[crossing].push_back(marker);
       tpc_cluster_track_markers_by_crossing[crossing].push_back(make_tpc_cluster_marker(point, per_crossing_color));
       ++ntpc_clusters_plotted;
     }
@@ -427,24 +718,96 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
       }
       TPolyMarker3D* marker = make_cluster_marker(point, color);
       cluster_markers.push_back(marker);
-      cluster_markers_by_crossing[crossing].push_back(marker);
       cluster_track_markers_by_crossing[crossing].push_back(make_cluster_marker(point, per_crossing_color));
       ++nclusters_plotted;
     }
 
     if (m_drawTrackLines)
     {
-      std::vector<DisplayPoint> line_points = tpc_points;
+      std::vector<DisplayPoint> line_points;
+      line_points.reserve(tpc_points.size() + points.size());
+      line_points.insert(line_points.end(), tpc_points.begin(), tpc_points.end());
       line_points.insert(line_points.end(), points.begin(), points.end());
+
       TPolyLine3D* line = make_cluster_chain_line(line_points, color);
       if (line)
       {
         lines.push_back(line);
-        lines_by_crossing[crossing].push_back(line);
-        TPolyLine3D* track_line = make_cluster_chain_line(line_points, per_crossing_color);
-        if (track_line)
+      }
+
+      TPolyLine3D* track_line = make_cluster_chain_line(line_points, per_crossing_color);
+      if (track_line)
+      {
+        track_lines_by_crossing[crossing].push_back(track_line);
+      }
+
+      double fit_zmin = m_zmin;
+      double fit_zmax = m_zmax;
+      if (point_group_z_range(tpc_points, m_zmin, m_zmax, fit_zmin, fit_zmax))
+      {
+        extend_z_range_to_tpc_seed_point(trk, m_zmin, m_zmax, fit_zmin, fit_zmax);
+        const bool use_straight_line = m_useStraightLineTracks || std::fabs(trk->get_charge() * m_magneticFieldTesla) < 1.0e-12;
+        const double forward_residual2 = tpc_seed_line_residual2(trk, tpc_points, m_magneticFieldTesla, 1.0, use_straight_line);
+        const double reverse_residual2 = tpc_seed_line_residual2(trk, tpc_points, m_magneticFieldTesla, -1.0, use_straight_line);
+        const double arc_direction = forward_residual2 <= reverse_residual2 ? 1.0 : -1.0;
+
+        TPolyLine3D* fit_line = make_tpc_seed_fit_line(trk, fit_zmin, fit_zmax, m_xymax,
+                                                       m_magneticFieldTesla, arc_direction,
+                                                       use_straight_line, color);
+        if (fit_line)
         {
-          track_lines_by_crossing[crossing].push_back(track_line);
+          fit_lines.push_back(fit_line);
+        }
+
+        TPolyLine3D* crossing_fit_line = make_tpc_seed_fit_line(trk, fit_zmin, fit_zmax, m_xymax,
+                                                                m_magneticFieldTesla, arc_direction,
+                                                                use_straight_line, per_crossing_color);
+        if (crossing_fit_line)
+        {
+          fit_lines_by_crossing[crossing].push_back(crossing_fit_line);
+        }
+      }
+    }
+  }
+
+  if (m_drawUnusedSiliconSeeds && m_trkrClusters && m_actsGeometry)
+  {
+    for (const TrkrDefs::TrkrId trkrid : {TrkrDefs::mvtxId, TrkrDefs::inttId})
+    {
+      for (unsigned int layer = 0; layer <= 6U; ++layer)
+      {
+        const auto hitset_keys = m_trkrClusters->getHitSetKeys(trkrid, static_cast<uint8_t>(layer));
+        for (const TrkrDefs::hitsetkey hitset_key : hitset_keys)
+        {
+          const auto range = m_trkrClusters->getClusters(hitset_key);
+          for (auto iter = range.first; iter != range.second; ++iter)
+          {
+            const TrkrDefs::cluskey key = iter->first;
+            TrkrCluster* cluster = iter->second;
+            if (!cluster || used_silicon_keys.find(key) != used_silicon_keys.end())
+            {
+              continue;
+            }
+            const auto global = m_actsGeometry->getGlobalPosition(key, cluster);
+            DisplayPoint point;
+            point.key = key;
+            point.layer = TrkrDefs::getLayer(key);
+            point.x = global.x();
+            point.y = global.y();
+            point.z = global.z();
+            ++nunused_silicon_seeds_selected;
+            if (!finite_point(point))
+            {
+              continue;
+            }
+            if (point.z < m_zmin || point.z > m_zmax ||
+                std::fabs(point.x) > m_xymax || std::fabs(point.y) > m_xymax)
+            {
+              continue;
+            }
+            unused_silicon_seed_markers.push_back(make_unused_silicon_seed_marker(point, m_unusedSiliconSeedMarkerSize));
+            ++nunused_silicon_seeds_plotted;
+          }
         }
       }
     }
@@ -454,6 +817,13 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
                             std::format("event {} Full_PolyTrack clusters", m_evt).c_str(),
                             1200, 900);
   h3->Draw();
+  for (TPolyMarker3D* marker : unused_silicon_seed_markers)
+  {
+    if (marker)
+    {
+      marker->Draw("same");
+    }
+  }
   for (TPolyLine3D* line : lines)
   {
     if (line)
@@ -482,8 +852,13 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
       marker->Draw("same");
     }
   }
-  c3->Modified();
-  c3->Update();
+  for (TPolyLine3D* line : fit_lines)
+  {
+    if (line)
+    {
+      line->Draw("same");
+    }
+  }
   c3->Write();
   for (const auto& crossing_item : crossings_to_draw)
   {
@@ -500,6 +875,13 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
                                   std::format("event {} Full_PolyTrack clusters crossing {}", m_evt, crossing).c_str(),
                                   1200, 900);
     hcross->Draw();
+    for (TPolyMarker3D* marker : unused_silicon_seed_markers)
+    {
+      if (marker)
+      {
+        marker->Draw("same");
+      }
+    }
     for (TPolyLine3D* line : track_lines_by_crossing[crossing])
     {
       if (line)
@@ -528,8 +910,13 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
         marker->Draw("same");
       }
     }
-    ccross->Modified();
-    ccross->Update();
+    for (TPolyLine3D* line : fit_lines_by_crossing[crossing])
+    {
+      if (line)
+      {
+        line->Draw("same");
+      }
+    }
     ccross->Write();
   }
 
@@ -541,7 +928,10 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
             << " si_plotted=" << nclusters_plotted
             << " tpc_clusters=" << ntpc_clusters_selected
             << " tpc_plotted=" << ntpc_clusters_plotted
+            << " unused_si_seeds=" << nunused_silicon_seeds_selected
+            << " unused_si_plotted=" << nunused_silicon_seeds_plotted
             << " lines=" << lines.size()
+            << " fit_lines=" << fit_lines.size()
             << " crossing_canvases=" << crossings_to_draw.size()
             << " crossing_decisions=" << ndecisions << std::endl;
 
