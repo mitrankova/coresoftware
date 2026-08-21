@@ -58,6 +58,12 @@ class Full_PolyTrackMatcher : public SubsysReco
   void setMaxChains(unsigned int v) { m_maxChains = v; }
   void setMinSiliconClusters(unsigned int v) { m_minSiliconClusters = v; }
   void setUseSagittaPhiFit(bool v) { m_useSagittaPhiFit = v; }
+  void setProjectionStepCm(double min_step, double max_step)
+  {
+    m_projectionMinStepCm = min_step;
+    m_projectionMaxStepCm = max_step;
+  }
+  void setRefitWithSiliconHits(bool v) { m_refitWithSiliconHits = v; }
   void setPhiThetaWindowSigma(double phi, double theta)
   {
     m_phiWindowSigma = phi;
@@ -69,6 +75,7 @@ class Full_PolyTrackMatcher : public SubsysReco
     m_sigmaTheta = theta;
   }
   void setUseDynamicResiduals(bool v) { m_useDynamicResiduals = v; }
+  void setDeltaDeltaPhiWindow(double v) { m_deltaDeltaPhiWindow = v; }
   void setDynamicResidualMeanSlope(double phi, double theta)
   {
     m_dynamicPhiMeanSlope.fill(phi);
@@ -94,10 +101,17 @@ class Full_PolyTrackMatcher : public SubsysReco
     double phi_intercept{0.0};
     double phi_slope{0.0};
     double phi_S{0.0};
+    double reference_r{0.0};
+    double reference_phi{0.0};
+    double reference_z{0.0};
     double phi_x0{0.0};
     double phi_invR{0.0};
     double phi_theta{0.0};
     double phi_bline{0.0};
+    double phi_circle_cx{0.0};
+    double phi_circle_cy{0.0};
+    double phi_circle_radius{0.0};
+    bool phi_circle_ok{false};
     double z_intercept{0.0};
     double z_slope{0.0};
     bool phi_sagitta_ok{false};
@@ -147,7 +161,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   const TpcCrossingDecision* findCrossingDecision(unsigned int source_assembled_track_id) const;
   bool getGlobalClusterPosition(TrkrDefs::cluskey key, TrkrCluster* cluster, SpacePoint& point) const;
   TrajectoryState fitTrajectory(const std::vector<SpacePoint>& points) const;
-  bool predictAtRadius(const TrajectoryState& state, double r,
+  bool predictAtRadius(const TrajectoryState& state, double r, double pt,
                        double& pred_phi, double& pred_z,
                        double& pred_x, double& pred_y) const;
   std::vector<Chain> buildChains(const Tpc_PolyTrack& track,
@@ -165,6 +179,8 @@ class Full_PolyTrackMatcher : public SubsysReco
   double wrapPhi(double phi) const;
   double unwrapPhiNear(double phi, double reference) const;
   double predictSagittaPhi(double r, const TrajectoryState& state) const;
+  double predictPhiAtRadiusNear(double r, const TrajectoryState& state, double reference_phi) const;
+  double projectionStepSize(double pt) const;
   double pointTheta(const SpacePoint& point) const;
   double dynamicMeanPhi(unsigned int layer, double previous_dphi, bool has_previous) const;
   double dynamicSigmaPhi(double pt) const;
@@ -189,6 +205,9 @@ class Full_PolyTrackMatcher : public SubsysReco
 
   bool m_writeQA{true};
   double m_looseRdphiWindow{1.0};
+  double m_projectionMinStepCm{0.5};
+  double m_projectionMaxStepCm{2.0};
+  bool m_refitWithSiliconHits{true};
   double m_looseDzWindow{5.0};
   double m_sigmaRdphi{0.15};
   double m_sigmaDz{1.0};
@@ -196,6 +215,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   double m_sigmaTheta{0.02};
   double m_phiWindowSigma{3.0};
   double m_thetaWindowSigma{3.0};
+  double m_deltaDeltaPhiWindow{0.04};
   double m_missingLayerPenalty{6.0};
   bool m_useSagittaPhiFit{true};
   bool m_useDynamicResiduals{true};

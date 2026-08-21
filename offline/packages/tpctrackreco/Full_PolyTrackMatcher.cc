@@ -306,14 +306,22 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::fitTrajectory(cons
 
   std::vector<Tpc_FittingTools::FitPoint> phi_points;
   std::vector<Tpc_FittingTools::FitPoint> z_points;
+  std::vector<Tpc_FittingTools::Point> xyz_points;
+  std::vector<double> unwrapped_phi_values;
   phi_points.reserve(points.size());
   z_points.reserve(points.size());
+  xyz_points.reserve(points.size());
+  unwrapped_phi_values.reserve(points.size());
 
-  const double ref_phi = points.front().phi;
+  double previous_phi = points.front().phi;
   for (const SpacePoint& point : points)
   {
-    phi_points.emplace_back(point.r, unwrapPhiNear(point.phi, ref_phi));
+    const double unwrapped_phi = unwrapPhiNear(point.phi, previous_phi);
+    phi_points.emplace_back(point.r, unwrapped_phi);
+    unwrapped_phi_values.push_back(unwrapped_phi);
     z_points.emplace_back(point.r, point.z);
+    xyz_points.push_back({point.x, point.y, point.z});
+    previous_phi = unwrapped_phi;
   }
 
   const Tpc_FittingTools::LineFit phi_line = Tpc_FittingTools::fitLine(phi_points);
@@ -327,6 +335,23 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::fitTrajectory(cons
   state.phi_intercept = phi_line.intercept;
   state.phi_theta = std::atan(phi_line.slope);
   state.phi_bline = phi_line.intercept;
+  if (points.size() >= 3)
+  {
+    Tpc_FittingTools::FitResult circle_fit;
+    if (Tpc_FittingTools::fit(xyz_points, circle_fit) && circle_fit.ok && !circle_fit.is_line)
+    {
+      const double circle_radius = std::hypot(points.back().x - circle_fit.cx, points.back().y - circle_fit.cy);
+      if (std::isfinite(circle_fit.cx) && std::isfinite(circle_fit.cy) &&
+          std::isfinite(circle_radius) && circle_radius > 0.0)
+      {
+        state.phi_circle_cx = circle_fit.cx;
+        state.phi_circle_cy = circle_fit.cy;
+        state.phi_circle_radius = circle_radius;
+        state.phi_circle_ok = true;
+      }
+    }
+  }
+
   if (m_useSagittaPhiFit && points.size() >= 3)
   {
     const Tpc_FittingTools::SagittaFit phi_sagitta = Tpc_FittingTools::fitSagitta(phi_points);
@@ -346,6 +371,9 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::fitTrajectory(cons
     }
   }
 
+  state.reference_r = points.back().r;
+  state.reference_phi = previous_phi;
+  state.reference_z = points.back().z;
   state.z_slope = z_line.slope;
   state.z_intercept = z_line.intercept;
   state.valid = std::isfinite(state.phi_slope) && std::isfinite(state.phi_intercept) &&
@@ -380,6 +408,74 @@ double Full_PolyTrackMatcher::predictSagittaPhi(double r, const TrajectoryState&
   }
 
   return state.phi_bline + yy;
+}
+
+double Full_PolyTrackMatcher::predictPhiAtRadiusNear(double r, const TrajectoryState& state, double reference_phi) const
+{
+  if (state.phi_circle_ok)
+  {
+    const double cx = state.phi_circle_cx;
+    const double cy = state.phi_circle_cy;
+    const double track_radius = state.phi_circle_radius;
+    const double center_radius = std::hypot(cx, cy);
+    if (center_radius > 1.0e-4 * std::max(r, track_radius) && track_radius > 0.0)
+    {
+      const double a = (r * r - track_radius * track_radius + center_radius * center_radius) / (2.0 * center_radius);
+      const double h2 = r * r - a * a;
+      if (h2 >= -1.0e-9)
+      {
+        const double h = std::sqrt(std::max(0.0, h2));
+        const double ux = cx / center_radius;
+        const double uy = cy / center_radius;
+        const double bx = a * ux;
+        const double by = a * uy;
+        const double px = -uy;
+        const double py = ux;
+        const double phi_a = unwrapPhiNear(std::atan2(by + h * py, bx + h * px), reference_phi);
+        const double phi_b = unwrapPhiNear(std::atan2(by - h * py, bx - h * px), reference_phi);
+        return std::fabs(phi_a - reference_phi) <= std::fabs(phi_b - reference_phi) ? phi_a : phi_b;
+      }
+    }
+  }
+
+  if (!state.phi_sagitta_ok)
+  {
+    return unwrapPhiNear(state.phi_intercept + state.phi_slope * r, reference_phi);
+  }
+
+  const double c = std::cos(state.phi_theta);
+  const double s = std::sin(state.phi_theta);
+  double yy = unwrapPhiNear(reference_phi, state.phi_bline) - state.phi_bline;
+
+  for (unsigned int iter = 0; iter < 25; ++iter)
+  {
+    const double xrot = c * r + s * yy;
+    const double yrot = -s * r + c * yy;
+    const double f = Tpc_FittingTools::sagittaModel(xrot, state.phi_S, state.phi_x0, state.phi_invR);
+    const double g = yrot - f;
+    const double df = sagittaModelDerivative(xrot, state.phi_x0, state.phi_invR);
+    const double dg = c - df * s;
+    if (std::fabs(dg) < 1.0e-12)
+    {
+      break;
+    }
+    const double step = g / dg;
+    yy -= step;
+    if (std::fabs(step) < 1.0e-10)
+    {
+      break;
+    }
+  }
+
+  return unwrapPhiNear(state.phi_bline + yy, reference_phi);
+}
+
+double Full_PolyTrackMatcher::projectionStepSize(double pt) const
+{
+  const double min_step = std::max(m_projectionMinStepCm, 1.0e-3);
+  const double max_step = std::max(m_projectionMaxStepCm, min_step);
+  const double safe_pt = std::isfinite(pt) ? std::max(pt, 0.25) : 0.25;
+  return std::min(max_step, std::max(min_step, max_step * safe_pt));
 }
 
 double Full_PolyTrackMatcher::pointTheta(const SpacePoint& point) const
@@ -426,15 +522,43 @@ double Full_PolyTrackMatcher::dynamicDzWindow(double pt) const
   return 1.138 + 0.3919 * std::exp(0.84 / safe_pt);
 }
 
-bool Full_PolyTrackMatcher::predictAtRadius(const TrajectoryState& state, double r,
+bool Full_PolyTrackMatcher::predictAtRadius(const TrajectoryState& state, double r, double pt,
                                             double& pred_phi, double& pred_z,
                                             double& pred_x, double& pred_y) const
 {
-  if (!state.valid || !std::isfinite(r) || r <= 0.0)
+  if (!state.valid || !std::isfinite(r) || r <= 0.0 || !std::isfinite(state.reference_r) || state.reference_r <= 0.0)
   {
     return false;
   }
-  pred_phi = wrapPhi(state.phi_sagitta_ok ? predictSagittaPhi(r, state) : state.phi_intercept + state.phi_slope * r);
+
+  const double step_size = projectionStepSize(pt);
+  const double direction = r >= state.reference_r ? 1.0 : -1.0;
+  const unsigned int n_steps = std::max(1U, static_cast<unsigned int>(std::ceil(std::fabs(r - state.reference_r) / step_size)));
+  double current_phi = state.reference_phi;
+
+  for (unsigned int step = 1; step <= n_steps; ++step)
+  {
+    const double fraction = static_cast<double>(step) / static_cast<double>(n_steps);
+    const double step_r = state.reference_r + direction * std::fabs(r - state.reference_r) * fraction;
+    const double next_phi = predictPhiAtRadiusNear(step_r, state, current_phi);
+    if (!std::isfinite(next_phi))
+    {
+      return false;
+    }
+    if (Verbosity() > 3)
+    {
+      std::cout << Name() << "::predictAtRadius - step=" << step
+                << "/" << n_steps
+                << " r=" << step_r
+                << " phi=" << wrapPhi(next_phi)
+                << " z=" << state.z_intercept + state.z_slope * step_r
+                << " circle=" << state.phi_circle_ok
+                << " sagitta=" << state.phi_sagitta_ok << std::endl;
+    }
+    current_phi = next_phi;
+  }
+
+  pred_phi = wrapPhi(current_phi);
   pred_z = state.z_intercept + state.z_slope * r;
   pred_x = r * std::cos(pred_phi);
   pred_y = r * std::sin(pred_phi);
@@ -465,6 +589,18 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::extendWithHit(const Chain& c
   out.previous_dphi = dphi;
   out.previous_dtheta = dtheta;
   out.has_previous_residual = true;
+  if (m_refitWithSiliconHits)
+  {
+    out.fit_points.push_back(point);
+    std::sort(out.fit_points.begin(), out.fit_points.end(), [](const SpacePoint& a, const SpacePoint& b) {
+      return a.r > b.r;
+    });
+    const TrajectoryState refit_state = fitTrajectory(out.fit_points);
+    if (refit_state.valid)
+    {
+      out.state = refit_state;
+    }
+  }
   out.score = out.chi2 + m_missingLayerPenalty * out.n_missing;
   return out;
 }
@@ -598,12 +734,30 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
       seed.fit_points.push_back(p1);
     }
   }
+  std::sort(seed.fit_points.begin(), seed.fit_points.end(), [](const SpacePoint& a, const SpacePoint& b) {
+    return a.r > b.r;
+  });
 
   seed.state = fitTrajectory(seed.fit_points);
   if (!seed.state.valid)
   {
     return {};
   }
+  if (Verbosity() > 1)
+  {
+    std::cout << Name() << "::buildChains - source_track=" << track.get_source_assembled_track_id()
+              << " pt=" << seed.pt
+              << " fit_points=" << seed.fit_points.size()
+              << " circle=" << seed.state.phi_circle_ok
+              << " sagitta=" << seed.state.phi_sagitta_ok
+              << " refit=" << m_refitWithSiliconHits
+              << " circle_center_r=" << std::hypot(seed.state.phi_circle_cx, seed.state.phi_circle_cy)
+              << " circle_track_r=" << seed.state.phi_circle_radius
+              << " reference_r=" << seed.state.reference_r
+              << " reference_phi=" << wrapPhi(seed.state.reference_phi)
+              << " reference_z=" << seed.state.reference_z << std::endl;
+  }
+
 
   std::vector<Chain> chains{seed};
   for (unsigned int layer : m_matchLayers)
@@ -623,7 +777,7 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
         double pred_z = 0.0;
         double pred_x = 0.0;
         double pred_y = 0.0;
-        if (!predictAtRadius(chain.state, point.r, pred_phi, pred_z, pred_x, pred_y))
+        if (!predictAtRadius(chain.state, point.r, chain.pt, pred_phi, pred_z, pred_x, pred_y))
         {
           continue;
         }
@@ -647,11 +801,15 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
           continue;
         }
 
+        fillQaDphiCorrelation(track, chain, point, dphi);
+        if (chain.has_previous_residual && std::fabs(wrapPhi(dphi - chain.previous_dphi)) > m_deltaDeltaPhiWindow)
+        {
+          continue;
+        }
         const double rdphi = point.r * dphi;
         const double chi2 = square(sdphi) + square(sdtheta);
         layer_extensions.push_back(extendWithHit(chain, point, pred_phi, pred_z, pred_theta,
                                                  pred_x, pred_y, dphi, dtheta, rdphi, dz, chi2));
-        fillQaDphiCorrelation(track, chain, point, dphi);
       }
 
       std::sort(layer_extensions.begin(), layer_extensions.end(), [](const Chain& a, const Chain& b) {
@@ -734,7 +892,7 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
       double pred_z = 0.0;
       double pred_x = 0.0;
       double pred_y = 0.0;
-      if (!predictAtRadius(out.state, point.r, pred_phi, pred_z, pred_x, pred_y))
+      if (!predictAtRadius(out.state, point.r, out.pt, pred_phi, pred_z, pred_x, pred_y))
       {
         continue;
       }
@@ -819,7 +977,7 @@ void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chai
     double z = 0.0;
     double x = 0.0;
     double y = 0.0;
-    predictAtRadius(chain.state, r0, phi, z, x, y);
+    predictAtRadius(chain.state, r0, chain.pt, phi, z, x, y);
     out->set_x(x);
     out->set_y(y);
     out->set_z(z);
@@ -828,7 +986,7 @@ void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chai
     double z2 = 0.0;
     double x2 = 0.0;
     double y2 = 0.0;
-    predictAtRadius(chain.state, next_r, phi2, z2, x2, y2);
+    predictAtRadius(chain.state, next_r, chain.pt, phi2, z2, x2, y2);
     out->set_px(x2 - x);
     out->set_py(y2 - y);
     out->set_pz(z2 - z);
