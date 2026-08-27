@@ -1286,11 +1286,22 @@ int PHGarfieldRossegger::calculate()
                 const unsigned int idx = irs * m_nphiSource + ips;
                 const double boundary_potential = frame_pattern.boundary_potential[idx];
                 if (boundary_potential == 0.0) { continue; }
-                const double cp = std::cos(static_cast<double>(im) * ps[ips]);
-                const double sp = std::sin(static_cast<double>(im) * ps[ips]);
-                const double dphi = pse[ips + 1] - pse[ips];
-                cproj += boundary_potential * cp * dphi * radial_integral;
-                sproj += boundary_potential * sp * dphi * radial_integral;
+                const double phi1 = pse[ips];
+                const double phi2 = pse[ips + 1];
+                double int_cos = 0.0;
+                double int_sin = 0.0;
+                if (im == 0)
+                {
+                  int_cos = phi2 - phi1;
+                }
+                else
+                {
+                  const double m = static_cast<double>(im);
+                  int_cos = (std::sin(m * phi2) - std::sin(m * phi1)) / m;
+                  int_sin = (std::cos(m * phi1) - std::cos(m * phi2)) / m;
+                }
+                cproj += boundary_potential * int_cos * radial_integral;
+                if (im > 0) { sproj += boundary_potential * int_sin * radial_integral; }
               }
             }
             mc[im][in] = cproj / (norms[im][in] * anorm);
@@ -1331,7 +1342,7 @@ int PHGarfieldRossegger::calculate()
                   const double dzfac = dz_sinh_ratio(kval, zo[izo], len);
                   phi[idx] += rb[in] * zfac * amp;
                   er[idx] -= drb[in] * zfac * amp;
-                  ez[idx] -= rb[in] * dzfac * amp;
+                  ez[idx] -= m_frameEzScale * rb[in] * dzfac * amp;
                   if (im > 0) { ep[idx] += (static_cast<double>(im) / ro[iro]) * rb[in] * zfac * (ac * sp - as * cp); }
                 }
               }

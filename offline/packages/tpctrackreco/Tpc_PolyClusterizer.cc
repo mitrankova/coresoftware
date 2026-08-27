@@ -31,7 +31,9 @@
 #include <g4detectors/PHG4TpcGeomContainer.h>
 
 
+#include <TFile.h>
 #include <TPolyLine3D.h>
+#include <TTree.h>
 #include <phgarfield/PHGarfield.h>
 
 #include <algorithm>
@@ -39,6 +41,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <map>
 #include <set>
 #include <vector>
@@ -145,11 +148,20 @@ int Tpc_PolyClusterizer::InitRun(PHCompositeNode* topNode)
     m_tpcRotations = {{{rot_x, rot_y, rot_z}, {0.0, 0.0, 0.0}}};
   }
 
+  if (!m_field3DCoefficientFile.empty() && !load_field3d_coefficients())
+  {
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
   delete m_garfield;
   // m_garfield = new PHGarfield(Name() + "_PHGarfield");
+<<<<<<< HEAD
   const std::string electricFieldMap = CDBInterface::instance()->getUrl("Tpc_PolySeeding_EField");
   
   // sphenix_3d_ibf_field_new.root sphenix_rossegger_garfield_field.root;
+=======
+
+>>>>>>> 792e63750 (Update before PR for clusterizer. Read koef from tree is useless)
   const std::string electricFieldMap = "";
 
   const auto kefffile = CDBInterface::instance()->getUrl("Tpc_PolyClusterizer_kEff");
@@ -189,17 +201,25 @@ void Tpc_PolyClusterizer::configure_garfield(PHGarfield* garfield) const
   {
     return;
   }
-  const std::string field3DSide0 = "/sphenix/user/mitrankov/garf/include/ibf_side0_3d_r1p8_phi_v0.root";
-  //notebook_ibf_field_side0_South.root ibf_side0_3d_r1p8_phi_v1.root
-  const std::string field3DSide1 = "/sphenix/user/mitrankov/garf/include/ibf_side1_3d_r1p8_phi_v0.root";
-  //notebook_ibf_field_side1_North.root ibf_side1_3d_r1p8_phi_v1.root
-  const std::string FramesSide0 = "/sphenix/user/mitrankov/garf/include/frames_side0_3d_v6_1_geom.root";
-  const std::string FramesSide1 = "/sphenix/user/mitrankov/garf/include/frames_side1_3d_v6_1_geom.root";
+  const std::string field3DSide0 = "/sphenix/user/mitrankov/garf/include/sphenix_3d_ibf_field_side0_South_v3.root";
+  const std::string field3DSide1 = "/sphenix/user/mitrankov/garf/include/sphenix_3d_ibf_field_side1_North_v3.root";
+  const std::string FramesSide0 = "/sphenix/user/mitrankov/garf/include/frames_side0_3d.root";
+  const std::string FramesSide1 = "/sphenix/user/mitrankov/garf/include/frames_side1_3d.root";
 
   garfield->SetElectricFieldMap3D( field3DSide0, field3DSide1);
   garfield->SetFrameElectricFieldMap3D( FramesSide0, FramesSide1);
 
   garfield->SetFrameChargeScale(-180);
+
+  garfield->SetUseIFCVoltageDistortion(true);
+  garfield->SetUseOFCVoltageDistortion(true);
+
+  garfield->SetFieldCageVoltageOffsets(
+     211.0,   // IFC South
+       0.0,   // IFC North
+       0.0,   // OFC South
+       0.0);  // OFC North
+
 
   garfield->MoveTpc(m_tpcMove[0], m_tpcMove[1], m_tpcMove[2]);
   for (const auto& rotation : m_tpcRotations)
@@ -262,6 +282,68 @@ int Tpc_PolyClusterizer::createNodes(PHCompositeNode* topNode)
   }
 
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+bool Tpc_PolyClusterizer::load_field3d_coefficients()
+{
+  m_kEffSide0 = 0.0;
+  m_kEffSide1 = 0.0;
+
+  const int requested_run = recoConsts::instance()->get_IntFlag("RUNNUMBER", 0);
+  std::unique_ptr<TFile> infile(TFile::Open(m_field3DCoefficientFile.c_str(), "READ"));
+  if (!infile || infile->IsZombie())
+  {
+    std::cerr << Name() << "::load_field3d_coefficients - could not open "
+              << m_field3DCoefficientFile << std::endl;
+    return false;
+  }
+
+  TTree* tree = dynamic_cast<TTree*>(infile->Get("field3DCoefficients"));
+  if (!tree)
+  {
+    std::cerr << Name() << "::load_field3d_coefficients - missing TTree field3DCoefficients in "
+              << m_field3DCoefficientFile << std::endl;
+    return false;
+  }
+
+  int runnumber = 0;
+  double field3DSide0 = 0.0;
+  double field3DSide1 = 0.0;
+  if (tree->SetBranchAddress("runnumber", &runnumber) < 0 ||
+      tree->SetBranchAddress("field3DSide0", &field3DSide0) < 0 ||
+      tree->SetBranchAddress("field3DSide1", &field3DSide1) < 0)
+  {
+    std::cerr << Name() << "::load_field3d_coefficients - expected branches are runnumber, field3DSide0, field3DSide1"
+              << std::endl;
+    return false;
+  }
+
+  bool found = false;
+  const Long64_t entries = tree->GetEntries();
+  for (Long64_t entry = 0; entry < entries; ++entry)
+  {
+    tree->GetEntry(entry);
+    if (runnumber == requested_run)
+    {
+      m_kEffSide0 = field3DSide0;
+      m_kEffSide1 = field3DSide1;
+      found = true;
+      break;
+    }
+  }
+
+
+    std::cout << Name() << "::load_field3d_coefficients - run " << requested_run
+              << " field3DSide0=" << m_kEffSide0
+              << " field3DSide1=" << m_kEffSide1;
+    if (!found)
+    {
+      std::cout << " (run not found; using defaults)";
+    }
+    std::cout << std::endl;
+  
+
+  return true;
 }
 
 unsigned int Tpc_PolyClusterizer::drift_lookup_index(const unsigned int layer_index,

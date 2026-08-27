@@ -54,6 +54,7 @@ class PHGarfieldRossegger : public SubsysReco
   };
   void setFrameBoundaryPotential(double value) { m_frameBoundaryPotential = value; }
   void setFrameChargeWeighting(FrameChargeWeighting mode) { m_frameChargeWeighting = mode; }
+  void setFrameEzScale(double value) { m_frameEzScale = value; }
 
   // Split observation radial bins across condor jobs. Histograms keep full
   // binning, so PART files can be merged with hadd.
@@ -215,6 +216,7 @@ class PHGarfieldRossegger : public SubsysReco
   mutable bool m_framePolygonsLoaded{false};
   double m_frameBoundaryPotential{1.0};
   FrameChargeWeighting m_frameChargeWeighting{FrameChargeWeighting::ProportionalToArea};
+  double m_frameEzScale{1.0};
   std::string m_padPlacementFile{"input/TPC_pad_placement.txt"};
   std::string m_gainMapFile{"input/layer_gain_79513_Mariia_side01.root"};
   std::array<std::string, 2> m_gainHistograms{{"hGainMap_side0_South", "hGainMap_side1_North"}};

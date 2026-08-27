@@ -36,8 +36,8 @@ namespace
   // Raw-channel waveform cleaning
   // ============================================================
   constexpr unsigned int kNTimeBins = 700;
-  constexpr unsigned int kMinAcceptedTimeBin = 270;
-  constexpr unsigned int kMaxAcceptedTimeBin = 700;
+  constexpr unsigned int kMinAcceptedTimeBin = 0;
+  constexpr unsigned int kMaxAcceptedTimeBin = 999999;
 
   // Persistent channel noise: channel fires through a sizable fraction
   // of the frame (including the beginning of the frame).
