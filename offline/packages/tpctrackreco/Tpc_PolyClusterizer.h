@@ -140,8 +140,8 @@ class Tpc_PolyClusterizer : public SubsysReco
   double m_startZSouth{-102.325};
   double m_startZNorth{102.325};
   double m_kEffSide0{0.0};
-  double m_kEffSide1{-1.5};
-  std::string m_field3DCoefficientFile;
+  double m_kEffSide1{0.0};
+  std::string m_field3DCoefficientFile = "/sphenix/user/mitrankov/garf/include/tpc_field3d_coefficients.root";
   double m_cmVoltageDefault{375.0};
   bool use_survey_geometry = false;
   std::array<double, 3> m_tpcMove{{0.0, 0.0, 0.0}};                                             //{{-0.16775, -0.0337, -0.71365}};
