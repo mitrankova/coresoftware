@@ -37,6 +37,15 @@
 
 namespace
 {
+  constexpr double SiliconBeamXIntercept = -0.0407;
+  constexpr double SiliconBeamXSlope = -0.0015;
+  constexpr double SiliconBeamYIntercept = 0.1645;
+  constexpr double SiliconBeamYSlope = -0.0001;
+  constexpr double TpcBeamXIntercept = -0.0103;
+  constexpr double TpcBeamXSlope = -0.0013;
+  constexpr double TpcBeamYIntercept = 0.1814;
+  constexpr double TpcBeamYSlope = -0.0002;
+
   float finite_float(double value)
   {
     return std::isfinite(value) ? static_cast<float>(value) : std::numeric_limits<float>::quiet_NaN();
@@ -247,6 +256,14 @@ std::vector<Full_PolyTrackMatcher::SpacePoint> Full_PolyTrackMatcher::collectSil
           SpacePoint point;
           if (getGlobalClusterPosition(iter->first, iter->second, point))
           {
+            const double silicon_beam_x = SiliconBeamXIntercept + SiliconBeamXSlope * point.z;
+            const double silicon_beam_y = SiliconBeamYIntercept + SiliconBeamYSlope * point.z;
+            const double tpc_beam_x = TpcBeamXIntercept + TpcBeamXSlope * point.z;
+            const double tpc_beam_y = TpcBeamYIntercept + TpcBeamYSlope * point.z;
+            point.x += tpc_beam_x - silicon_beam_x;
+            point.y += tpc_beam_y - silicon_beam_y;
+            point.r = std::hypot(point.x, point.y);
+            point.phi = std::atan2(point.y, point.x);
             points.push_back(point);
           }
         }
@@ -855,6 +872,13 @@ void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chai
   m_fullTracks->add_track(out);
 }
 
+bool Full_PolyTrackMatcher::passesTpcAssociationCuts(const Tpc_PolyTrack& tpc_track) const
+{
+  const double pt = std::hypot(tpc_track.get_px(), tpc_track.get_py());
+  return tpc_track.get_nclusters() > m_tpcAssociationClusterCut &&
+         std::isfinite(pt) && pt > m_tpcAssociationPtCut;
+}
+
 int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
 {
   if (!m_tpcTracks || !m_tpcClusters || !m_trkrClusters || !m_actsGeometry || !m_fullTracks)
@@ -877,6 +901,13 @@ int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
     {
       continue;
     }
+    if (!passesTpcAssociationCuts(*tpc_track))
+    {
+      Chain unmatched_chain;
+      fillTrack(*tpc_track, unmatched_chain);
+      continue;
+    }
+
     auto cluster_iter = tpc_clusters_by_track.find(tpc_track->get_source_assembled_track_id());
     const std::vector<const Tpc_PolyCluster*> empty_clusters;
     const std::vector<const Tpc_PolyCluster*>& tpc_clusters =

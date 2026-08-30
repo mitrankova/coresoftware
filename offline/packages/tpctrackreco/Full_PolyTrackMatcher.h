@@ -57,6 +57,13 @@ class Full_PolyTrackMatcher : public SubsysReco
   void setMaxBranchesPerLayer(unsigned int v) { m_maxBranchesPerLayer = v; }
   void setMaxChains(unsigned int v) { m_maxChains = v; }
   void setMinSiliconClusters(unsigned int v) { m_minSiliconClusters = v; }
+  void setTpcAssociationClusterCut(unsigned int v) { m_tpcAssociationClusterCut = v; }
+  void setTpcAssociationPtCut(double v) { m_tpcAssociationPtCut = v; }
+  void setTpcAssociationCuts(unsigned int nclusters, double pt)
+  {
+    m_tpcAssociationClusterCut = nclusters;
+    m_tpcAssociationPtCut = pt;
+  }
   void setUseSagittaPhiFit(bool v) { m_useSagittaPhiFit = v; }
   void setPhiThetaWindowSigma(double phi, double theta)
   {
@@ -162,6 +169,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   Chain attachClosestInttClusters(const Chain& mvtx_chain,
                                  const std::vector<SpacePoint>& silicon_points) const;
   void fillTrack(const Tpc_PolyTrack& tpc_track, const Chain& chain);
+  bool passesTpcAssociationCuts(const Tpc_PolyTrack& tpc_track) const;
   double wrapPhi(double phi) const;
   double unwrapPhiNear(double phi, double reference) const;
   double predictSagittaPhi(double r, const TrajectoryState& state) const;
@@ -206,6 +214,8 @@ class Full_PolyTrackMatcher : public SubsysReco
   unsigned int m_maxBranchesPerLayer{8};
   unsigned int m_maxChains{256};
   unsigned int m_minSiliconClusters{1};
+  unsigned int m_tpcAssociationClusterCut{20};
+  double m_tpcAssociationPtCut{0.1};
   std::vector<unsigned int> m_matchLayers{2, 1, 0};
   std::vector<unsigned int> m_inttMatchLayers{3, 4, 5, 6};
   std::vector<unsigned int> m_siliconSearchLayers{6, 5, 4, 3, 2, 1, 0};
