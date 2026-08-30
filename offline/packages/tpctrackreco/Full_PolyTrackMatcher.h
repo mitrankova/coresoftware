@@ -18,8 +18,6 @@ class TFile;
 class TH3F;
 class TpcCrossingDecision;
 class TpcCrossingDecisionContainer;
-class Tpc_PolyCluster;
-class Tpc_PolyClusterContainer;
 class Tpc_PolyTrack;
 class Tpc_PolyTrackContainer;
 class TrkrCluster;
@@ -107,6 +105,15 @@ class Full_PolyTrackMatcher : public SubsysReco
     double phi_bline{0.0};
     double z_intercept{0.0};
     double z_slope{0.0};
+    double seed_x0{0.0};
+    double seed_y0{0.0};
+    double seed_z0{0.0};
+    double seed_cx{0.0};
+    double seed_cy{0.0};
+    double seed_phi0{0.0};
+    double seed_slope{0.0};
+    double seed_q_over_r{0.0};
+    bool use_tpc_seed{false};
     bool phi_sagitta_ok{false};
     bool valid{false};
   };
@@ -150,15 +157,14 @@ class Full_PolyTrackMatcher : public SubsysReco
   void fillQaDphiCorrelation(const Tpc_PolyTrack& track, const Chain& chain,
                              const SpacePoint& point, double current_dphi);
   std::vector<SpacePoint> collectSiliconClusters() const;
-  std::map<unsigned int, std::vector<const Tpc_PolyCluster*>> collectTpcClustersByTrack() const;
   const TpcCrossingDecision* findCrossingDecision(unsigned int source_assembled_track_id) const;
   bool getGlobalClusterPosition(TrkrDefs::cluskey key, TrkrCluster* cluster, SpacePoint& point) const;
   TrajectoryState fitTrajectory(const std::vector<SpacePoint>& points) const;
+  TrajectoryState makeTpcSeedTrajectory(const Tpc_PolyTrack& track) const;
   bool predictAtRadius(const TrajectoryState& state, double r,
                        double& pred_phi, double& pred_z,
                        double& pred_x, double& pred_y) const;
   std::vector<Chain> buildChains(const Tpc_PolyTrack& track,
-                                 const std::vector<const Tpc_PolyCluster*>& tpc_clusters,
                                  const std::vector<SpacePoint>& silicon_points);
   Chain extendWithHit(const Chain& chain, const SpacePoint& point,
                       double pred_phi, double pred_z, double pred_theta,
@@ -189,7 +195,6 @@ class Full_PolyTrackMatcher : public SubsysReco
   std::string m_qaFileName{"full_polytrack_matcher_qa.root"};
 
   Tpc_PolyTrackContainer* m_tpcTracks{nullptr};
-  Tpc_PolyClusterContainer* m_tpcClusters{nullptr};
   TpcCrossingDecisionContainer* m_crossingDecisions{nullptr};
   TrkrClusterContainer* m_trkrClusters{nullptr};
   ActsGeometry* m_actsGeometry{nullptr};

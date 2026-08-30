@@ -4,8 +4,6 @@
 #include "Full_PolyTrackv1.h"
 #include "TpcCrossingDecision.h"
 #include "TpcCrossingDecisionContainer.h"
-#include "Tpc_PolyCluster.h"
-#include "Tpc_PolyClusterContainer.h"
 #include "Tpc_PolyTrack.h"
 #include "Tpc_PolyTrackContainer.h"
 #include "Tpc_FittingTools.h"
@@ -111,13 +109,6 @@ int Full_PolyTrackMatcher::getNodes(PHCompositeNode* topNode)
   if (!m_tpcTracks)
   {
     std::cerr << Name() << "::getNodes - missing " << m_tpcTrackNodeName << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  m_tpcClusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_tpcClusterNodeName);
-  if (!m_tpcClusters)
-  {
-    std::cerr << Name() << "::getNodes - missing " << m_tpcClusterNodeName << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
@@ -277,25 +268,6 @@ std::vector<Full_PolyTrackMatcher::SpacePoint> Full_PolyTrackMatcher::collectSil
   return points;
 }
 
-std::map<unsigned int, std::vector<const Tpc_PolyCluster*>> Full_PolyTrackMatcher::collectTpcClustersByTrack() const
-{
-  std::map<unsigned int, std::vector<const Tpc_PolyCluster*>> clusters_by_track;
-  if (!m_tpcClusters)
-  {
-    return clusters_by_track;
-  }
-
-  for (unsigned int i = 0; i < m_tpcClusters->size(); ++i)
-  {
-    const Tpc_PolyCluster* cluster = m_tpcClusters->get_cluster(i);
-    if (cluster)
-    {
-      clusters_by_track[cluster->get_source_assembled_track_id()].push_back(cluster);
-    }
-  }
-  return clusters_by_track;
-}
-
 const TpcCrossingDecision* Full_PolyTrackMatcher::findCrossingDecision(unsigned int source_assembled_track_id) const
 {
   if (!m_crossingDecisions)
@@ -311,6 +283,33 @@ const TpcCrossingDecision* Full_PolyTrackMatcher::findCrossingDecision(unsigned 
     }
   }
   return nullptr;
+}
+
+Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcSeedTrajectory(const Tpc_PolyTrack& track) const
+{
+  TrajectoryState state;
+  if (track.get_fit_status() == 0)
+  {
+    return state;
+  }
+
+  state.seed_x0 = track.get_seed_x0();
+  state.seed_y0 = track.get_seed_y0();
+  state.seed_z0 = track.get_seed_z0();
+  state.seed_cx = track.get_helix_x0();
+  state.seed_cy = track.get_helix_y0();
+  state.seed_phi0 = track.get_seed_phi();
+  state.seed_slope = track.get_seed_slope();
+  state.seed_q_over_r = track.get_seed_q_over_r();
+  state.use_tpc_seed = true;
+  state.valid = std::isfinite(state.seed_x0) && std::isfinite(state.seed_y0) &&
+                std::isfinite(state.seed_z0) && std::isfinite(state.seed_phi0) &&
+                std::isfinite(state.seed_slope) && std::isfinite(state.seed_q_over_r);
+  if (std::fabs(state.seed_q_over_r) > 1.0e-12)
+  {
+    state.valid = state.valid && std::isfinite(state.seed_cx) && std::isfinite(state.seed_cy);
+  }
+  return state;
 }
 
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::fitTrajectory(const std::vector<SpacePoint>& points) const
@@ -451,6 +450,95 @@ bool Full_PolyTrackMatcher::predictAtRadius(const TrajectoryState& state, double
   {
     return false;
   }
+
+  if (state.use_tpc_seed)
+  {
+    double arc = std::numeric_limits<double>::quiet_NaN();
+    if (std::fabs(state.seed_q_over_r) <= 1.0e-12)
+    {
+      const double tx = std::cos(state.seed_phi0);
+      const double ty = std::sin(state.seed_phi0);
+      const double b = state.seed_x0 * tx + state.seed_y0 * ty;
+      const double c = state.seed_x0 * state.seed_x0 + state.seed_y0 * state.seed_y0 - r * r;
+      const double discriminant = b * b - c;
+      if (discriminant < 0.0)
+      {
+        return false;
+      }
+      const double root = std::sqrt(discriminant);
+      const double s1 = -b + root;
+      const double s2 = -b - root;
+      if (s1 >= 0.0 && s2 >= 0.0)
+      {
+        arc = std::min(s1, s2);
+      }
+      else if (s1 >= 0.0)
+      {
+        arc = s1;
+      }
+      else if (s2 >= 0.0)
+      {
+        arc = s2;
+      }
+      else
+      {
+        arc = std::fabs(s1) < std::fabs(s2) ? s1 : s2;
+      }
+      pred_x = state.seed_x0 + arc * tx;
+      pred_y = state.seed_y0 + arc * ty;
+    }
+    else
+    {
+      const double radius = 1.0 / std::fabs(state.seed_q_over_r);
+      const double dc = std::hypot(state.seed_cx, state.seed_cy);
+      if (!std::isfinite(radius) || radius <= 0.0 || dc <= 1.0e-12)
+      {
+        return false;
+      }
+
+      const double a = (r * r - radius * radius + dc * dc) / (2.0 * dc);
+      const double h2 = r * r - a * a;
+      if (h2 < -1.0e-9)
+      {
+        return false;
+      }
+      const double h = std::sqrt(std::max(h2, 0.0));
+      const double ux = state.seed_cx / dc;
+      const double uy = state.seed_cy / dc;
+      const double base_x = a * ux;
+      const double base_y = a * uy;
+      const double cand_x[2] = {base_x - h * uy, base_x + h * uy};
+      const double cand_y[2] = {base_y + h * ux, base_y - h * ux};
+      const double start_angle = std::atan2(state.seed_y0 - state.seed_cy, state.seed_x0 - state.seed_cx);
+      const double fit_sign = state.seed_q_over_r > 0.0 ? -1.0 : 1.0;
+
+      double best_arc = std::numeric_limits<double>::max();
+      unsigned int best = 0;
+      for (unsigned int i = 0; i < 2; ++i)
+      {
+        double dangle = unwrapPhiNear(std::atan2(cand_y[i] - state.seed_cy, cand_x[i] - state.seed_cx), start_angle) - start_angle;
+        if (fit_sign * dangle < 0.0)
+        {
+          dangle += fit_sign * 2.0 * M_PI;
+        }
+        const double candidate_arc = std::fabs(radius * dangle);
+        if (candidate_arc < best_arc)
+        {
+          best_arc = candidate_arc;
+          best = i;
+        }
+      }
+
+      arc = best_arc;
+      pred_x = cand_x[best];
+      pred_y = cand_y[best];
+    }
+
+    pred_phi = std::atan2(pred_y, pred_x);
+    pred_z = state.seed_z0 + state.seed_slope * arc;
+    return std::isfinite(pred_phi) && std::isfinite(pred_z) && std::isfinite(pred_x) && std::isfinite(pred_y);
+  }
+
   pred_phi = wrapPhi(state.phi_sagitta_ok ? predictSagittaPhi(r, state) : state.phi_intercept + state.phi_slope * r);
   pred_z = state.z_intercept + state.z_slope * r;
   pred_x = r * std::cos(pred_phi);
@@ -564,59 +652,12 @@ void Full_PolyTrackMatcher::fillQaDphiCorrelation(const Tpc_PolyTrack& track, co
 
 std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
     const Tpc_PolyTrack& track,
-    const std::vector<const Tpc_PolyCluster*>& tpc_clusters,
     const std::vector<SpacePoint>& silicon_points)
 {
   Chain seed;
   seed.pt = std::hypot(track.get_px(), track.get_py());
   seed.charge = track.get_charge();
-  seed.fit_points.reserve(tpc_clusters.size());
-  for (const Tpc_PolyCluster* cluster : tpc_clusters)
-  {
-    if (!cluster)
-    {
-      continue;
-    }
-    SpacePoint point;
-    point.key = cluster->get_trkr_cluster_key();
-    point.layer = point.key != TrkrDefs::CLUSKEYMAX ? TrkrDefs::getLayer(point.key) : 0;
-    point.x = cluster->get_centroid_x();
-    point.y = cluster->get_centroid_y();
-    point.z = cluster->get_centroid_z();
-    point.r = std::hypot(point.x, point.y);
-    point.phi = std::atan2(point.y, point.x);
-    if (std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z) && point.r > 0.0)
-    {
-      seed.fit_points.push_back(point);
-    }
-  }
-
-  if (seed.fit_points.size() < 2)
-  {
-    SpacePoint p0;
-    p0.x = track.get_x();
-    p0.y = track.get_y();
-    p0.z = track.get_z();
-    p0.r = std::hypot(p0.x, p0.y);
-    p0.phi = std::atan2(p0.y, p0.x);
-    SpacePoint p1 = p0;
-    const double pt = std::hypot(track.get_px(), track.get_py());
-    if (pt > 0.0)
-    {
-      p1.x += 20.0 * track.get_px() / pt;
-      p1.y += 20.0 * track.get_py() / pt;
-      p1.z += 20.0 * track.get_pz() / std::max(pt, 1.0e-9);
-      p1.r = std::hypot(p1.x, p1.y);
-      p1.phi = std::atan2(p1.y, p1.x);
-    }
-    if (p0.r > 0.0 && p1.r > 0.0)
-    {
-      seed.fit_points.push_back(p0);
-      seed.fit_points.push_back(p1);
-    }
-  }
-
-  seed.state = fitTrajectory(seed.fit_points);
+  seed.state = makeTpcSeedTrajectory(track);
   if (!seed.state.valid)
   {
     return {};
@@ -881,7 +922,7 @@ bool Full_PolyTrackMatcher::passesTpcAssociationCuts(const Tpc_PolyTrack& tpc_tr
 
 int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
 {
-  if (!m_tpcTracks || !m_tpcClusters || !m_trkrClusters || !m_actsGeometry || !m_fullTracks)
+  if (!m_tpcTracks || !m_trkrClusters || !m_actsGeometry || !m_fullTracks)
   {
     if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK ||
         createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)
@@ -892,8 +933,6 @@ int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
 
   m_fullTracks->Reset();
   const std::vector<SpacePoint> silicon_points = collectSiliconClusters();
-  const auto tpc_clusters_by_track = collectTpcClustersByTrack();
-
   for (unsigned int i = 0; i < m_tpcTracks->size(); ++i)
   {
     const Tpc_PolyTrack* tpc_track = m_tpcTracks->get_track(i);
@@ -908,11 +947,7 @@ int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
       continue;
     }
 
-    auto cluster_iter = tpc_clusters_by_track.find(tpc_track->get_source_assembled_track_id());
-    const std::vector<const Tpc_PolyCluster*> empty_clusters;
-    const std::vector<const Tpc_PolyCluster*>& tpc_clusters =
-        cluster_iter != tpc_clusters_by_track.end() ? cluster_iter->second : empty_clusters;
-    std::vector<Chain> chains = buildChains(*tpc_track, tpc_clusters, silicon_points);
+    std::vector<Chain> chains = buildChains(*tpc_track, silicon_points);
     const Chain* best = selectBestChain(chains);
     Chain unmatched_chain;
     const Chain* selected_chain = best;
