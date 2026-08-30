@@ -15,6 +15,7 @@ pkginclude_HEADERS = \
   Tpc_ModuleTrackDisplay.h \
   Tpc_AssembledTrackDisplay.h \
   Tpc_PolyClusterDisplay.h \
+  Tpc_PolyTrackHits.h \
   Tpc_PolyClusterResiduals.h \
   TpcV0CandidateTree.h \
   BeamCrossingAnalysis.h \
@@ -33,6 +34,7 @@ libTrackingDiagnostics_la_SOURCES = \
   Tpc_ModuleTrackDisplay.cc \
   Tpc_AssembledTrackDisplay.cc \
   Tpc_PolyClusterDisplay.cc \
+  Tpc_PolyTrackHits.cc \
   Tpc_PolyClusterResiduals.cc \
   TpcV0CandidateTree.cc \
   BeamCrossingAnalysis.cc \
