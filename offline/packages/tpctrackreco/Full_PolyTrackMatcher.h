@@ -145,6 +145,8 @@ class Full_PolyTrackMatcher : public SubsysReco
     unsigned int n_missing{0};
     double previous_dphi{0.0};
     double previous_dtheta{0.0};
+    double z_offset{0.0};
+    bool has_z_offset{false};
     bool has_previous_residual{false};
     double pt{0.0};
     double charge{0.0};
@@ -218,7 +220,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   std::array<double, 7> m_dynamicThetaMeanSlope{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
   unsigned int m_maxBranchesPerLayer{8};
   unsigned int m_maxChains{256};
-  unsigned int m_minSiliconClusters{1};
+  unsigned int m_minSiliconClusters{0};
   unsigned int m_tpcAssociationClusterCut{20};
   double m_tpcAssociationPtCut{0.1};
   std::vector<unsigned int> m_matchLayers{2, 1, 0};
