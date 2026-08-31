@@ -74,6 +74,15 @@ class Full_PolyTrackMatcher : public SubsysReco
     m_sigmaTheta = theta;
   }
   void setUseDynamicResiduals(bool v) { m_useDynamicResiduals = v; }
+  void setDynamicPhiMean(unsigned int layer, double offset, double slope)
+  {
+    if (layer >= m_dynamicPhiMeanOffset.size())
+    {
+      return;
+    }
+    m_dynamicPhiMeanOffset[layer] = offset;
+    m_dynamicPhiMeanSlope[layer] = slope;
+  }
   void setDynamicResidualMeanSlope(double phi, double theta)
   {
     m_dynamicPhiMeanSlope.fill(phi);
