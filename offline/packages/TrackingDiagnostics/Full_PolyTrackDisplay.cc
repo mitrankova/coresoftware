@@ -97,7 +97,7 @@ namespace
     TPolyMarker3D* marker = new TPolyMarker3D(1);
     marker->SetPoint(0, point.z, point.x, point.y);
     marker->SetMarkerColor(kGray + 1);
-    marker->SetMarkerStyle(20);
+    marker->SetMarkerStyle(24);
     marker->SetMarkerSize(marker_size);
     return marker;
   }
