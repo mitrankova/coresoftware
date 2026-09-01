@@ -218,7 +218,6 @@ int PHSiliconTpcTrackMatching::process_event(PHCompositeNode * /*unused*/)
     auto svtxseed = std::make_unique<SvtxTrackSeed_v3>();
     svtxseed->set_silicon_seed_index(si_id);
     svtxseed->set_tpc_seed_index(tpcid);
-
     // the intt and tpc crossings are in the seeds already, add the geometric crossing to the full seed
     std::vector<short int> crossing_list = getBestCrossing(tpcid, si_id);
     short int best_crossing = crossing_list[3];        // the fourth entry is the best crossing choice

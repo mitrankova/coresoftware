@@ -95,10 +95,9 @@ int TpcPolyClusterTrkrClusterConverter::getNodes(PHCompositeNode* topNode)
   }
 
   m_crossingDecisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_crossingDecisionNodeName);
-  if (!m_crossingDecisions)
+  if (!m_crossingDecisions && Verbosity() > 0)
   {
-    std::cerr << Name() << "::getNodes - missing " << m_crossingDecisionNodeName << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
+    std::cout << Name() << "::getNodes - optional " << m_crossingDecisionNodeName << " node not found" << std::endl;
   }
 
   m_geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
@@ -147,7 +146,7 @@ void TpcPolyClusterTrkrClusterConverter::clearOutputTpcClusters()
 
 void TpcPolyClusterTrkrClusterConverter::buildTrackMap()
 {
-  m_tracksBySourceId.clear();
+  m_tracksBySourceAndCrossing.clear();
   if (!m_polyTracks) { return;
 }
 
@@ -156,7 +155,7 @@ void TpcPolyClusterTrkrClusterConverter::buildTrackMap()
     const Tpc_PolyTrack* track = m_polyTracks->get_track(itrack);
     if (!isAcceptedTrack(track)) { continue;
 }
-    m_tracksBySourceId[track->get_source_assembled_track_id()] = track;
+    m_tracksBySourceAndCrossing[{track->get_source_assembled_track_id(), track->get_crossing()}] = track;
   }
 }
 
@@ -299,15 +298,15 @@ void TpcPolyClusterTrkrClusterConverter::buildMovedClusterMap()
   m_seedSubSurfKeys.clear();
   if (!m_polyClusters ) { return; }
 
-  std::map<unsigned int, std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>>> clusters_by_track;
+  std::map<std::pair<unsigned int, short>, std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>>> clusters_by_track;
   for (unsigned int icluster = 0; icluster < m_polyClusters->size(); ++icluster)
   {
     const Tpc_PolyCluster* cluster = m_polyClusters->get_cluster(icluster);
     if (!cluster || !cluster->isValid()) { continue;
 }
 
-    const auto track_iter = m_tracksBySourceId.find(cluster->get_source_assembled_track_id());
-    if (track_iter == m_tracksBySourceId.end()) { continue;
+    const auto track_iter = m_tracksBySourceAndCrossing.find({cluster->get_source_assembled_track_id(), cluster->get_crossing()});
+    if (track_iter == m_tracksBySourceAndCrossing.end()) { continue;
 }
 
     TrkrDefs::cluskey cluskey = TrkrDefs::CLUSKEYMAX;
@@ -356,13 +355,7 @@ bool TpcPolyClusterTrkrClusterConverter::publishCluster(const Tpc_PolyCluster* c
   if (moved_iter == m_movedGlobals.end()) { return false;
 }
 
-  if (!m_crossingDecisions) { return false;
-}
-  const TpcCrossingDecision* crossing_decision =
-      m_crossingDecisions->get_decision(track->get_source_assembled_track_id());
-  if (!crossing_decision) { return false;
-}
-  const short crossing = crossing_decision->get_selected_crossing();
+  const short crossing = track->get_crossing();
 
   float local_x = std::numeric_limits<float>::quiet_NaN();
   float local_y = std::numeric_limits<float>::quiet_NaN();
@@ -467,8 +460,8 @@ int TpcPolyClusterTrkrClusterConverter::process_event(PHCompositeNode* topNode)
     if (!cluster || !cluster->isValid()) { continue;
 }
 
-    const auto track_iter = m_tracksBySourceId.find(cluster->get_source_assembled_track_id());
-    if (track_iter == m_tracksBySourceId.end())
+    const auto track_iter = m_tracksBySourceAndCrossing.find({cluster->get_source_assembled_track_id(), cluster->get_crossing()});
+    if (track_iter == m_tracksBySourceAndCrossing.end())
     {
       ++nmissingTrack;
       continue;
