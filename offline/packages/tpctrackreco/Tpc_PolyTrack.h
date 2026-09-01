@@ -24,6 +24,7 @@ class Tpc_PolyTrack : public PHObject
   virtual unsigned int get_event() const { return 0; }
   virtual unsigned int get_track_id() const { return 0; }
   virtual unsigned int get_source_assembled_track_id() const { return 0; }
+  virtual short get_crossing() const { return 0; }
   virtual int get_fit_status() const { return 0; }
   virtual unsigned int get_nclusters() const { return 0; }
   virtual double get_x() const { return 0.0; }
@@ -41,6 +42,7 @@ class Tpc_PolyTrack : public PHObject
   virtual void set_event(unsigned int) {}
   virtual void set_track_id(unsigned int) {}
   virtual void set_source_assembled_track_id(unsigned int) {}
+  virtual void set_crossing(short) {}
   virtual void set_fit_status(int) {}
   virtual void set_nclusters(unsigned int) {}
   virtual void set_x(double) {}

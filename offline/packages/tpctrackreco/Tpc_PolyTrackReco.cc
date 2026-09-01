@@ -20,6 +20,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <utility>
 #include <vector>
 
 Tpc_PolyTrackReco::Tpc_PolyTrackReco(const std::string& name)
@@ -180,6 +181,7 @@ int Tpc_PolyTrackReco::createNodes(PHCompositeNode* topNode)
 }
 
 void Tpc_PolyTrackReco::fillTpc_PolyTrack(unsigned int source_assembled_track_id,
+                                          short crossing,
                                           const std::vector<const Tpc_PolyCluster*>& clusters,
                                           const Tpc_FittingTools::FitResult& fit,
                                           const bool fit_ok)
@@ -188,6 +190,7 @@ void Tpc_PolyTrackReco::fillTpc_PolyTrack(unsigned int source_assembled_track_id
   out->set_event(m_event);
   out->set_track_id(m_polyTracks->size());
   out->set_source_assembled_track_id(source_assembled_track_id);
+  out->set_crossing(crossing);
   out->set_fit_status(fit_ok ? 1 : 0);
   out->clear_cluster_keys();
   for (const Tpc_PolyCluster* cluster : clusters)
@@ -264,7 +267,7 @@ int Tpc_PolyTrackReco::process_event(PHCompositeNode* topNode)
 
   m_polyTracks->Reset();
 
-  std::map<unsigned int, std::vector<const Tpc_PolyCluster*>> clusters_by_track;
+  std::map<std::pair<unsigned int, short>, std::vector<const Tpc_PolyCluster*>> clusters_by_track;
   const unsigned int nclusters = m_clusters->size();
   for (unsigned int icluster = 0; icluster < nclusters; ++icluster)
   {
@@ -273,7 +276,7 @@ int Tpc_PolyTrackReco::process_event(PHCompositeNode* topNode)
     {
       continue;
     }
-    clusters_by_track[cluster->get_source_assembled_track_id()].push_back(cluster);
+    clusters_by_track[{cluster->get_source_assembled_track_id(), cluster->get_crossing()}].push_back(cluster);
   }
 
   for (const auto& track_clusters : clusters_by_track)
@@ -299,7 +302,7 @@ int Tpc_PolyTrackReco::process_event(PHCompositeNode* topNode)
 
     Tpc_FittingTools::FitResult fit;
     const bool fit_ok = (m_fitMode == FitMode::Line3D) ? Tpc_FittingTools::fitLine3D(fit_points, fit) : Tpc_FittingTools::fit(fit_points, fit);
-    fillTpc_PolyTrack(track_clusters.first, clusters, fit, fit_ok);
+    fillTpc_PolyTrack(track_clusters.first.first, track_clusters.first.second, clusters, fit, fit_ok);
   }
 
   if (Verbosity() > 0)

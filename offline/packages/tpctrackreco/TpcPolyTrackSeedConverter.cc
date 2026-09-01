@@ -51,10 +51,9 @@ int TpcPolyTrackSeedConverter::getNodes(PHCompositeNode* topNode)
   }
 
   m_crossingDecisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_crossingDecisionNodeName);
-  if (!m_crossingDecisions)
+  if (!m_crossingDecisions && Verbosity() > 0)
   {
-    std::cerr << Name() << "::getNodes - missing " << m_crossingDecisionNodeName << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
+    std::cout << Name() << "::getNodes - optional " << m_crossingDecisionNodeName << " node not found" << std::endl;
   }
 
   m_geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
@@ -128,15 +127,10 @@ bool TpcPolyTrackSeedConverter::isValidTrack(const Tpc_PolyTrack* track) const
 
 bool TpcPolyTrackSeedConverter::publishSeed(const Tpc_PolyTrack* track) const
 {
-  if (!track || !m_crossingDecisions || !m_geometry || !m_trackSeeds) { return false;
+  if (!track || !m_geometry || !m_trackSeeds) { return false;
 }
 
-  const TpcCrossingDecision* crossing_decision =
-      m_crossingDecisions->get_decision(track->get_source_assembled_track_id());
-  if (!crossing_decision) { return false;
-}
-
-  const short crossing = crossing_decision->get_selected_crossing();
+  const short crossing = track->get_crossing();
   const double drift_velocity = m_geometry->get_drift_velocity();
   if (drift_velocity <= 0.0 || !std::isfinite(drift_velocity)) { return false;
 }
@@ -176,6 +170,7 @@ bool TpcPolyTrackSeedConverter::publishSeed(const Tpc_PolyTrack* track) const
   seed->set_slope(static_cast<float>(track->get_seed_slope()));
   seed->set_qOverR(static_cast<float>(q_over_r));
   seed->set_crossing(crossing);
+  seed->set_tpc_seed_index(track->get_source_assembled_track_id());
 
   for (unsigned int i = 0; i < track->size_cluster_keys(); ++i)
   {
@@ -189,6 +184,7 @@ bool TpcPolyTrackSeedConverter::publishSeed(const Tpc_PolyTrack* track) const
     std::cout << Name() << "::publishSeed"
               << " track_id=" << track->get_track_id()
               << " source_track=" << track->get_source_assembled_track_id()
+              << " duplicate_group=" << track->get_source_assembled_track_id()
               << " crossing=" << crossing
               << " side=" << side
               << " drift_velocity=" << drift_velocity
@@ -214,7 +210,7 @@ bool TpcPolyTrackSeedConverter::publishSeed(const Tpc_PolyTrack* track) const
 
 int TpcPolyTrackSeedConverter::process_event(PHCompositeNode* topNode)
 {
-  if (!m_polyTracks || !m_trackSeeds || !m_crossingDecisions || !m_geometry)
+  if (!m_polyTracks || !m_trackSeeds || !m_geometry)
   {
     if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK ||
         createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)

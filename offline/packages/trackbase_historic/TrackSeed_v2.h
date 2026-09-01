@@ -48,6 +48,7 @@ class TrackSeed_v2 : public TrackSeed
   float get_slope() const override { return m_slope; }
   float get_phi() const override  { return m_phi; }  // returns the stored phi
   short int get_crossing() const override { return m_crossing; }
+  unsigned int get_tpc_seed_index() const override { return m_tpc_seed_index; }
 
   bool empty_cluster_keys() const override { return m_cluster_keys.empty(); }
   size_t size_cluster_keys() const override { return m_cluster_keys.size(); }
@@ -65,6 +66,7 @@ class TrackSeed_v2 : public TrackSeed
   //@{
 
   void set_crossing(const short int crossing) override { m_crossing = crossing; }
+  void set_tpc_seed_index(const unsigned int index) override { m_tpc_seed_index = index; }
   void set_qOverR(const float qOverR) override { m_qOverR = qOverR; }
   void set_X0(const float X0) override { m_X0 = X0; }
   void set_Y0(const float Y0) override { m_Y0 = Y0; }
@@ -89,6 +91,7 @@ class TrackSeed_v2 : public TrackSeed
   float m_phi = NAN;
 
   short int m_crossing = std::numeric_limits<short int>::max();
+  unsigned int m_tpc_seed_index = std::numeric_limits<unsigned int>::max();
 
   ClassDefOverride(TrackSeed_v2, 1);
 };

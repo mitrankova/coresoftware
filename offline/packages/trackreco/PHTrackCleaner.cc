@@ -9,6 +9,7 @@
 #include <trackbase/TrkrDefs.h>            // for cluskey, getLayer, TrkrId
 #include <trackbase_historic/SvtxTrack.h>  // for SvtxTrack, SvtxTrack::C...
 #include <trackbase_historic/SvtxTrackMap.h>
+#include <trackbase_historic/TrackSeed.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -57,146 +58,104 @@ int PHTrackCleaner::process_event(PHCompositeNode * /*topNode*/)
   unsigned int good_track = 0;  // for diagnostic output only
   unsigned int ok_track = 0;    // tracks to keep
 
-  std::multimap<unsigned int, unsigned int> tpcid_track_mmap;
-  std::set<unsigned int> tpc_id_set;
-  // loop over the fitted tracks
+  auto get_tpc_group = [this](const SvtxTrack* track, unsigned int track_id)
+  {
+    if (!track)
+    {
+      return std::make_pair(2U, track_id);
+    }
+
+    auto tpc_seed = track->get_tpc_seed();
+    const unsigned int tpc_index = _tpc_seed_map->find(tpc_seed);
+    std::pair<unsigned int, unsigned int> tpc_group = std::make_pair(2U, track_id);
+    if (tpc_seed)
+    {
+      if (tpc_index < _tpc_seed_map->size())
+      {
+        tpc_group = std::make_pair(0U, tpc_index);
+        if (tpc_seed->get_tpc_seed_index() != UINT_MAX)
+        {
+          tpc_group = std::make_pair(1U, tpc_seed->get_tpc_seed_index());
+        }
+      }
+      else if (tpc_seed->get_tpc_seed_index() < _tpc_seed_map->size())
+      {
+        const TrackSeed* indexed_tpc_seed = _tpc_seed_map->get(tpc_seed->get_tpc_seed_index());
+        tpc_group = std::make_pair(0U, tpc_seed->get_tpc_seed_index());
+        if (indexed_tpc_seed && indexed_tpc_seed->get_tpc_seed_index() != UINT_MAX)
+        {
+          tpc_group = std::make_pair(1U, indexed_tpc_seed->get_tpc_seed_index());
+        }
+      }
+    }
+    return tpc_group;
+  };
+
+  std::map<std::pair<unsigned int, unsigned int>, unsigned int> best_track_by_tpc_group;
+  std::map<std::pair<unsigned int, unsigned int>, double> best_quality_by_tpc_group;
+
+  // loop over the fitted tracks and keep only the best track per TPC group.
+  // Crossing duplicates share the source assembled-track group.
   for (auto &it : *_track_map)
   {
-    auto track_id = it.first;
-    auto track = it.second;
-    if (!track)
+    const unsigned int track_id = it.first;
+    SvtxTrack* track = it.second;
+    if (!track || track->get_ndf() <= min_ndf || track->get_ndf() == UINT_MAX)
     {
       continue;
     }
 
-    auto tpc_seed = track->get_tpc_seed();
-    unsigned int tpc_index = _tpc_seed_map->find(tpc_seed);
+    const double qual = track->get_chisq() / track->get_ndf();
+    if (!std::isfinite(qual) || qual >= quality_cut * 2)
+    {
+      continue;
+    }
 
-    auto tpc_track_pair = std::make_pair(tpc_index, track_id);
+    const auto tpc_group = get_tpc_group(track, track_id);
 
-    tpc_id_set.insert(tpc_index);
-    tpcid_track_mmap.insert(tpc_track_pair);
-  }
-
-  if (Verbosity() > 0)
-  {
-    std::cout << " tpcid_track_mmap  size " << tpcid_track_mmap.size() << std::endl;
-  }
-
-  // loop over the TPC seed ID's
-
-  for (unsigned int tpc_id : tpc_id_set)
-  {
     if (Verbosity() > 1)
     {
-      std::cout << " TPC ID " << tpc_id << std::endl;
+      unsigned int si_index = UINT_MAX;
+      auto si_seed = track->get_silicon_seed();
+      if (si_seed)
+      {
+        si_index = _silicon_seed_map->find(si_seed);
+      }
+      else
+      {
+        std::cout << "      no silicon seed found " << std::endl;
+      }
+
+      std::cout << "        track ID " << track_id << " TPC group type " << tpc_group.first
+                << " id " << tpc_group.second << " si index " << si_index
+                << " crossing " << track->get_crossing()
+                << " chisq " << track->get_chisq() << " ndf " << track->get_ndf()
+                << " chisq/ndf " << qual << std::endl;
     }
 
-    auto tpc_range = tpcid_track_mmap.equal_range(tpc_id);
-
-    unsigned int best_id = 99999;
-    double min_chisq_df = 99999.0;
-    unsigned int best_ndf = 1;
-    for (auto it = tpc_range.first; it != tpc_range.second; ++it)
+    const auto best_iter = best_quality_by_tpc_group.find(tpc_group);
+    if (best_iter == best_quality_by_tpc_group.end() || qual < best_iter->second)
     {
-      unsigned int track_id = it->second;
-
-      // note that the track no longer exists if it failed in the Acts fitter
-      _track = _track_map->get(track_id);
-
-      if (_track)
-      {
-        unsigned int si_index = UINT_MAX;
-        auto si_seed = _track->get_silicon_seed();
-        if (si_seed)
-	  {
-	    si_index = _silicon_seed_map->find(si_seed);
-	  }
-	else
-	  {
-      if(Verbosity() > 1)
-      {
-	    std::cout << "      no silicon seed found " << std::endl;
-	  }
+      best_track_by_tpc_group[tpc_group] = track_id;
+      best_quality_by_tpc_group[tpc_group] = qual;
     }
-	
-        if (_pp_mode)
-	  {
-	    if (!si_seed)
-	      {
-		// Tracks with no silicon seed in pp mode
-		if (_track->get_chisq() / _track->get_ndf() < min_chisq_df && _track->get_ndf() > min_ndf && _track->get_ndf() != UINT_MAX)
-		  {
-		    best_id = track_id;
-		    best_ndf = _track->get_ndf();	    
-		    double qual = _track->get_chisq() / _track->get_ndf();
-		    
-		    if (qual < quality_cut * 2)
-		      {
-			// keep this TPC only track
-			track_keep_list.insert(best_id);
-			ok_track++;
-			if (qual < quality_cut)
-			  {
-			    good_track++;
-			  }
-			
-			if (Verbosity() > 1)
-			  {
-			    std::cout << "        keep unmatched track tpc_id " << tpc_id << " given best_id " << best_id 
-				      << " best_ndf " << best_ndf << " chisq/ndf " << qual << std::endl;			
-			  }		    
-		      }
-		  }
-		
-		continue;
-	      }
-	    
-	  }
-	
-        // Find the remaining silicon matched track with the best chisq/ndf
-	
-        if (Verbosity() > 1)
-	  {
-          std::cout << "        track ID " << track_id << " tpc index " << tpc_id << " si index " << si_index << " crossing " << _track->get_crossing()
-                    << " chisq " << _track->get_chisq() << " ndf " << _track->get_ndf() << " min_chisq_df " << min_chisq_df << std::endl;
-        }
+  }
 
-        // only accept tracks with ndf > min_ndf - very small ndf means something went wrong, as does ndf undefined
-        if (_track->get_chisq() / _track->get_ndf() < min_chisq_df && _track->get_ndf() > min_ndf && _track->get_ndf() != UINT_MAX)
-        {
-          min_chisq_df = _track->get_chisq() / _track->get_ndf();
-          best_id = track_id;
-          best_ndf = _track->get_ndf();
-        }
-      }
-    }
-
-    if (best_id != 99999)
+  for (const auto& item : best_track_by_tpc_group)
+  {
+    const double qual = best_quality_by_tpc_group[item.first];
+    track_keep_list.insert(item.second);
+    ok_track++;
+    if (qual < quality_cut)
     {
-      double qual = min_chisq_df;
-
-      if (Verbosity() > 1)
-      {
-        std::cout << "        best track for tpc_id " << tpc_id << " has track_id " << best_id << " best_ndf " << best_ndf << " chisq/ndf " << qual << std::endl;
-      }
-
-      if (qual < quality_cut * 2)
-      {
-        track_keep_list.insert(best_id);
-        ok_track++;
-        if (qual < quality_cut)
-        {
-          good_track++;
-        }
-      }
+      good_track++;
     }
-    else
+
+    if (Verbosity() > 1)
     {
-      if (Verbosity() > 1)
-      {
-        std::cout << "        no track exists  for tpc_id " << tpc_id << std::endl;
-      }
+      std::cout << "        best track for TPC group type " << item.first.first
+                << " id " << item.first.second << " has track_id " << item.second
+                << " chisq/ndf " << qual << std::endl;
     }
   }
 

@@ -22,6 +22,7 @@ class Tpc_PolyTrackv1 : public Tpc_PolyTrack
   unsigned int get_event() const override { return m_event; }
   unsigned int get_track_id() const override { return m_track_id; }
   unsigned int get_source_assembled_track_id() const override { return m_source_assembled_track_id; }
+  short get_crossing() const override { return m_crossing; }
   int get_fit_status() const override { return m_fit_status; }
   unsigned int get_nclusters() const override { return m_nclusters; }
   double get_x() const override { return m_x; }
@@ -59,6 +60,7 @@ class Tpc_PolyTrackv1 : public Tpc_PolyTrack
   void set_event(unsigned int v) override { m_event = v; }
   void set_track_id(unsigned int v) override { m_track_id = v; }
   void set_source_assembled_track_id(unsigned int v) override { m_source_assembled_track_id = v; }
+  void set_crossing(short v) override { m_crossing = v; }
   void set_fit_status(int v) override { m_fit_status = v; }
   void set_nclusters(unsigned int v) override { m_nclusters = v; }
   void set_x(double v) override { m_x = v; }
@@ -101,6 +103,7 @@ class Tpc_PolyTrackv1 : public Tpc_PolyTrack
   unsigned int m_event{0};
   unsigned int m_track_id{0};
   unsigned int m_source_assembled_track_id{0};
+  short m_crossing{0};
   int m_fit_status{0};
   unsigned int m_nclusters{0};
   double m_x{0.0};
@@ -124,6 +127,6 @@ class Tpc_PolyTrackv1 : public Tpc_PolyTrack
   std::vector<TrkrDefs::cluskey> m_cluster_keys;
   std::vector<double> m_cov;
 
-  ClassDefOverride(Tpc_PolyTrackv1, 1)
+  ClassDefOverride(Tpc_PolyTrackv1, 2)
 };
 #endif

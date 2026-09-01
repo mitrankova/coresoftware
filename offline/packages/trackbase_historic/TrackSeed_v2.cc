@@ -37,6 +37,7 @@ void TrackSeed_v2::CopyFrom(const TrackSeed& seed)
   m_slope = seed.get_slope();
   m_Z0 = seed.get_Z0();
   m_crossing = seed.get_crossing();
+  m_tpc_seed_index = seed.get_tpc_seed_index();
   m_phi = seed.get_phi();
   m_cluster_keys.clear();
   std::copy(seed.begin_cluster_keys(), seed.end_cluster_keys(),
@@ -48,6 +49,7 @@ void TrackSeed_v2::identify(std::ostream& os) const
   os << "TrackSeed_v2 object ";
   os << "charge " << get_charge() << std::endl;
   os << "beam crossing " << get_crossing() << std::endl;
+  os << "tpc seed index " << get_tpc_seed_index() << std::endl;
   os << "(pt,pz) = (" << get_pt()
      << ", " << get_pz() << ")" << std::endl;
   os << " phi " << m_phi << " eta " << get_eta() << std::endl;
