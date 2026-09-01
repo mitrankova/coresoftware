@@ -44,6 +44,7 @@ class Tpc_PolyTrackReco : public SubsysReco
                    const Tpc_FittingTools::FitResult& fit,
                    bool fit_ok) const;
   void fillTpc_PolyTrack(unsigned int source_assembled_track_id,
+                         short crossing,
                          const std::vector<const Tpc_PolyCluster*>& clusters,
                          const Tpc_FittingTools::FitResult& fit,
                          bool fit_ok);

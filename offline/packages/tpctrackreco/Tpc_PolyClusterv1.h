@@ -22,6 +22,7 @@ class Tpc_PolyClusterv1 : public Tpc_PolyCluster
   unsigned int get_event() const override { return m_event; }
   unsigned int get_cluster_id() const override { return m_cluster_id; }
   unsigned int get_source_assembled_track_id() const override { return m_source_assembled_track_id; }
+  short get_crossing() const override { return m_crossing; }
   TrkrDefs::cluskey get_trkr_cluster_key() const override { return m_trkr_cluster_key; }
   int get_side() const override { return m_side; }
   unsigned int get_nhits() const override { return static_cast<unsigned int>(m_hit_indices.size()); }
@@ -40,6 +41,7 @@ class Tpc_PolyClusterv1 : public Tpc_PolyCluster
   void set_event(unsigned int v) override { m_event = v; }
   void set_cluster_id(unsigned int v) override { m_cluster_id = v; }
   void set_source_assembled_track_id(unsigned int v) override { m_source_assembled_track_id = v; }
+  void set_crossing(short v) override { m_crossing = v; }
   void set_trkr_cluster_key(TrkrDefs::cluskey v) override { m_trkr_cluster_key = v; }
   void set_side(int v) override { m_side = v; }
   void set_centroid_x(double v) override { m_centroid_x = v; }
@@ -77,6 +79,7 @@ class Tpc_PolyClusterv1 : public Tpc_PolyCluster
   unsigned int m_event{0};
   unsigned int m_cluster_id{0};
   unsigned int m_source_assembled_track_id{0};
+  short m_crossing{0};
   TrkrDefs::cluskey m_trkr_cluster_key {TrkrDefs::CLUSKEYMAX};
   int m_side{0};
 
@@ -96,6 +99,6 @@ class Tpc_PolyClusterv1 : public Tpc_PolyCluster
   std::vector<double> m_hit_y;
   std::vector<double> m_hit_z;
 
-  ClassDefOverride(Tpc_PolyClusterv1, 1)
+  ClassDefOverride(Tpc_PolyClusterv1, 2)
 };
 #endif

@@ -23,6 +23,7 @@ class SvtxVertexMap;
 class Tpc_AssembledTrack;
 class Tpc_AssembledTrackContainer;
 class TpcCrossingDecisionContainerv1;
+class TrackSeedContainer;
 class TrkrClusterContainer;
 class TrkrHitSetContainer;
 
@@ -40,6 +41,7 @@ class TpcCrossingFinder : public SubsysReco
   void setInputNodeName(const std::string& n) { m_inputNodeName = n; }
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setVertexMapNodeName(const std::string& n) { m_vertexMapNodeName = n; }
+  void setSiliconTrackMapName(const std::string& n) { m_siliconTrackMapName = n; }
   void setT0(double v) { m_t0 = v; }
   void setTpcAdcClock(double v) { m_tpcAdcClock = v; }
   void setCrossingPeriodNs(double v) { m_crossingPeriodNs = v; }
@@ -50,6 +52,7 @@ class TpcCrossingFinder : public SubsysReco
   void setRequireSiliconVertex(bool v) { m_requireSiliconVertex = v; }
   void setResolveAmbiguousWithoutVertex(bool v) { m_resolveAmbiguousWithoutVertex = v; }
   void setPreferTriggeredCrossing(bool v) { m_preferTriggeredCrossing = v; }
+  void setUseSiSeedCrossing(bool v) { m_useSiSeedCrossing = v; }
   void setTriggeredCrossing(short v) { m_triggeredCrossing = v; }
   void setCollisionZ(double v) { m_collisionZ = v; }
   void setMaxVertexDz(double v) { m_maxVertexDz = v; }
@@ -162,7 +165,7 @@ class TpcCrossingFinder : public SubsysReco
                          TrkrDefs::hitkey& min_hk,
                          TrkrDefs::hitsetkey& max_hsk,
                          TrkrDefs::hitkey& max_hk) const;
-  std::set<short> get_available_crossings() const;
+  std::set<short> get_si_seed_crossings() const;
   std::set<short> get_intt_crossings() const;
   std::map<short, std::vector<SiliconVertexHypothesis>> get_vertices_by_crossing() const;
   std::vector<std::pair<TrkrDefs::hitsetkey, TrkrDefs::hitkey>> select_representatives(const Tpc_AssembledTrack* track,
@@ -186,11 +189,13 @@ class TpcCrossingFinder : public SubsysReco
   std::string m_inputNodeName {"TPC_ASSEMBLEDTRACKS"};
   std::string m_outputNodeName {"TPC_CROSSING_DECISIONS"};
   std::string m_vertexMapNodeName {"SvtxVertexMap"};
+  std::string m_siliconTrackMapName {"SiliconTrackSeedContainer"};
 
   Tpc_AssembledTrackContainer* m_assembledTracks {nullptr};
   TpcCrossingDecisionContainerv1* m_decisions {nullptr};
   TrkrHitSetContainer* m_hits {nullptr};
   TrkrClusterContainer* m_clusterMap {nullptr};
+  TrackSeedContainer* m_siliconTrackMap {nullptr};
   PHG4TpcGeomContainer* m_geomContainerTpc {nullptr};
   SvtxVertexMap* m_vertexMap {nullptr};
   IdealPadMap* m_idealPadMap {nullptr};
@@ -221,6 +226,7 @@ class TpcCrossingFinder : public SubsysReco
   bool m_requireSiliconVertex {false};
   bool m_resolveAmbiguousWithoutVertex {true};
   bool m_preferTriggeredCrossing {false};
+  bool m_useSiSeedCrossing {true};
   short m_triggeredCrossing {0};
   bool use_survey_geometry {false};
   std::array<double, 3> m_tpcMove {{0.0, 0.0, 0.0}};

@@ -35,6 +35,7 @@ class Tpc_PolyClusterizer : public SubsysReco
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setCrossingDecisionNodeName(const std::string& n) { m_crossingDecisionNodeName = n; }
   void setMaxAcceptedTier(unsigned char v) { m_maxAcceptedTier = v; }
+  void setDuplicateCrossingHypotheses(bool v) { m_duplicateCrossingHypotheses = v; }
   void setT0(double v) { m_t0 = v; }
   void setTpcAdcClock(double v) { m_tpcAdcClock = v; }
   void setCrossingPeriodNs(double v) { m_crossingPeriodNs = v; }
@@ -122,6 +123,7 @@ class Tpc_PolyClusterizer : public SubsysReco
   std::string m_outputNodeName;
   std::string m_crossingDecisionNodeName{"TPC_CROSSING_DECISIONS"};
   unsigned char m_maxAcceptedTier{1};
+  bool m_duplicateCrossingHypotheses{false};
   Tpc_AssembledTrackContainer* m_assembledTracks{nullptr};
   Tpc_PolyClusterContainer* m_clusters{nullptr};
   TpcCrossingDecisionContainer* m_crossingDecisions {nullptr};

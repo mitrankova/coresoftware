@@ -27,6 +27,8 @@
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
+#include <trackbase_historic/TrackSeed.h>
+#include <trackbase_historic/TrackSeedContainer.h>
 
 #include <phgarfield/PHGarfield.h>
 #include <TPolyLine3D.h>
@@ -182,6 +184,17 @@ int TpcCrossingFinder::getNodes(PHCompositeNode* topNode)
   if (!m_clusterMap && Verbosity() > 0)
   {
     std::cout << Name() << "::getNodes - optional TRKR_CLUSTER node not found" << std::endl;
+  }
+
+  m_siliconTrackMap = findNode::getClass<TrackSeedContainer>(topNode, m_siliconTrackMapName);
+  if (!m_siliconTrackMap && m_useSiSeedCrossing)
+  {
+    std::cerr << Name() << "::getNodes - missing " << m_siliconTrackMapName << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+  if (!m_siliconTrackMap && Verbosity() > 0)
+  {
+    std::cout << Name() << "::getNodes - optional " << m_siliconTrackMapName << " node not found" << std::endl;
   }
 
   m_geomContainerTpc = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
@@ -551,20 +564,24 @@ bool TpcCrossingFinder::find_time_extrema(const Tpc_AssembledTrack* track,
   return found;
 }
 
-std::set<short> TpcCrossingFinder::get_available_crossings() const
+std::set<short> TpcCrossingFinder::get_si_seed_crossings() const
 {
-  std::set<short> available_crossings;
-  if (!m_vertexMap) { return available_crossings;
+  std::set<short> si_seed_crossings;
+  if (!m_siliconTrackMap) { return si_seed_crossings;
 }
 
-  for (auto & iter : *m_vertexMap)
+  for (unsigned int iseed = 0; iseed < m_siliconTrackMap->size(); ++iseed)
   {
-    const SvtxVertex* vertex = iter.second;
-    if (!vertex) { continue;
+    const TrackSeed* si_track = m_siliconTrackMap->get(iseed);
+    if (!si_track) { continue;
 }
-    available_crossings.insert(vertex->get_beam_crossing());
+
+    const short crossing = si_track->get_crossing();
+    if (crossing == std::numeric_limits<short>::max()) { continue;
+}
+    si_seed_crossings.insert(crossing);
   }
-  return available_crossings;
+  return si_seed_crossings;
 }
 
 std::set<short> TpcCrossingFinder::get_intt_crossings() const
@@ -1010,15 +1027,15 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
 }
   m_decisions->Reset();
 
-  std::set<short> available_crossings = get_available_crossings();
-  const std::set<short> intt_crossings = get_intt_crossings();
-  available_crossings.insert(intt_crossings.begin(), intt_crossings.end());
+  const std::set<short> si_seed_crossings = m_useSiSeedCrossing ? get_si_seed_crossings() : std::set<short>();
+  const std::set<short> intt_crossings = (!m_useSiSeedCrossing || Verbosity() > 0) ? get_intt_crossings() : std::set<short>();
+  const std::set<short>& available_crossings = m_useSiSeedCrossing ? si_seed_crossings : intt_crossings;
   const auto vertices_by_crossing = get_vertices_by_crossing();
   const bool has_vertex_map = m_vertexMap != nullptr;
 
   if (Verbosity() > 0)
   {
-    std::cout << Name() << "::process_event - event " << m_event << " available candidate crossings:";
+    std::cout << Name() << "::process_event - event " << m_event << " available candidate crossings (source=" << (m_useSiSeedCrossing ? "si_seed" : "intt") << "):";
     for (const short crossing : available_crossings) { std::cout << " " << crossing;
 }
     std::cout << " | intt crossings:";

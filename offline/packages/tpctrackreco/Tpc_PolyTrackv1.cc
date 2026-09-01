@@ -14,6 +14,7 @@ void Tpc_PolyTrackv1::identify(std::ostream& os) const
      << " event=" << m_event
      << " track_id=" << m_track_id
      << " source_assembled_track_id=" << m_source_assembled_track_id
+     << " crossing=" << m_crossing
      << " fit_status=" << m_fit_status
      << " nclusters=" << m_nclusters
      << " pos=(" << m_x << "," << m_y << "," << m_z << ")"
@@ -35,6 +36,7 @@ void Tpc_PolyTrackv1::Reset()
   m_event = 0;
   m_track_id = 0;
   m_source_assembled_track_id = 0;
+  m_crossing = 0;
   m_fit_status = 0;
   m_nclusters = 0;
   m_x = 0.0;

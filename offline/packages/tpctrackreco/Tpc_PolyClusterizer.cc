@@ -813,46 +813,63 @@ int Tpc_PolyClusterizer::process_event(PHCompositeNode* topNode)
         const TpcCrossingDecision* crossing_decision = m_crossingDecisions->get_decision(assembled->get_track_id());
         if (!crossing_decision) { continue;
 }
-        const unsigned char selected_tier = crossing_decision->get_selected_tier();
-        if (selected_tier > m_maxAcceptedTier) { continue;
-}
-        const short selected_crossing = crossing_decision->get_selected_crossing();
-
-
-        std::map<TrkrDefs::hitsetkey, std::vector<Point>> points_by_hitset;
-        for (unsigned int ih = 0; ih < assembled->size_hit_indices(); ++ih)
+        std::vector<short> crossings;
+        if (crossing_decision->get_selected_tier() <= m_maxAcceptedTier)
         {
-          const Tpc_AssembledTrack::HitIndex hi = assembled->get_hit_index(ih);
-          if (TpcDefs::getSide(hi.first) != static_cast<unsigned int>(side)) { continue;
-}
-
-          Point p;
-          if (make_xyz_point(hi.first, hi.second, selected_crossing, p)) { points_by_hitset[p.hitsetkey].push_back(p);
-}
+          crossings.push_back(crossing_decision->get_selected_crossing());
         }
-        if (points_by_hitset.empty()) { continue;
-}
 
-        for (const auto& hitset_points : points_by_hitset)
+        if (m_duplicateCrossingHypotheses)
         {
-          const TrkrDefs::hitsetkey cluster_hitsetkey = hitset_points.first;
-          const std::vector<Point>& points = hitset_points.second;
-          const Centroid centroid = make_centroid(points);
-          if (!centroid.ok) { continue;
+          crossings.reserve(crossing_decision->get_number_of_candidates());
+          for (unsigned int icandidate = 0; icandidate < crossing_decision->get_number_of_candidates(); ++icandidate)
+          {
+            const TpcCrossingCandidate* candidate = crossing_decision->get_candidate(icandidate);
+            if (!candidate || !candidate->passes_time_window || candidate->confidence_tier > m_maxAcceptedTier) { continue;
+}
+            if (std::find(crossings.begin(), crossings.end(), candidate->crossing) != crossings.end()) { continue;
+}
+            crossings.push_back(candidate->crossing);
+          }
+        }
+
+        for (const short crossing : crossings)
+        {
+          std::map<TrkrDefs::hitsetkey, std::vector<Point>> points_by_hitset;
+          for (unsigned int ih = 0; ih < assembled->size_hit_indices(); ++ih)
+          {
+            const Tpc_AssembledTrack::HitIndex hi = assembled->get_hit_index(ih);
+            if (TpcDefs::getSide(hi.first) != static_cast<unsigned int>(side)) { continue;
 }
 
-          const unsigned int cluster_index = next_cluster_index_by_hitset[cluster_hitsetkey]++;
-          const TrkrDefs::cluskey trkr_cluster_key = TrkrDefs::genClusKey(cluster_hitsetkey, cluster_index);
+            Point p;
+            if (make_xyz_point(hi.first, hi.second, crossing, p)) { points_by_hitset[p.hitsetkey].push_back(p);
+}
+          }
+          if (points_by_hitset.empty()) { continue;
+}
 
-          Tpc_PolyClusterv1* out = new Tpc_PolyClusterv1();
-          out->set_event(m_event);
-          out->set_cluster_id(m_clusters->size());
-          out->set_source_assembled_track_id(assembled->get_track_id());
-          out->set_trkr_cluster_key(trkr_cluster_key);
-          out->set_side(side);
-          out->set_centroid_x(centroid.x);
-          out->set_centroid_y(centroid.y);
-          out->set_centroid_z(centroid.z);
+          for (const auto& hitset_points : points_by_hitset)
+          {
+            const TrkrDefs::hitsetkey cluster_hitsetkey = hitset_points.first;
+            const std::vector<Point>& points = hitset_points.second;
+            const Centroid centroid = make_centroid(points);
+            if (!centroid.ok) { continue;
+}
+
+            const unsigned int cluster_index = next_cluster_index_by_hitset[cluster_hitsetkey]++;
+            const TrkrDefs::cluskey trkr_cluster_key = TrkrDefs::genClusKey(cluster_hitsetkey, cluster_index);
+
+            Tpc_PolyClusterv1* out = new Tpc_PolyClusterv1();
+            out->set_event(m_event);
+            out->set_cluster_id(m_clusters->size());
+            out->set_source_assembled_track_id(assembled->get_track_id());
+            out->set_crossing(crossing);
+            out->set_trkr_cluster_key(trkr_cluster_key);
+            out->set_side(side);
+            out->set_centroid_x(centroid.x);
+            out->set_centroid_y(centroid.y);
+            out->set_centroid_z(centroid.z);
 
           double phi_error = std::hypot(centroid.rms_x, centroid.rms_y);
           double z_error = std::fabs(centroid.rms_z);
@@ -930,8 +947,9 @@ int Tpc_PolyClusterizer::process_event(PHCompositeNode* topNode)
             delete out;
             continue;
           }
-          m_clusters->add_cluster(out);
-          ++nclusters;
+            m_clusters->add_cluster(out);
+            ++nclusters;
+          }
         }
       }
     }
