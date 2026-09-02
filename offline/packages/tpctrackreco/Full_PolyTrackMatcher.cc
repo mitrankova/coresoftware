@@ -21,10 +21,14 @@
 #include <trackbase/MvtxDefs.h>
 #include <trackbase/TrkrCluster.h>
 #include <trackbase/TrkrClusterContainer.h>
+#include <trackbase/TrkrClusterCrossingAssoc.h>
 #include <trackbase/TrkrDefs.h>
 
 #include <TFile.h>
+#include <TH1F.h>
+#include <TH2F.h>
 #include <TH3F.h>
+#include <TAxis.h>
 
 #include <algorithm>
 #include <cmath>
@@ -52,6 +56,17 @@ namespace
   double square(double value)
   {
     return value * value;
+  }
+  constexpr double SeedPhiWindow = 0.15;
+
+  double seedEtaWindow(double pt)
+  {
+    return std::max(0.03, -0.014 + 0.0331 * std::exp(0.48 / pt));
+  }
+
+  double seedThetaWindow(double pt, double theta)
+  {
+    return seedEtaWindow(pt) * std::max(std::sin(theta), 1.0e-9);
   }
 }
 
@@ -116,6 +131,12 @@ int Full_PolyTrackMatcher::getNodes(PHCompositeNode* topNode)
   if (!m_crossingDecisions && Verbosity() > 0)
   {
     std::cout << Name() << "::getNodes - optional " << m_crossingDecisionNodeName << " not found" << std::endl;
+  }
+
+  m_clusterCrossingAssoc = findNode::getClass<TrkrClusterCrossingAssoc>(topNode, m_clusterCrossingAssocNodeName);
+  if (!m_clusterCrossingAssoc && Verbosity() > 0)
+  {
+    std::cout << Name() << "::getNodes - optional " << m_clusterCrossingAssocNodeName << " not found" << std::endl;
   }
 
   m_trkrClusters = findNode::getClass<TrkrClusterContainer>(topNode, m_trkrClusterNodeName);
@@ -247,14 +268,6 @@ std::vector<Full_PolyTrackMatcher::SpacePoint> Full_PolyTrackMatcher::collectSil
           SpacePoint point;
           if (getGlobalClusterPosition(iter->first, iter->second, point))
           {
-            const double silicon_beam_x = SiliconBeamXIntercept + SiliconBeamXSlope * point.z;
-            const double silicon_beam_y = SiliconBeamYIntercept + SiliconBeamYSlope * point.z;
-            const double tpc_beam_x = TpcBeamXIntercept + TpcBeamXSlope * point.z;
-            const double tpc_beam_y = TpcBeamYIntercept + TpcBeamYSlope * point.z;
-            point.x += tpc_beam_x - silicon_beam_x;
-            point.y += tpc_beam_y - silicon_beam_y;
-            point.r = std::hypot(point.x, point.y);
-            point.phi = std::atan2(point.y, point.x);
             points.push_back(point);
           }
         }
@@ -285,6 +298,60 @@ const TpcCrossingDecision* Full_PolyTrackMatcher::findCrossingDecision(unsigned 
   return nullptr;
 }
 
+Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcReferenceTrajectory(const Tpc_PolyTrack& track) const
+{
+  TrajectoryState state = makeTpcSeedTrajectory(track);
+  if (!state.valid || !m_trkrClusters)
+  {
+    return state;
+  }
+
+  std::vector<SpacePoint> points;
+  points.reserve(track.size_cluster_keys() + 1U);
+  for (unsigned int i = 0; i < track.size_cluster_keys(); ++i)
+  {
+    const TrkrDefs::cluskey key = track.get_cluster_key(i);
+    TrkrCluster* cluster = m_trkrClusters->findCluster(key);
+    SpacePoint point;
+    if (cluster && getGlobalClusterPosition(key, cluster, point))
+    {
+      points.push_back(point);
+    }
+  }
+
+  const double beam_z = std::isfinite(track.get_seed_z0()) ? track.get_seed_z0() : track.get_z();
+  SpacePoint beam_point;
+  beam_point.z = beam_z;
+  beam_point.x = TpcBeamXIntercept + TpcBeamXSlope * beam_z;
+  beam_point.y = TpcBeamYIntercept + TpcBeamYSlope * beam_z;
+  beam_point.r = std::hypot(beam_point.x, beam_point.y);
+  beam_point.phi = std::atan2(beam_point.y, beam_point.x);
+  if (std::isfinite(beam_point.r) && beam_point.r > 0.0)
+  {
+    points.push_back(beam_point);
+  }
+
+  TrajectoryState fitted = fitTrajectory(points);
+  if (!fitted.valid)
+  {
+    return state;
+  }
+
+  fitted.seed_x0 = state.seed_x0;
+  fitted.seed_y0 = state.seed_y0;
+  fitted.seed_z0 = state.seed_z0;
+  fitted.seed_cx = state.seed_cx;
+  fitted.seed_cy = state.seed_cy;
+  fitted.seed_phi0 = state.seed_phi0;
+  fitted.seed_slope = state.seed_slope;
+  fitted.seed_q_over_r = fitted.phi_sagitta_ok ? fitted.phi_invR : state.seed_q_over_r;
+  fitted.z_slope = state.seed_slope;
+  fitted.z_intercept = state.seed_z0 - state.seed_slope * std::hypot(state.seed_x0, state.seed_y0);
+  fitted.use_tpc_seed = false;
+  fitted.valid = true;
+  return fitted;
+}
+
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcSeedTrajectory(const Tpc_PolyTrack& track) const
 {
   TrajectoryState state;
@@ -310,6 +377,176 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcSeedTraject
     state.valid = state.valid && std::isfinite(state.seed_cx) && std::isfinite(state.seed_cy);
   }
   return state;
+}
+
+
+Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTrajectory(
+    const TrajectoryState& tpc_state,
+    const Tpc_PolyTrack& track,
+    const SpacePoint& first_mvtx) const
+{
+  TrajectoryState state;
+  const double q_over_r = std::fabs(tpc_state.seed_q_over_r) > 1.0e-12 ?
+                            tpc_state.seed_q_over_r : track.get_seed_q_over_r();
+
+  double tpc_pred_phi = 0.0;
+  double tpc_pred_z = 0.0;
+  double tpc_pred_x = 0.0;
+  double tpc_pred_y = 0.0;
+  if (!predictAtRadius(tpc_state, first_mvtx.r, tpc_pred_phi, tpc_pred_z, tpc_pred_x, tpc_pred_y))
+  {
+    return state;
+  }
+
+  SpacePoint projected_mvtx = first_mvtx;
+  projected_mvtx.x = tpc_pred_x;
+  projected_mvtx.y = tpc_pred_y;
+  projected_mvtx.z = tpc_pred_z;
+  projected_mvtx.r = std::hypot(projected_mvtx.x, projected_mvtx.y);
+  projected_mvtx.phi = std::atan2(projected_mvtx.y, projected_mvtx.x);
+
+  const double beam_z = projected_mvtx.z;
+  const double beam_x = SiliconBeamXIntercept + SiliconBeamXSlope * beam_z;
+  const double beam_y = SiliconBeamYIntercept + SiliconBeamYSlope * beam_z;
+  const double dx = projected_mvtx.x - beam_x;
+  const double dy = projected_mvtx.y - beam_y;
+  const double chord = std::hypot(dx, dy);
+  if (!std::isfinite(chord) || chord <= 1.0e-9 || !std::isfinite(q_over_r) ||
+      !std::isfinite(projected_mvtx.r) || projected_mvtx.r <= 0.0)
+  {
+    return state;
+  }
+
+  state.seed_x0 = beam_x;
+  state.seed_y0 = beam_y;
+  state.seed_q_over_r = q_over_r;
+  state.seed_slope = track.get_seed_slope();
+  state.use_tpc_seed = true;
+  state.use_silicon_seed = true;
+
+  if (std::fabs(q_over_r) <= 1.0e-12)
+  {
+    state.seed_phi0 = std::atan2(dy, dx);
+    const double arc = chord;
+    state.seed_z0 = projected_mvtx.z - state.seed_slope * arc;
+    state.valid = std::isfinite(state.seed_phi0) && std::isfinite(state.seed_z0) &&
+                  std::isfinite(state.seed_slope);
+    return state;
+  }
+
+  const double radius = 1.0 / std::fabs(q_over_r);
+  if (!std::isfinite(radius) || chord > 2.0 * radius)
+  {
+    return state;
+  }
+
+  const double mx = 0.5 * (beam_x + projected_mvtx.x);
+  const double my = 0.5 * (beam_y + projected_mvtx.y);
+  const double ux = dx / chord;
+  const double uy = dy / chord;
+  const double h = std::sqrt(std::max(radius * radius - 0.25 * chord * chord, 0.0));
+  const double fit_sign = q_over_r > 0.0 ? -1.0 : 1.0;
+
+  double best_residual = std::numeric_limits<double>::max();
+  TrajectoryState best_state;
+  for (const double side : {-1.0, 1.0})
+  {
+    TrajectoryState candidate = state;
+    candidate.seed_cx = mx + side * h * (-uy);
+    candidate.seed_cy = my + side * h * ux;
+    const double start_angle = std::atan2(beam_y - candidate.seed_cy, beam_x - candidate.seed_cx);
+    const double hit_angle = std::atan2(projected_mvtx.y - candidate.seed_cy, projected_mvtx.x - candidate.seed_cx);
+    double dangle = unwrapPhiNear(hit_angle, start_angle) - start_angle;
+    if (fit_sign * dangle < 0.0)
+    {
+      dangle += fit_sign * 2.0 * M_PI;
+    }
+    const double arc = std::fabs(radius * dangle);
+    candidate.seed_phi0 = start_angle + fit_sign * 0.5 * M_PI;
+    candidate.seed_z0 = projected_mvtx.z - candidate.seed_slope * arc;
+    candidate.valid = std::isfinite(candidate.seed_cx) && std::isfinite(candidate.seed_cy) &&
+                      std::isfinite(candidate.seed_phi0) && std::isfinite(candidate.seed_z0);
+
+    double pred_phi = 0.0;
+    double pred_z = 0.0;
+    double pred_x = 0.0;
+    double pred_y = 0.0;
+    if (candidate.valid && predictAtRadius(candidate, projected_mvtx.r, pred_phi, pred_z, pred_x, pred_y))
+    {
+      const double residual = square(projected_mvtx.r * wrapPhi(projected_mvtx.phi - pred_phi)) + square(projected_mvtx.z - pred_z);
+      if (residual < best_residual)
+      {
+        best_residual = residual;
+        best_state = candidate;
+      }
+    }
+  }
+
+  return best_state;
+}
+
+void Full_PolyTrackMatcher::updateSiliconTrajectoryHalfResidual(TrajectoryState& state, const ChainHit& hit) const
+{
+  if (!state.valid || !state.use_silicon_seed)
+  {
+    return;
+  }
+
+  const double shift = 0.5 * hit.dphi;
+  const double bx = state.seed_x0;
+  const double by = state.seed_y0;
+  const double dcx = state.seed_cx - bx;
+  const double dcy = state.seed_cy - by;
+  const double c = std::cos(shift);
+  const double s = std::sin(shift);
+  if (std::isfinite(shift) && std::isfinite(dcx) && std::isfinite(dcy))
+  {
+    state.seed_cx = bx + c * dcx - s * dcy;
+    state.seed_cy = by + s * dcx + c * dcy;
+    state.seed_phi0 = wrapPhi(state.seed_phi0 + shift);
+  }
+  if (std::isfinite(hit.dz))
+  {
+    state.seed_z0 += 0.5 * hit.dz;
+  }
+}
+
+void Full_PolyTrackMatcher::refitSiliconTrajectoryFromMvtx(Chain& chain) const
+{
+  if (!chain.state.valid || !chain.state.use_silicon_seed || chain.hits.empty())
+  {
+    return;
+  }
+
+  double sum_dphi = 0.0;
+  double sum_dz = 0.0;
+  unsigned int count = 0;
+  for (const ChainHit& hit : chain.hits)
+  {
+    if (static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(hit.point.key)) != TrkrDefs::mvtxId)
+    {
+      continue;
+    }
+    double pred_phi = 0.0;
+    double pred_z = 0.0;
+    double pred_x = 0.0;
+    double pred_y = 0.0;
+    if (predictAtRadius(chain.state, hit.point.r, pred_phi, pred_z, pred_x, pred_y))
+    {
+      sum_dphi += wrapPhi(hit.point.phi - pred_phi);
+      sum_dz += hit.point.z - pred_z;
+      ++count;
+    }
+  }
+  if (count == 0U)
+  {
+    return;
+  }
+
+  ChainHit correction;
+  correction.dphi = sum_dphi / static_cast<double>(count);
+  correction.dz = sum_dz / static_cast<double>(count);
+  updateSiliconTrajectoryHalfResidual(chain.state, correction);
 }
 
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::fitTrajectory(const std::vector<SpacePoint>& points) const
@@ -403,6 +640,45 @@ double Full_PolyTrackMatcher::pointTheta(const SpacePoint& point) const
   return std::atan2(point.r, point.z);
 }
 
+double Full_PolyTrackMatcher::trajectoryPhi0NearBeam(const TrajectoryState& state) const
+{
+  if (!state.valid)
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (state.use_silicon_seed)
+  {
+    return state.seed_phi0;
+  }
+
+  const double beam_z = std::isfinite(state.seed_z0) ? state.seed_z0 : 0.0;
+  const double beam_x = TpcBeamXIntercept + TpcBeamXSlope * beam_z;
+  const double beam_y = TpcBeamYIntercept + TpcBeamYSlope * beam_z;
+  const double r_beam = std::hypot(beam_x, beam_y);
+  const double r1 = std::max(r_beam + 0.01, 0.01);
+  const double r2 = r1 + 0.01;
+
+  double phi1 = 0.0;
+  double z1 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double phi2 = 0.0;
+  double z2 = 0.0;
+  double x2 = 0.0;
+  double y2 = 0.0;
+  if (predictAtRadius(state, r1, phi1, z1, x1, y1) &&
+      predictAtRadius(state, r2, phi2, z2, x2, y2))
+  {
+    const double phi0 = std::atan2(y2 - y1, x2 - x1);
+    if (std::isfinite(phi0))
+    {
+      return phi0;
+    }
+  }
+
+  return state.use_tpc_seed ? state.seed_phi0 : state.phi_bline;
+}
+
 double Full_PolyTrackMatcher::dynamicMeanPhi(unsigned int layer, double previous_dphi, bool has_previous) const
 {
   if (!m_useDynamicResiduals || !has_previous || layer >= m_dynamicPhiMeanOffset.size())
@@ -415,8 +691,7 @@ double Full_PolyTrackMatcher::dynamicMeanPhi(unsigned int layer, double previous
 double Full_PolyTrackMatcher::dynamicSigmaPhi(double pt) const
 {
   (void) pt;
-  const double dphi_window = 0.15;
-  return std::max(dphi_window / std::max(m_phiWindowSigma, 1.0e-9), 1.0e-9);
+  return std::max(m_sigmaPhi, 1.0e-9);
 }
 
 double Full_PolyTrackMatcher::dynamicMeanTheta(unsigned int layer, double previous_dtheta, bool has_previous) const
@@ -430,10 +705,9 @@ double Full_PolyTrackMatcher::dynamicMeanTheta(unsigned int layer, double previo
 
 double Full_PolyTrackMatcher::dynamicSigmaTheta(double pt, double pred_theta) const
 {
-  const double safe_pt = std::max(pt, 0.25);
-  const double deta_window = std::max(-0.014 + 0.0331 * std::exp(0.48 / safe_pt), 0.03);
-  const double theta_window = deta_window * std::max(std::sin(pred_theta), 1.0e-9);
-  return std::max(theta_window / std::max(m_thetaWindowSigma, 1.0e-9), 1.0e-9);
+  (void) pt;
+  (void) pred_theta;
+  return std::max(m_sigmaTheta, 1.0e-9);
 }
 
 double Full_PolyTrackMatcher::dynamicDzWindow(double pt) const
@@ -546,33 +820,18 @@ bool Full_PolyTrackMatcher::predictAtRadius(const TrajectoryState& state, double
   return std::isfinite(pred_phi) && std::isfinite(pred_z) && std::isfinite(pred_x) && std::isfinite(pred_y);
 }
 
-Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::extendWithHit(const Chain& chain, const SpacePoint& point,
-                                                                  double pred_phi, double pred_z, double pred_theta,
-                                                                  double pred_x, double pred_y,
-                                                                  double dphi, double dtheta, double rdphi, double dz, double chi2) const
+Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::extendWithHit(const Chain& chain, const ChainHit& hit) const
 {
   Chain out = chain;
-  ChainHit hit;
-  hit.point = point;
-  hit.pred_phi = pred_phi;
-  hit.pred_z = pred_z;
-  hit.pred_theta = pred_theta;
-  hit.pred_x = pred_x;
-  hit.pred_y = pred_y;
-  hit.dphi = dphi;
-  hit.dtheta = dtheta;
-  hit.rdphi = rdphi;
-  hit.dz = dz;
-  hit.chi2 = chi2;
   out.hits.push_back(hit);
-  out.chi2 += chi2;
+  out.chi2 += hit.chi2;
   out.ndf += 2.0;
-  out.previous_dphi = dphi;
-  out.previous_dtheta = dtheta;
+  out.previous_dphi = hit.dphi;
+  out.previous_dtheta = hit.dtheta;
   out.has_previous_residual = true;
   if (!out.has_z_offset)
   {
-    out.z_offset = dz;
+    out.z_offset = hit.dz;
     out.has_z_offset = true;
   }
   out.score = out.chi2 + m_missingLayerPenalty * out.n_missing;
@@ -588,159 +847,489 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::extendMissing(const Chain& c
   return out;
 }
 
-void Full_PolyTrackMatcher::fillQaDphiCorrelation(const Tpc_PolyTrack& track, const Chain& chain,
-                                                        const SpacePoint& point, double current_dphi)
+void Full_PolyTrackMatcher::fillQaResiduals(const Tpc_PolyTrack& track, const Chain& chain, const ChainHit& hit)
 {
   if (!m_writeQA || !m_qaFile || chain.hits.empty())
   {
     return;
   }
+
   const ChainHit& previous_hit = chain.hits.back();
-  if (previous_hit.point.r <= 0.0 || !std::isfinite(current_dphi))
-  {
-    return;
-  }
-
-  const double previous_dphi = previous_hit.rdphi / previous_hit.point.r;
   const double pt = std::hypot(track.get_px(), track.get_py());
-  if (!std::isfinite(previous_dphi) || !std::isfinite(pt))
+  if (!std::isfinite(pt) || !std::isfinite(hit.dphi) || !std::isfinite(hit.dtheta) ||
+      !std::isfinite(previous_hit.dphi) || !std::isfinite(previous_hit.dtheta))
   {
     return;
   }
 
-  const unsigned int side = point.z >= 0.0 ? 1U : 0U;
+  const unsigned int side = hit.point.z >= 0.0 ? 1U : 0U;
   const int charge_bin = track.get_charge() < 0.0 ? -1 : 1;
-  double phi = wrapPhi(point.phi);
-  if (phi < 0.0)
+  const auto angular_bin = [](double value, unsigned int bins) {
+    if (bins <= 1U)
+    {
+      return 0U;
+    }
+    double wrapped = value;
+    while (wrapped > M_PI) { wrapped -= 2.0 * M_PI; }
+    while (wrapped <= -M_PI) { wrapped += 2.0 * M_PI; }
+    unsigned int bin = static_cast<unsigned int>(bins * (wrapped + M_PI) / (2.0 * M_PI));
+    if (bin >= bins)
+    {
+      bin = bins - 1U;
+    }
+    return bin;
+  };
+  const auto angular_bin_min = [](unsigned int bin, unsigned int bins) {
+    return -M_PI + 2.0 * M_PI * static_cast<double>(bin) / static_cast<double>(bins);
+  };
+  const auto angular_bin_max = [](unsigned int bin, unsigned int bins) {
+    return -M_PI + 2.0 * M_PI * static_cast<double>(bin + 1U) / static_cast<double>(bins);
+  };
+
+  const std::string charge_label = charge_bin < 0 ? "neg" : "pos";
+  const double hit_phi = wrapPhi(hit.point.phi);
+  const double hit_theta = pointTheta(hit.point);
+  const double tpc_track_phi = wrapPhi(std::atan2(track.get_py(), track.get_px()));
+  constexpr double tpc_residual_min = -0.2;
+  constexpr double tpc_residual_max = 0.2;
+  constexpr double si_residual_min = -0.2;
+  constexpr double si_residual_max = 0.2;
+  constexpr unsigned int current_previous_angular_bins = 1U;
+  constexpr unsigned int standard_residual_angular_bins = 4U;
+  const unsigned int current_previous_phi_bin = angular_bin(hit_phi, current_previous_angular_bins);
+  const unsigned int current_previous_theta_bin = angular_bin(hit_theta, current_previous_angular_bins);
+  const unsigned int standard_residual_phi_bin = angular_bin(hit_phi, standard_residual_angular_bins);
+  const unsigned int standard_residual_theta_bin = angular_bin(hit_theta, standard_residual_angular_bins);
+
+  auto fill_3d = [&](const std::string& prefix, const std::string& title_prefix,
+                     double current, double previous, double min, double max) {
+    std::ostringstream key;
+    key << prefix << "_l" << hit.point.layer
+        << "_side" << side
+        << "_q" << charge_label
+        << "_phibin" << current_previous_phi_bin
+        << "_thetabin" << current_previous_theta_bin;
+
+    TH3F* hist = nullptr;
+    auto found = m_hResidualCurrentVsPreviousVsPt.find(key.str());
+    if (found != m_hResidualCurrentVsPreviousVsPt.end())
+    {
+      hist = found->second;
+    }
+    else
+    {
+      std::ostringstream title;
+      title << title_prefix << " layer " << hit.point.layer
+            << " side " << side
+            << " q " << (charge_bin < 0 ? "-" : "+")
+            << " phi bin " << current_previous_phi_bin << " ["
+            << angular_bin_min(current_previous_phi_bin, current_previous_angular_bins) << ", "
+            << angular_bin_max(current_previous_phi_bin, current_previous_angular_bins) << ") rad"
+            << " theta bin " << current_previous_theta_bin << " ["
+            << angular_bin_min(current_previous_theta_bin, current_previous_angular_bins) << ", "
+            << angular_bin_max(current_previous_theta_bin, current_previous_angular_bins) << ") rad"
+            << ";current residual [rad];previous accepted layer residual [rad];p_{T} [GeV]";
+      hist = new TH3F(key.str().c_str(), title.str().c_str(),
+                      static_cast<int>(m_qaDphiBins), min, max,
+                      static_cast<int>(m_qaDphiBins), min, max,
+                      static_cast<int>(m_qaPtBins), m_qaPtMin, m_qaPtMax);
+      hist->SetDirectory(nullptr);
+      m_hResidualCurrentVsPreviousVsPt[key.str()] = hist;
+    }
+    hist->Fill(current, previous, pt);
+  };
+
+  fill_3d("h_si_dphi_curr_vs_prev_vs_pt", "fixed Si #Delta#phi current vs previous", hit.dphi, previous_hit.dphi, si_residual_min, si_residual_max);
+  fill_3d("h_si_dtheta_curr_vs_prev_vs_pt", "fixed Si #Delta#theta current vs previous", hit.dtheta, previous_hit.dtheta, si_residual_min, si_residual_max);
+  fill_3d("h_tpc_dphi_curr_vs_prev_vs_pt", "TPC #Delta#phi current vs previous", hit.tpc_dphi, previous_hit.tpc_dphi, tpc_residual_min, tpc_residual_max);
+  fill_3d("h_tpc_dtheta_curr_vs_prev_vs_pt", "TPC #Delta#theta current vs previous", hit.tpc_dtheta, previous_hit.tpc_dtheta, tpc_residual_min, tpc_residual_max);
+
+  auto fill_si_vs_tpc = [&](const std::string& key_base, const std::string& title, double tpc_residual, double si_residual,
+                          double tpc_min, double tpc_max, double si_min, double si_max) {
+    std::ostringstream key;
+    key << key_base << "_l" << hit.point.layer;
+    TH3F* hist = nullptr;
+    auto found = m_hResidualSiVsTpc.find(key.str());
+    if (found != m_hResidualSiVsTpc.end())
+    {
+      hist = found->second;
+    }
+    else
+    {
+      std::ostringstream hist_title;
+      hist_title << title << " layer " << hit.point.layer
+                 << ";TPC residual [rad];fixed Si residual [rad];TPC track #phi [rad]";
+      hist = new TH3F(key.str().c_str(), hist_title.str().c_str(),
+                      static_cast<int>(m_qaDphiBins), tpc_min, tpc_max,
+                      static_cast<int>(m_qaDphiBins), si_min, si_max,
+                      static_cast<int>(m_qaDphiBins), -M_PI, M_PI);
+      hist->SetDirectory(nullptr);
+      m_hResidualSiVsTpc[key.str()] = hist;
+    }
+    hist->Fill(tpc_residual, si_residual, tpc_track_phi);
+  };
+
+  fill_si_vs_tpc("h_dphi_si_vs_tpc", "fixed Si vs TPC #Delta#phi", hit.tpc_dphi, hit.dphi, tpc_residual_min, tpc_residual_max, si_residual_min, si_residual_max);
+  fill_si_vs_tpc("h_dtheta_si_vs_tpc", "fixed Si vs TPC #Delta#theta", hit.tpc_dtheta, hit.dtheta, tpc_residual_min, tpc_residual_max, si_residual_min, si_residual_max);
+
+  auto fill_1d = [&](const std::string& prefix, const std::string& title, double value) {
+    std::ostringstream key;
+    key << prefix << "_l" << hit.point.layer
+        << "_side" << side
+        << "_q" << charge_label
+        << "_phibin" << standard_residual_phi_bin
+        << "_thetabin" << standard_residual_theta_bin;
+    TH1F* hist = nullptr;
+    auto found = m_hStandardResidual.find(key.str());
+    if (found != m_hStandardResidual.end())
+    {
+      hist = found->second;
+    }
+    else
+    {
+      std::ostringstream hist_title;
+      hist_title << title << " layer " << hit.point.layer
+                 << " side " << side << " q " << (charge_bin < 0 ? "-" : "+")
+                 << " phi bin " << standard_residual_phi_bin << " ["
+                 << angular_bin_min(standard_residual_phi_bin, standard_residual_angular_bins) << ", "
+                 << angular_bin_max(standard_residual_phi_bin, standard_residual_angular_bins) << ") rad"
+                 << " theta bin " << standard_residual_theta_bin << " ["
+                 << angular_bin_min(standard_residual_theta_bin, standard_residual_angular_bins) << ", "
+                 << angular_bin_max(standard_residual_theta_bin, standard_residual_angular_bins) << ") rad"
+                 << ";standard residual;entries";
+      hist = new TH1F(key.str().c_str(), hist_title.str().c_str(), 120, -12.0, 12.0);
+      hist->SetDirectory(nullptr);
+      m_hStandardResidual[key.str()] = hist;
+    }
+    hist->Fill(value);
+  };
+
+  fill_1d("h_si_sdphi", "fixed Si s_{#phi}", hit.sdphi);
+  fill_1d("h_si_sdtheta", "fixed Si s_{#theta}", hit.sdtheta);
+}
+
+bool Full_PolyTrackMatcher::findInttCrossing(const Chain& chain, short& crossing) const
+{
+  if (!m_clusterCrossingAssoc)
   {
-    phi += 2.0 * M_PI;
+    return false;
   }
-  unsigned int phi_bin = static_cast<unsigned int>(m_qaPhiBins * phi / (2.0 * M_PI));
-  if (phi_bin >= m_qaPhiBins)
+
+  std::map<short, unsigned int> counts;
+  for (const ChainHit& hit : chain.hits)
   {
-    phi_bin = m_qaPhiBins - 1U;
+    if (static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(hit.point.key)) != TrkrDefs::inttId)
+    {
+      continue;
+    }
+    const auto range = m_clusterCrossingAssoc->getCrossings(hit.point.key);
+    for (auto iter = range.first; iter != range.second; ++iter)
+    {
+      ++counts[iter->second];
+    }
   }
 
-  const double phi_bin_min = 2.0 * M_PI * static_cast<double>(phi_bin) / static_cast<double>(m_qaPhiBins);
-  const double phi_bin_max = 2.0 * M_PI * static_cast<double>(phi_bin + 1U) / static_cast<double>(m_qaPhiBins);
-
-  std::ostringstream key;
-  key << "h_dphi_curr_prev_pt_l" << point.layer
-      << "_side" << side
-      << "_q" << (charge_bin < 0 ? "neg" : "pos")
-      << "_phibin" << phi_bin;
-
-  TH3F* hist = nullptr;
-  auto found = m_hDphiCurrentVsPreviousVsPt.find(key.str());
-  if (found != m_hDphiCurrentVsPreviousVsPt.end())
+  if (counts.empty())
   {
-    hist = found->second;
+    return false;
+  }
+
+  crossing = counts.begin()->first;
+  unsigned int best_count = counts.begin()->second;
+  for (const auto& item : counts)
+  {
+    if (item.second > best_count || (item.second == best_count && std::abs(item.first) < std::abs(crossing)))
+    {
+      crossing = item.first;
+      best_count = item.second;
+    }
+  }
+  return true;
+}
+
+void Full_PolyTrackMatcher::fillQaCrossing(const Tpc_PolyTrack& track, const Chain& chain)
+{
+  if (!m_writeQA || !m_qaFile)
+  {
+    return;
+  }
+
+  if (!m_hInttCrossingVsTpcCrossing)
+  {
+    m_hInttCrossingVsTpcCrossing = new TH2F("h_intt_crossing_vs_tpc_crossing",
+                                            "INTT crossing vs TPC crossing;TPC crossing;INTT crossing",
+                                            201, -100.5, 100.5, 201, -100.5, 100.5);
+    m_hInttCrossingVsTpcCrossing->SetDirectory(nullptr);
+    m_hDeltaCrossing = new TH1F("h_delta_crossing", "INTT - TPC crossing;#Delta crossing;tracks", 201, -100.5, 100.5);
+    m_hDeltaCrossing->SetDirectory(nullptr);
+    m_hCrossingStatus = new TH1F("h_crossing_status", "crossing availability/status;status;tracks", 5, 0.5, 5.5);
+    m_hCrossingStatus->GetXaxis()->SetBinLabel(1, "both valid");
+    m_hCrossingStatus->GetXaxis()->SetBinLabel(2, "TPC only");
+    m_hCrossingStatus->GetXaxis()->SetBinLabel(3, "INTT only");
+    m_hCrossingStatus->GetXaxis()->SetBinLabel(4, "neither valid");
+    m_hCrossingStatus->GetXaxis()->SetBinLabel(5, "disagreement");
+    m_hCrossingStatus->SetDirectory(nullptr);
+  }
+
+  const TpcCrossingDecision* decision = findCrossingDecision(track.get_source_assembled_track_id());
+  const bool has_tpc = decision && decision->get_status() != static_cast<unsigned char>(TpcCrossingStatus::NoValidCrossing) &&
+                       decision->get_status() != static_cast<unsigned char>(TpcCrossingStatus::Unknown);
+  const short tpc_crossing = has_tpc ? decision->get_selected_crossing() : 0;
+
+  short intt_crossing = 0;
+  const bool has_intt = findInttCrossing(chain, intt_crossing);
+
+  if (has_tpc && has_intt)
+  {
+    m_hCrossingStatus->Fill(1.0);
+    m_hInttCrossingVsTpcCrossing->Fill(tpc_crossing, intt_crossing);
+    m_hDeltaCrossing->Fill(static_cast<double>(intt_crossing) - static_cast<double>(tpc_crossing));
+    if (intt_crossing != tpc_crossing)
+    {
+      m_hCrossingStatus->Fill(5.0);
+    }
+  }
+  else if (has_tpc)
+  {
+    m_hCrossingStatus->Fill(2.0);
+  }
+  else if (has_intt)
+  {
+    m_hCrossingStatus->Fill(3.0);
   }
   else
   {
-    std::ostringstream title;
-    title << "current dphi vs previous dphi vs pT layer " << point.layer
-          << " side " << side
-          << " q " << (charge_bin < 0 ? "-" : "+")
-          << " phi bin " << phi_bin << " [" << phi_bin_min << ", " << phi_bin_max << ") rad"
-          << ";#Delta#phi current layer [rad];#Delta#phi previous accepted layer [rad];p_{T} [GeV]";
-    hist = new TH3F(key.str().c_str(), title.str().c_str(),
-                    static_cast<int>(m_qaDphiBins), m_qaDphiMin, m_qaDphiMax,
-                    static_cast<int>(m_qaDphiBins), m_qaDphiMin, m_qaDphiMax,
-                    static_cast<int>(m_qaPtBins), m_qaPtMin, m_qaPtMax);
-    hist->SetDirectory(nullptr);
-    m_hDphiCurrentVsPreviousVsPt[key.str()] = hist;
+    m_hCrossingStatus->Fill(4.0);
+  }
+}
+
+const Full_PolyTrackMatcher::SpacePoint* Full_PolyTrackMatcher::findBestMvtxCandidate(
+    const Chain& chain,
+    const std::vector<SpacePoint>& silicon_points,
+    const std::set<TrkrDefs::cluskey>& used_keys,
+    unsigned int layer,
+    ChainHit& best_hit,
+    double& best_chi2) const
+{
+  const SpacePoint* best_point = nullptr;
+  best_chi2 = std::numeric_limits<double>::max();
+
+  for (const SpacePoint& point : silicon_points)
+  {
+    if (point.layer != layer ||
+        static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(point.key)) != TrkrDefs::mvtxId ||
+        used_keys.find(point.key) != used_keys.end())
+    {
+      continue;
+    }
+
+    double pred_phi = 0.0;
+    double pred_z = 0.0;
+    double pred_x = 0.0;
+    double pred_y = 0.0;
+    if (!predictAtRadius(chain.state, point.r, pred_phi, pred_z, pred_x, pred_y))
+    {
+      continue;
+    }
+
+    const double dphi = wrapPhi(point.phi - pred_phi);
+    const double rdphi = point.r * dphi;
+    const double dz = point.z - pred_z;
+    if (std::fabs(rdphi) > m_looseRdphiWindow || std::fabs(dz) > m_looseDzWindow)
+    {
+      continue;
+    }
+
+    double tpc_pred_phi = 0.0;
+    double tpc_pred_z = 0.0;
+    double tpc_pred_x = 0.0;
+    double tpc_pred_y = 0.0;
+    if (!predictAtRadius(chain.tpc_reference, point.r, tpc_pred_phi, tpc_pred_z, tpc_pred_x, tpc_pred_y))
+    {
+      continue;
+    }
+
+    const double pred_theta = std::atan2(point.r, pred_z);
+    const double dtheta = pointTheta(point) - pred_theta;
+    const double tpc_pred_theta = std::atan2(point.r, tpc_pred_z);
+    const double tpc_dphi = wrapPhi(point.phi - tpc_pred_phi);
+    const double tpc_dtheta = pointTheta(point) - tpc_pred_theta;
+    const double mean_phi = dynamicMeanPhi(layer, chain.previous_dphi, chain.has_previous_residual);
+    const double mean_theta = dynamicMeanTheta(layer, chain.previous_dtheta, chain.has_previous_residual);
+    const double sigma_phi = dynamicSigmaPhi(chain.pt);
+    const double sigma_theta = dynamicSigmaTheta(chain.pt, pred_theta);
+    const double sdphi = (dphi - mean_phi) / sigma_phi;
+    const double sdtheta = (dtheta - mean_theta) / sigma_theta;
+
+    if (!m_associationCalibrationMode &&
+        (std::fabs(sdphi) > m_phiWindowSigma || std::fabs(sdtheta) > m_thetaWindowSigma))
+    {
+      continue;
+    }
+
+    const double chi2 = square(sdphi) + square(sdtheta);
+    if (chi2 < best_chi2)
+    {
+      best_chi2 = chi2;
+      best_point = &point;
+      best_hit.point = point;
+      best_hit.pred_phi = pred_phi;
+      best_hit.pred_z = pred_z;
+      best_hit.pred_theta = pred_theta;
+      best_hit.pred_x = pred_x;
+      best_hit.pred_y = pred_y;
+      best_hit.dphi = dphi;
+      best_hit.dtheta = dtheta;
+      best_hit.rdphi = rdphi;
+      best_hit.dz = dz;
+      best_hit.tpc_pred_phi = tpc_pred_phi;
+      best_hit.tpc_pred_z = tpc_pred_z;
+      best_hit.tpc_pred_theta = tpc_pred_theta;
+      best_hit.tpc_dphi = tpc_dphi;
+      best_hit.tpc_dtheta = tpc_dtheta;
+      best_hit.dynamic_mean_phi = mean_phi;
+      best_hit.dynamic_mean_theta = mean_theta;
+      best_hit.sigma_phi = sigma_phi;
+      best_hit.sigma_theta = sigma_theta;
+      best_hit.sdphi = sdphi;
+      best_hit.sdtheta = sdtheta;
+      best_hit.chi2 = chi2;
+    }
   }
 
-  hist->Fill(current_dphi, previous_dphi, pt);
+  return best_point;
 }
 
 std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
     const Tpc_PolyTrack& track,
     const std::vector<SpacePoint>& silicon_points)
 {
-  Chain seed;
-  seed.pt = std::hypot(track.get_px(), track.get_py());
-  seed.charge = track.get_charge();
-  seed.state = makeTpcSeedTrajectory(track);
-  if (!seed.state.valid)
+  Chain tpc_seed;
+  tpc_seed.pt = std::hypot(track.get_px(), track.get_py());
+  tpc_seed.charge = track.get_charge();
+  tpc_seed.state = makeTpcReferenceTrajectory(track);
+  tpc_seed.tpc_reference = tpc_seed.state;
+  if (!tpc_seed.state.valid)
   {
     return {};
   }
 
-  std::vector<Chain> chains{seed};
-  for (unsigned int layer : m_matchLayers)
+  std::vector<Chain> chains;
+  const double tpc_phi0 = trajectoryPhi0NearBeam(tpc_seed.state);
+  for (const unsigned int seed_layer : m_matchLayers)
   {
-    std::vector<Chain> next_chains;
-    for (const Chain& chain : chains)
+    for (const SpacePoint& seed_point : silicon_points)
     {
-      std::vector<Chain> layer_extensions;
-      for (const SpacePoint& point : silicon_points)
+      if (seed_point.layer != seed_layer ||
+          static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(seed_point.key)) != TrkrDefs::mvtxId)
       {
-        if (point.layer != layer)
-        {
-          continue;
-        }
+        continue;
+      }
 
+      double tpc_pred_phi = 0.0;
+      double tpc_pred_z = 0.0;
+      double tpc_pred_x = 0.0;
+      double tpc_pred_y = 0.0;
+      if (!predictAtRadius(tpc_seed.state, seed_point.r, tpc_pred_phi, tpc_pred_z, tpc_pred_x, tpc_pred_y))
+      {
+        continue;
+      }
+
+      const double initial_dphi = wrapPhi(seed_point.phi - tpc_pred_phi);
+      const double seed_theta = pointTheta(seed_point);
+      const double tpc_seed_theta = std::atan2(seed_point.r, tpc_pred_z);
+      const double phi_window = SeedPhiWindow;
+      const double theta_window = seedThetaWindow(tpc_seed.pt, tpc_seed_theta);
+      if (std::fabs(initial_dphi) > phi_window ||
+          std::fabs(seed_theta - tpc_seed_theta) > theta_window)
+      {
+        continue;
+      }
+      Chain chain;
+      chain.pt = tpc_seed.pt;
+      chain.charge = tpc_seed.charge;
+      chain.tpc_reference = tpc_seed.state;
+      chain.state = makeSiliconSeedTrajectory(tpc_seed.state, track, seed_point);
+      if (!chain.state.valid)
+      {
+        continue;
+      }
+
+      ChainHit seed_hit;
+      double seed_chi2 = 0.0;
+      std::set<TrkrDefs::cluskey> chain_used;
+      const SpacePoint* accepted_seed = findBestMvtxCandidate(chain, silicon_points, chain_used,
+                                                              seed_layer, seed_hit, seed_chi2);
+      if (!accepted_seed || accepted_seed->key != seed_point.key)
+      {
         double pred_phi = 0.0;
         double pred_z = 0.0;
         double pred_x = 0.0;
         double pred_y = 0.0;
-        if (!predictAtRadius(chain.state, point.r, pred_phi, pred_z, pred_x, pred_y))
+        if (!predictAtRadius(chain.state, seed_point.r, pred_phi, pred_z, pred_x, pred_y))
         {
           continue;
         }
-
-        const double dz = point.z - pred_z;
-        const double z_offset = chain.has_z_offset ? chain.z_offset : dz;
-        const double z_residual = dz - z_offset;
-        const double shifted_pred_z = pred_z + z_offset;
-        const double pred_theta = std::atan2(point.r, shifted_pred_z);
-        const double dphi = wrapPhi(point.phi - pred_phi);
-        const double dtheta = pointTheta(point) - pred_theta;
-        const double mean_phi = dynamicMeanPhi(layer, chain.previous_dphi, chain.has_previous_residual);
-        const double sigma_phi = dynamicSigmaPhi(chain.pt);
-        const double mean_theta = dynamicMeanTheta(layer, chain.previous_dtheta, chain.has_previous_residual);
-        const double sigma_theta = dynamicSigmaTheta(chain.pt, pred_theta);
-        const double sdphi = (dphi - mean_phi) / sigma_phi;
-        const double sdtheta = (dtheta - mean_theta) / sigma_theta;
-        if (std::fabs(sdphi) > m_phiWindowSigma || std::fabs(sdtheta) > m_thetaWindowSigma)
-        {
-          continue;
-        }
-        if (chain.has_z_offset && std::fabs(z_residual) > dynamicDzWindow(chain.pt))
-        {
-          continue;
-        }
-
-        const double rdphi = point.r * dphi;
-        const double chi2 = square(sdphi) + square(sdtheta) + square(z_residual / std::max(m_sigmaDz, 1.0e-9));
-        layer_extensions.push_back(extendWithHit(chain, point, pred_phi, pred_z, pred_theta,
-                                                 pred_x, pred_y, dphi, dtheta, rdphi, dz, chi2));
-        fillQaDphiCorrelation(track, chain, point, dphi);
+        seed_hit.point = seed_point;
+        seed_hit.pred_phi = pred_phi;
+        seed_hit.pred_z = pred_z;
+        seed_hit.pred_theta = std::atan2(seed_point.r, pred_z);
+        seed_hit.pred_x = pred_x;
+        seed_hit.pred_y = pred_y;
+        seed_hit.dphi = wrapPhi(seed_point.phi - pred_phi);
+        seed_hit.dtheta = pointTheta(seed_point) - seed_hit.pred_theta;
+        seed_hit.rdphi = seed_point.r * seed_hit.dphi;
+        seed_hit.dz = seed_point.z - pred_z;
+        seed_hit.tpc_pred_phi = tpc_pred_phi;
+        seed_hit.tpc_pred_z = tpc_pred_z;
+        seed_hit.tpc_pred_theta = tpc_seed_theta;
+        seed_hit.tpc_dphi = initial_dphi;
+        seed_hit.tpc_dtheta = seed_theta - tpc_seed_theta;
+        seed_hit.dynamic_mean_phi = dynamicMeanPhi(seed_layer, chain.previous_dphi, chain.has_previous_residual);
+        seed_hit.dynamic_mean_theta = dynamicMeanTheta(seed_layer, chain.previous_dtheta, chain.has_previous_residual);
+        seed_hit.sigma_phi = dynamicSigmaPhi(chain.pt);
+        seed_hit.sigma_theta = dynamicSigmaTheta(chain.pt, seed_hit.pred_theta);
+        seed_hit.sdphi = (seed_hit.dphi - seed_hit.dynamic_mean_phi) / seed_hit.sigma_phi;
+        seed_hit.sdtheta = (seed_hit.dtheta - seed_hit.dynamic_mean_theta) / seed_hit.sigma_theta;
+        seed_hit.chi2 = square(seed_hit.sdphi) + square(seed_hit.sdtheta);
       }
 
-      std::sort(layer_extensions.begin(), layer_extensions.end(), [](const Chain& a, const Chain& b) {
-        if (a.score != b.score) { return a.score < b.score; }
-        return a.hits.size() > b.hits.size();
-      });
-      if (layer_extensions.size() > m_maxBranchesPerLayer)
+      chain = extendWithHit(chain, seed_hit);
+      chain_used.insert(seed_hit.point.key);
+
+      for (const unsigned int layer : m_matchLayers)
       {
-        layer_extensions.resize(m_maxBranchesPerLayer);
-      }
-      next_chains.insert(next_chains.end(), layer_extensions.begin(), layer_extensions.end());
-      next_chains.push_back(extendMissing(chain, layer));
-    }
+        if (layer >= seed_layer)
+        {
+          continue;
+        }
 
-    std::sort(next_chains.begin(), next_chains.end(), [](const Chain& a, const Chain& b) {
-      if (a.score != b.score) { return a.score < b.score; }
-      return a.hits.size() > b.hits.size();
-    });
-    if (next_chains.size() > m_maxChains)
-    {
-      next_chains.resize(m_maxChains);
+        ChainHit best_hit;
+        double best_chi2 = 0.0;
+        const SpacePoint* best_point = findBestMvtxCandidate(chain, silicon_points, chain_used,
+                                                             layer, best_hit, best_chi2);
+        if (best_point)
+        {
+          fillQaResiduals(track, chain, best_hit);
+          chain = extendWithHit(chain, best_hit);
+          chain_used.insert(best_hit.point.key);
+        }
+        else
+        {
+          chain = extendMissing(chain, layer);
+        }
+      }
+
+      const double silicon_phi0 = trajectoryPhi0NearBeam(chain.state);
+      const double dphi0 = std::fabs(wrapPhi(silicon_phi0 - tpc_phi0));
+      const double dphi0_flip = std::fabs(wrapPhi(silicon_phi0 + M_PI - tpc_phi0));
+      chain.delta_phi0 = std::min(dphi0, dphi0_flip);
+      chains.push_back(chain);
+      if (chains.size() >= m_maxChains)
+      {
+        return chains;
+      }
     }
-    chains.swap(next_chains);
   }
 
   return chains;
@@ -755,9 +1344,14 @@ const Full_PolyTrackMatcher::Chain* Full_PolyTrackMatcher::selectBestChain(const
     {
       continue;
     }
+    if (!std::isfinite(chain.delta_phi0))
+    {
+      continue;
+    }
     if (!best ||
-        chain.score < best->score ||
-        (chain.score == best->score && chain.hits.size() > best->hits.size()))
+        chain.delta_phi0 < best->delta_phi0 ||
+        (std::fabs(chain.delta_phi0 - best->delta_phi0) < 1.0e-4 &&
+         chain.hits.size() > best->hits.size()))
     {
       best = &chain;
     }
@@ -766,8 +1360,9 @@ const Full_PolyTrackMatcher::Chain* Full_PolyTrackMatcher::selectBestChain(const
 }
 
 Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
+    const Tpc_PolyTrack& track,
     const Chain& mvtx_chain,
-    const std::vector<SpacePoint>& silicon_points) const
+    const std::vector<SpacePoint>& silicon_points)
 {
   Chain out = mvtx_chain;
   if (out.hits.empty() || !out.state.valid)
@@ -775,34 +1370,14 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
     return out;
   }
 
-  const TrajectoryState tpc_state = out.state;
-  const ChainHit* outer_mvtx_hit = nullptr;
-  for (const ChainHit& hit : out.hits)
-  {
-    if (static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(hit.point.key)) == TrkrDefs::mvtxId &&
-        (!outer_mvtx_hit || hit.point.r > outer_mvtx_hit->point.r))
-    {
-      outer_mvtx_hit = &hit;
-    }
-  }
-
   out.has_previous_residual = false;
   out.previous_dphi = 0.0;
   out.previous_dtheta = 0.0;
 
-
   for (const unsigned int layer : m_inttMatchLayers)
   {
     const SpacePoint* best_point = nullptr;
-    double best_pred_phi = 0.0;
-    double best_pred_z = 0.0;
-    double best_pred_theta = 0.0;
-    double best_pred_x = 0.0;
-    double best_pred_y = 0.0;
-    double best_dphi = 0.0;
-    double best_dtheta = 0.0;
-    double best_rdphi = 0.0;
-    double best_dz = 0.0;
+    ChainHit best_hit;
     double best_chi2 = std::numeric_limits<double>::max();
 
     for (const SpacePoint& point : silicon_points)
@@ -821,76 +1396,70 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
         continue;
       }
 
-      const double dz = point.z - pred_z;
-      const double z_offset = out.has_z_offset ? out.z_offset : dz;
-      const double z_residual = dz - z_offset;
-      const double shifted_pred_z = pred_z + z_offset;
-      const double pred_theta = std::atan2(point.r, shifted_pred_z);
       const double dphi = wrapPhi(point.phi - pred_phi);
-      const double dtheta = pointTheta(point) - pred_theta;
-      const double mean_phi = dynamicMeanPhi(layer, out.previous_dphi, out.has_previous_residual);
-      const double sigma_phi = dynamicSigmaPhi(out.pt);
-      const double mean_theta = dynamicMeanTheta(layer, out.previous_dtheta, out.has_previous_residual);
-      const double sigma_theta = dynamicSigmaTheta(out.pt, pred_theta);
-      if (outer_mvtx_hit)
-      {
-        double tpc_pred_phi = 0.0;
-        double tpc_pred_z = 0.0;
-        double tpc_pred_x = 0.0;
-        double tpc_pred_y = 0.0;
-        if (predictAtRadius(tpc_state, point.r, tpc_pred_phi, tpc_pred_z, tpc_pred_x, tpc_pred_y))
-        {
-          const double mvtx_phi = outer_mvtx_hit->point.phi;
-          const double mvtx_theta = pointTheta(outer_mvtx_hit->point);
-          const double tpc_pred_theta = std::atan2(point.r, tpc_pred_z + z_offset);
-          const double dphi_to_tpc = wrapPhi(tpc_pred_phi - mvtx_phi);
-          const double dphi_to_point = wrapPhi(point.phi - mvtx_phi);
-          const double dtheta_to_tpc = tpc_pred_theta - mvtx_theta;
-          const double dtheta_to_point = pointTheta(point) - mvtx_theta;
-          const double phi_tolerance = m_phiWindowSigma * sigma_phi;
-          const double theta_tolerance = m_thetaWindowSigma * sigma_theta;
-          if ((std::fabs(dphi_to_tpc) > phi_tolerance && dphi_to_tpc * dphi_to_point < 0.0) ||
-              (std::fabs(dtheta_to_tpc) > theta_tolerance && dtheta_to_tpc * dtheta_to_point < 0.0) ||
-              std::fabs(dphi_to_point) > std::fabs(dphi_to_tpc) + phi_tolerance ||
-              std::fabs(dtheta_to_point) > std::fabs(dtheta_to_tpc) + theta_tolerance)
-          {
-            continue;
-          }
-        }
-      }
-      const double sdphi = (dphi - mean_phi) / sigma_phi;
-      const double sdtheta = (dtheta - mean_theta) / sigma_theta;
-      if (std::fabs(sdphi) > m_phiWindowSigma || std::fabs(sdtheta) > m_thetaWindowSigma)
-      {
-        continue;
-      }
-      if (out.has_z_offset && std::fabs(z_residual) > dynamicDzWindow(out.pt))
+      const double rdphi = point.r * dphi;
+      const double dz = point.z - pred_z;
+      if (std::fabs(rdphi) > m_looseRdphiWindow || std::fabs(dz) > m_inttDzWindow)
       {
         continue;
       }
 
-      const double rdphi = point.r * dphi;
-      const double chi2 = square(rdphi / std::max(m_sigmaRdphi, 1.0e-9)) + square(z_residual / std::max(m_sigmaDz, 1.0e-9));
+      const double pred_theta = std::atan2(point.r, pred_z);
+      const double dtheta = pointTheta(point) - pred_theta;
+      const double mean_phi = dynamicMeanPhi(layer, out.previous_dphi, out.has_previous_residual);
+      const double mean_theta = dynamicMeanTheta(layer, out.previous_dtheta, out.has_previous_residual);
+      const double sigma_phi = dynamicSigmaPhi(out.pt);
+      const double sigma_theta = dynamicSigmaTheta(out.pt, pred_theta);
+      const double sdphi = (dphi - mean_phi) / sigma_phi;
+      const double sdtheta = (dtheta - mean_theta) / sigma_theta;
+      if (!m_associationCalibrationMode &&
+          (std::fabs(sdphi) > m_phiWindowSigma || std::fabs(sdtheta) > m_thetaWindowSigma))
+      {
+        continue;
+      }
+
+      const double chi2 = square(sdphi) + square(sdtheta);
       if (chi2 < best_chi2)
       {
-        best_point = &point;
-        best_pred_phi = pred_phi;
-        best_pred_z = pred_z;
-        best_pred_theta = pred_theta;
-        best_pred_x = pred_x;
-        best_pred_y = pred_y;
-        best_dphi = dphi;
-        best_dtheta = dtheta;
-        best_rdphi = rdphi;
-        best_dz = dz;
         best_chi2 = chi2;
+        best_point = &point;
+        best_hit.point = point;
+        best_hit.pred_phi = pred_phi;
+        best_hit.pred_z = pred_z;
+        best_hit.pred_theta = pred_theta;
+        best_hit.pred_x = pred_x;
+        best_hit.pred_y = pred_y;
+        best_hit.dphi = dphi;
+        best_hit.dtheta = dtheta;
+        best_hit.rdphi = rdphi;
+        best_hit.dz = dz;
+
+        double tpc_pred_phi = 0.0;
+        double tpc_pred_z = 0.0;
+        double tpc_pred_x = 0.0;
+        double tpc_pred_y = 0.0;
+        if (predictAtRadius(out.tpc_reference, point.r, tpc_pred_phi, tpc_pred_z, tpc_pred_x, tpc_pred_y))
+        {
+          best_hit.tpc_pred_phi = tpc_pred_phi;
+          best_hit.tpc_pred_z = tpc_pred_z;
+          best_hit.tpc_pred_theta = std::atan2(point.r, tpc_pred_z);
+          best_hit.tpc_dphi = wrapPhi(point.phi - tpc_pred_phi);
+          best_hit.tpc_dtheta = pointTheta(point) - best_hit.tpc_pred_theta;
+        }
+        best_hit.dynamic_mean_phi = mean_phi;
+        best_hit.dynamic_mean_theta = mean_theta;
+        best_hit.sigma_phi = sigma_phi;
+        best_hit.sigma_theta = sigma_theta;
+        best_hit.sdphi = sdphi;
+        best_hit.sdtheta = sdtheta;
+        best_hit.chi2 = chi2;
       }
     }
 
     if (best_point)
     {
-      out = extendWithHit(out, *best_point, best_pred_phi, best_pred_z, best_pred_theta,
-                          best_pred_x, best_pred_y, best_dphi, best_dtheta, best_rdphi, best_dz, best_chi2);
+      fillQaResiduals(track, out, best_hit);
+      out = extendWithHit(out, best_hit);
     }
     else
     {
@@ -1012,7 +1581,9 @@ int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
     Chain output_chain = *selected_chain;
     if (best)
     {
-      output_chain = attachClosestInttClusters(*best, silicon_points);
+      output_chain = attachClosestInttClusters(*tpc_track, *best, silicon_points);
+      fillQaCrossing(*tpc_track, output_chain);
+      refitSiliconTrajectoryFromMvtx(output_chain);
     }
     fillTrack(*tpc_track, output_chain);
   }
@@ -1034,12 +1605,102 @@ int Full_PolyTrackMatcher::End(PHCompositeNode*)
   if (m_qaFile)
   {
     m_qaFile->cd();
-    for (auto& item : m_hDphiCurrentVsPreviousVsPt)
+    for (auto& item : m_hResidualCurrentVsPreviousVsPt)
     {
       if (item.second)
       {
         item.second->Write();
       }
+    }
+    for (auto& item : m_hResidualSiVsTpc)
+    {
+      if (item.second)
+      {
+        item.second->Write();
+      }
+    }
+    for (auto& item : m_hStandardResidual)
+    {
+      if (item.second)
+      {
+        item.second->Write();
+      }
+    }
+    if (m_hInttCrossingVsTpcCrossing)
+    {
+      m_hInttCrossingVsTpcCrossing->Write();
+    }
+    if (m_hDeltaCrossing)
+    {
+      m_hDeltaCrossing->Write();
+    }
+    if (m_hCrossingStatus)
+    {
+      m_hCrossingStatus->Write();
+    }
+
+    std::cout << Name() << "::End - association calibration summary" << std::endl;
+    for (unsigned int layer = 0; layer < m_dynamicPhiMeanOffset.size(); ++layer)
+    {
+      double n_phi = 0.0;
+      double n_phi_2 = 0.0;
+      double n_phi_25 = 0.0;
+      double n_phi_3 = 0.0;
+      double n_theta = 0.0;
+      double n_theta_2 = 0.0;
+      double n_theta_25 = 0.0;
+      double n_theta_3 = 0.0;
+
+      for (const auto& item : m_hStandardResidual)
+      {
+        if (!item.second)
+        {
+          continue;
+        }
+        const std::string layer_token = "_l" + std::to_string(layer) + "_";
+        if (item.first.find(layer_token) == std::string::npos)
+        {
+          continue;
+        }
+        TH1F* hist = item.second;
+        for (int bin = 1; bin <= hist->GetNbinsX(); ++bin)
+        {
+          const double entries = hist->GetBinContent(bin);
+          const double center = hist->GetBinCenter(bin);
+          if (item.first.find("h_si_sdphi") == 0)
+          {
+            n_phi += entries;
+            if (std::fabs(center) < 2.0) { n_phi_2 += entries; }
+            if (std::fabs(center) < 2.5) { n_phi_25 += entries; }
+            if (std::fabs(center) < 3.0) { n_phi_3 += entries; }
+          }
+          else if (item.first.find("h_si_sdtheta") == 0)
+          {
+            n_theta += entries;
+            if (std::fabs(center) < 2.0) { n_theta_2 += entries; }
+            if (std::fabs(center) < 2.5) { n_theta_25 += entries; }
+            if (std::fabs(center) < 3.0) { n_theta_3 += entries; }
+          }
+        }
+      }
+
+      const double eff2 = n_phi > 0.0 ? n_phi_2 / n_phi : 0.0;
+      const double eff25 = n_phi > 0.0 ? n_phi_25 / n_phi : 0.0;
+      const double eff3 = n_phi > 0.0 ? n_phi_3 / n_phi : 0.0;
+      const double theta_eff2 = n_theta > 0.0 ? n_theta_2 / n_theta : 0.0;
+      const double theta_eff25 = n_theta > 0.0 ? n_theta_25 / n_theta : 0.0;
+      const double theta_eff3 = n_theta > 0.0 ? n_theta_3 / n_theta : 0.0;
+
+      std::cout << "Layer " << layer << ":\n"
+                << "  phi mean offset " << m_dynamicPhiMeanOffset[layer] << "\n"
+                << "  phi previous-layer slope " << m_dynamicPhiMeanSlope[layer] << "\n"
+                << "  phi sigma " << m_sigmaPhi << "\n"
+                << "  theta mean offset " << m_dynamicThetaMeanOffset[layer] << "\n"
+                << "  theta previous-layer slope " << m_dynamicThetaMeanSlope[layer] << "\n"
+                << "  theta sigma " << m_sigmaTheta << "\n"
+                << "  efficiency within 2 sigma " << eff2 << " phi, " << theta_eff2 << " theta\n"
+                << "  efficiency within 2.5 sigma " << eff25 << " phi, " << theta_eff25 << " theta\n"
+                << "  efficiency within 3 sigma " << eff3 << " phi, " << theta_eff3 << " theta" << std::endl;
     }
     m_qaFile->Close();
     delete m_qaFile;
