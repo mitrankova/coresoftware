@@ -352,6 +352,93 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcReferenceTr
   return fitted;
 }
 
+Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTrajectory(
+    const TrajectoryState& tpc_state,
+    const Tpc_PolyTrack& track,
+    const SpacePoint& first_mvtx) const
+{
+  TrajectoryState state;
+  const double q_over_r = std::fabs(tpc_state.seed_q_over_r) > 1.0e-12 ?
+                            tpc_state.seed_q_over_r : track.get_seed_q_over_r();
+  const double beam_z = first_mvtx.z;
+  const double beam_x = SiliconBeamXIntercept + SiliconBeamXSlope * beam_z;
+  const double beam_y = SiliconBeamYIntercept + SiliconBeamYSlope * beam_z;
+  const double dx = first_mvtx.x - beam_x;
+  const double dy = first_mvtx.y - beam_y;
+  const double chord = std::hypot(dx, dy);
+  if (!std::isfinite(chord) || chord <= 1.0e-9 || !std::isfinite(q_over_r))
+  {
+    return state;
+  }
+
+  state.seed_x0 = beam_x;
+  state.seed_y0 = beam_y;
+  state.seed_q_over_r = q_over_r;
+  state.seed_slope = track.get_seed_slope();
+  state.use_tpc_seed = true;
+  state.use_silicon_seed = true;
+
+  if (std::fabs(q_over_r) <= 1.0e-12)
+  {
+    state.seed_phi0 = std::atan2(dy, dx);
+    const double arc = chord;
+    state.seed_z0 = first_mvtx.z - state.seed_slope * arc;
+    state.valid = std::isfinite(state.seed_phi0) && std::isfinite(state.seed_z0) &&
+                  std::isfinite(state.seed_slope);
+    return state;
+  }
+
+  const double radius = 1.0 / std::fabs(q_over_r);
+  if (!std::isfinite(radius) || chord > 2.0 * radius)
+  {
+    return state;
+  }
+
+  const double mx = 0.5 * (beam_x + first_mvtx.x);
+  const double my = 0.5 * (beam_y + first_mvtx.y);
+  const double ux = dx / chord;
+  const double uy = dy / chord;
+  const double h = std::sqrt(std::max(radius * radius - 0.25 * chord * chord, 0.0));
+  const double fit_sign = q_over_r > 0.0 ? -1.0 : 1.0;
+
+  double best_residual = std::numeric_limits<double>::max();
+  TrajectoryState best_state;
+  for (const double side : {-1.0, 1.0})
+  {
+    TrajectoryState candidate = state;
+    candidate.seed_cx = mx + side * h * (-uy);
+    candidate.seed_cy = my + side * h * ux;
+    const double start_angle = std::atan2(beam_y - candidate.seed_cy, beam_x - candidate.seed_cx);
+    const double hit_angle = std::atan2(first_mvtx.y - candidate.seed_cy, first_mvtx.x - candidate.seed_cx);
+    double dangle = unwrapPhiNear(hit_angle, start_angle) - start_angle;
+    if (fit_sign * dangle < 0.0)
+    {
+      dangle += fit_sign * 2.0 * M_PI;
+    }
+    const double arc = std::fabs(radius * dangle);
+    candidate.seed_phi0 = start_angle + fit_sign * 0.5 * M_PI;
+    candidate.seed_z0 = first_mvtx.z - candidate.seed_slope * arc;
+    candidate.valid = std::isfinite(candidate.seed_cx) && std::isfinite(candidate.seed_cy) &&
+                      std::isfinite(candidate.seed_phi0) && std::isfinite(candidate.seed_z0);
+
+    double pred_phi = 0.0;
+    double pred_z = 0.0;
+    double pred_x = 0.0;
+    double pred_y = 0.0;
+    if (candidate.valid && predictAtRadius(candidate, first_mvtx.r, pred_phi, pred_z, pred_x, pred_y))
+    {
+      const double residual = square(first_mvtx.r * wrapPhi(first_mvtx.phi - pred_phi)) + square(first_mvtx.z - pred_z);
+      if (residual < best_residual)
+      {
+        best_residual = residual;
+        best_state = candidate;
+      }
+    }
+  }
+
+  return best_state;
+}
+
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcSeedTrajectory(const Tpc_PolyTrack& track) const
 {
   TrajectoryState state;
@@ -380,110 +467,6 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcSeedTraject
 }
 
 
-Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTrajectory(
-    const TrajectoryState& tpc_state,
-    const Tpc_PolyTrack& track,
-    const SpacePoint& first_mvtx) const
-{
-  TrajectoryState state;
-  const double q_over_r = std::fabs(tpc_state.seed_q_over_r) > 1.0e-12 ?
-                            tpc_state.seed_q_over_r : track.get_seed_q_over_r();
-
-  double tpc_pred_phi = 0.0;
-  double tpc_pred_z = 0.0;
-  double tpc_pred_x = 0.0;
-  double tpc_pred_y = 0.0;
-  if (!predictAtRadius(tpc_state, first_mvtx.r, tpc_pred_phi, tpc_pred_z, tpc_pred_x, tpc_pred_y))
-  {
-    return state;
-  }
-
-  SpacePoint projected_mvtx = first_mvtx;
-  projected_mvtx.x = tpc_pred_x;
-  projected_mvtx.y = tpc_pred_y;
-  projected_mvtx.z = tpc_pred_z;
-  projected_mvtx.r = std::hypot(projected_mvtx.x, projected_mvtx.y);
-  projected_mvtx.phi = std::atan2(projected_mvtx.y, projected_mvtx.x);
-
-  const double beam_z = projected_mvtx.z;
-  const double beam_x = SiliconBeamXIntercept + SiliconBeamXSlope * beam_z;
-  const double beam_y = SiliconBeamYIntercept + SiliconBeamYSlope * beam_z;
-  const double dx = projected_mvtx.x - beam_x;
-  const double dy = projected_mvtx.y - beam_y;
-  const double chord = std::hypot(dx, dy);
-  if (!std::isfinite(chord) || chord <= 1.0e-9 || !std::isfinite(q_over_r) ||
-      !std::isfinite(projected_mvtx.r) || projected_mvtx.r <= 0.0)
-  {
-    return state;
-  }
-
-  state.seed_x0 = beam_x;
-  state.seed_y0 = beam_y;
-  state.seed_q_over_r = q_over_r;
-  state.seed_slope = track.get_seed_slope();
-  state.use_tpc_seed = true;
-  state.use_silicon_seed = true;
-
-  if (std::fabs(q_over_r) <= 1.0e-12)
-  {
-    state.seed_phi0 = std::atan2(dy, dx);
-    const double arc = chord;
-    state.seed_z0 = projected_mvtx.z - state.seed_slope * arc;
-    state.valid = std::isfinite(state.seed_phi0) && std::isfinite(state.seed_z0) &&
-                  std::isfinite(state.seed_slope);
-    return state;
-  }
-
-  const double radius = 1.0 / std::fabs(q_over_r);
-  if (!std::isfinite(radius) || chord > 2.0 * radius)
-  {
-    return state;
-  }
-
-  const double mx = 0.5 * (beam_x + projected_mvtx.x);
-  const double my = 0.5 * (beam_y + projected_mvtx.y);
-  const double ux = dx / chord;
-  const double uy = dy / chord;
-  const double h = std::sqrt(std::max(radius * radius - 0.25 * chord * chord, 0.0));
-  const double fit_sign = q_over_r > 0.0 ? -1.0 : 1.0;
-
-  double best_residual = std::numeric_limits<double>::max();
-  TrajectoryState best_state;
-  for (const double side : {-1.0, 1.0})
-  {
-    TrajectoryState candidate = state;
-    candidate.seed_cx = mx + side * h * (-uy);
-    candidate.seed_cy = my + side * h * ux;
-    const double start_angle = std::atan2(beam_y - candidate.seed_cy, beam_x - candidate.seed_cx);
-    const double hit_angle = std::atan2(projected_mvtx.y - candidate.seed_cy, projected_mvtx.x - candidate.seed_cx);
-    double dangle = unwrapPhiNear(hit_angle, start_angle) - start_angle;
-    if (fit_sign * dangle < 0.0)
-    {
-      dangle += fit_sign * 2.0 * M_PI;
-    }
-    const double arc = std::fabs(radius * dangle);
-    candidate.seed_phi0 = start_angle + fit_sign * 0.5 * M_PI;
-    candidate.seed_z0 = projected_mvtx.z - candidate.seed_slope * arc;
-    candidate.valid = std::isfinite(candidate.seed_cx) && std::isfinite(candidate.seed_cy) &&
-                      std::isfinite(candidate.seed_phi0) && std::isfinite(candidate.seed_z0);
-
-    double pred_phi = 0.0;
-    double pred_z = 0.0;
-    double pred_x = 0.0;
-    double pred_y = 0.0;
-    if (candidate.valid && predictAtRadius(candidate, projected_mvtx.r, pred_phi, pred_z, pred_x, pred_y))
-    {
-      const double residual = square(projected_mvtx.r * wrapPhi(projected_mvtx.phi - pred_phi)) + square(projected_mvtx.z - pred_z);
-      if (residual < best_residual)
-      {
-        best_residual = residual;
-        best_state = candidate;
-      }
-    }
-  }
-
-  return best_state;
-}
 
 void Full_PolyTrackMatcher::updateSiliconTrajectoryHalfResidual(TrajectoryState& state, const ChainHit& hit) const
 {
@@ -547,6 +530,33 @@ void Full_PolyTrackMatcher::refitSiliconTrajectoryFromMvtx(Chain& chain) const
   correction.dphi = sum_dphi / static_cast<double>(count);
   correction.dz = sum_dz / static_cast<double>(count);
   updateSiliconTrajectoryHalfResidual(chain.state, correction);
+}
+
+void Full_PolyTrackMatcher::refitSiliconTrajectoryFromHits(Chain& chain) const
+{
+  if (chain.hits.size() < 2U)
+  {
+    return;
+  }
+
+  std::vector<SpacePoint> fit_points;
+  fit_points.reserve(chain.hits.size());
+  for (const ChainHit& hit : chain.hits)
+  {
+    fit_points.push_back(hit.point);
+  }
+
+  TrajectoryState refit = fitTrajectory(fit_points);
+  if (!refit.valid)
+  {
+    return;
+  }
+
+  refit.use_tpc_seed = false;
+  refit.use_silicon_seed = true;
+  refit.seed_z0 = chain.si_reference.seed_z0;
+  chain.state = refit;
+  chain.fit_points = fit_points;
 }
 
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::fitTrajectory(const std::vector<SpacePoint>& points) const
@@ -646,7 +656,7 @@ double Full_PolyTrackMatcher::trajectoryPhi0NearBeam(const TrajectoryState& stat
   {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  if (state.use_silicon_seed)
+  if (state.use_silicon_seed && state.use_tpc_seed)
   {
     return state.seed_phi0;
   }
@@ -1127,7 +1137,7 @@ const Full_PolyTrackMatcher::SpacePoint* Full_PolyTrackMatcher::findBestMvtxCand
     double pred_z = 0.0;
     double pred_x = 0.0;
     double pred_y = 0.0;
-    if (!predictAtRadius(chain.state, point.r, pred_phi, pred_z, pred_x, pred_y))
+    if (!predictAtRadius(chain.si_reference, point.r, pred_phi, pred_z, pred_x, pred_y))
     {
       continue;
     }
@@ -1147,6 +1157,18 @@ const Full_PolyTrackMatcher::SpacePoint* Full_PolyTrackMatcher::findBestMvtxCand
     if (!predictAtRadius(chain.tpc_reference, point.r, tpc_pred_phi, tpc_pred_z, tpc_pred_x, tpc_pred_y))
     {
       continue;
+    }
+
+    double si_ref_pred_phi = 0.0;
+    double si_ref_pred_z = 0.0;
+    double si_ref_pred_x = 0.0;
+    double si_ref_pred_y = 0.0;
+    double si_ref_dphi = 0.0;
+    double si_ref_dtheta = 0.0;
+    if (predictAtRadius(chain.si_reference, point.r, si_ref_pred_phi, si_ref_pred_z, si_ref_pred_x, si_ref_pred_y))
+    {
+      si_ref_dphi = wrapPhi(point.phi - si_ref_pred_phi);
+      si_ref_dtheta = pointTheta(point) - std::atan2(point.r, si_ref_pred_z);
     }
 
     const double pred_theta = std::atan2(point.r, pred_z);
@@ -1187,6 +1209,10 @@ const Full_PolyTrackMatcher::SpacePoint* Full_PolyTrackMatcher::findBestMvtxCand
       best_hit.tpc_pred_theta = tpc_pred_theta;
       best_hit.tpc_dphi = tpc_dphi;
       best_hit.tpc_dtheta = tpc_dtheta;
+      best_hit.si_ref_pred_phi = si_ref_pred_phi;
+      best_hit.si_ref_pred_z = si_ref_pred_z;
+      best_hit.si_ref_dphi = si_ref_dphi;
+      best_hit.si_ref_dtheta = si_ref_dtheta;
       best_hit.dynamic_mean_phi = mean_phi;
       best_hit.dynamic_mean_theta = mean_theta;
       best_hit.sigma_phi = sigma_phi;
@@ -1254,6 +1280,7 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
       {
         continue;
       }
+      chain.si_reference = chain.state;
 
       ChainHit seed_hit;
       double seed_chi2 = 0.0;
@@ -1266,7 +1293,7 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
         double pred_z = 0.0;
         double pred_x = 0.0;
         double pred_y = 0.0;
-        if (!predictAtRadius(chain.state, seed_point.r, pred_phi, pred_z, pred_x, pred_y))
+        if (!predictAtRadius(chain.si_reference, seed_point.r, pred_phi, pred_z, pred_x, pred_y))
         {
           continue;
         }
@@ -1285,6 +1312,17 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
         seed_hit.tpc_pred_theta = tpc_seed_theta;
         seed_hit.tpc_dphi = initial_dphi;
         seed_hit.tpc_dtheta = seed_theta - tpc_seed_theta;
+        double si_ref_pred_phi = 0.0;
+        double si_ref_pred_z = 0.0;
+        double si_ref_pred_x = 0.0;
+        double si_ref_pred_y = 0.0;
+        if (predictAtRadius(chain.si_reference, seed_point.r, si_ref_pred_phi, si_ref_pred_z, si_ref_pred_x, si_ref_pred_y))
+        {
+          seed_hit.si_ref_pred_phi = si_ref_pred_phi;
+          seed_hit.si_ref_pred_z = si_ref_pred_z;
+          seed_hit.si_ref_dphi = wrapPhi(seed_point.phi - si_ref_pred_phi);
+          seed_hit.si_ref_dtheta = pointTheta(seed_point) - std::atan2(seed_point.r, si_ref_pred_z);
+        }
         seed_hit.dynamic_mean_phi = dynamicMeanPhi(seed_layer, chain.previous_dphi, chain.has_previous_residual);
         seed_hit.dynamic_mean_theta = dynamicMeanTheta(seed_layer, chain.previous_dtheta, chain.has_previous_residual);
         seed_hit.sigma_phi = dynamicSigmaPhi(chain.pt);
@@ -1370,10 +1408,6 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
     return out;
   }
 
-  out.has_previous_residual = false;
-  out.previous_dphi = 0.0;
-  out.previous_dtheta = 0.0;
-
   for (const unsigned int layer : m_inttMatchLayers)
   {
     const SpacePoint* best_point = nullptr;
@@ -1391,7 +1425,7 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
       double pred_z = 0.0;
       double pred_x = 0.0;
       double pred_y = 0.0;
-      if (!predictAtRadius(out.state, point.r, pred_phi, pred_z, pred_x, pred_y))
+      if (!predictAtRadius(out.si_reference, point.r, pred_phi, pred_z, pred_x, pred_y))
       {
         continue;
       }
@@ -1445,6 +1479,18 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
           best_hit.tpc_pred_theta = std::atan2(point.r, tpc_pred_z);
           best_hit.tpc_dphi = wrapPhi(point.phi - tpc_pred_phi);
           best_hit.tpc_dtheta = pointTheta(point) - best_hit.tpc_pred_theta;
+        }
+
+        double si_ref_pred_phi = 0.0;
+        double si_ref_pred_z = 0.0;
+        double si_ref_pred_x = 0.0;
+        double si_ref_pred_y = 0.0;
+        if (predictAtRadius(out.si_reference, point.r, si_ref_pred_phi, si_ref_pred_z, si_ref_pred_x, si_ref_pred_y))
+        {
+          best_hit.si_ref_pred_phi = si_ref_pred_phi;
+          best_hit.si_ref_pred_z = si_ref_pred_z;
+          best_hit.si_ref_dphi = wrapPhi(point.phi - si_ref_pred_phi);
+          best_hit.si_ref_dtheta = pointTheta(point) - std::atan2(point.r, si_ref_pred_z);
         }
         best_hit.dynamic_mean_phi = mean_phi;
         best_hit.dynamic_mean_theta = mean_theta;
@@ -1583,7 +1629,7 @@ int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
     {
       output_chain = attachClosestInttClusters(*tpc_track, *best, silicon_points);
       fillQaCrossing(*tpc_track, output_chain);
-      refitSiliconTrajectoryFromMvtx(output_chain);
+      refitSiliconTrajectoryFromHits(output_chain);
     }
     fillTrack(*tpc_track, output_chain);
   }

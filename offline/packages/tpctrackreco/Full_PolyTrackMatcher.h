@@ -164,6 +164,10 @@ class Full_PolyTrackMatcher : public SubsysReco
     double tpc_pred_theta{0.0};
     double tpc_dphi{0.0};
     double tpc_dtheta{0.0};
+    double si_ref_pred_phi{0.0};
+    double si_ref_pred_z{0.0};
+    double si_ref_dphi{0.0};
+    double si_ref_dtheta{0.0};
     double dynamic_mean_phi{0.0};
     double dynamic_mean_theta{0.0};
     double sigma_phi{0.0};
@@ -178,6 +182,7 @@ class Full_PolyTrackMatcher : public SubsysReco
     std::vector<SpacePoint> fit_points;
     std::vector<ChainHit> hits;
     TrajectoryState tpc_reference;
+    TrajectoryState si_reference;
     TrajectoryState state;
     double chi2{0.0};
     double ndf{0.0};
@@ -212,6 +217,7 @@ class Full_PolyTrackMatcher : public SubsysReco
                                             const SpacePoint& first_mvtx) const;
   void updateSiliconTrajectoryHalfResidual(TrajectoryState& state, const ChainHit& hit) const;
   void refitSiliconTrajectoryFromMvtx(Chain& chain) const;
+  void refitSiliconTrajectoryFromHits(Chain& chain) const;
   const SpacePoint* findBestMvtxCandidate(const Chain& chain,
                                           const std::vector<SpacePoint>& silicon_points,
                                           const std::set<TrkrDefs::cluskey>& used_keys,
