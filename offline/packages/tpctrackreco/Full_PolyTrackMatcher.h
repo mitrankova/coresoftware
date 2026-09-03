@@ -188,6 +188,10 @@ class Full_PolyTrackMatcher : public SubsysReco
     double ndf{0.0};
     double score{0.0};
     double delta_phi0{std::numeric_limits<double>::max()};
+    double delta_z0{std::numeric_limits<double>::max()};
+    double delta_theta0{std::numeric_limits<double>::max()};
+    double delta_eta0{std::numeric_limits<double>::max()};
+    double dca_score{std::numeric_limits<double>::max()};
     unsigned int missing_mask{0};
     unsigned int n_missing{0};
     double previous_dphi{0.0};
@@ -241,6 +245,9 @@ class Full_PolyTrackMatcher : public SubsysReco
   double predictSagittaPhi(double r, const TrajectoryState& state) const;
   double pointTheta(const SpacePoint& point) const;
   double trajectoryPhi0NearBeam(const TrajectoryState& state) const;
+  double trajectoryZ0NearBeam(const TrajectoryState& state) const;
+  double trajectoryTheta0NearBeam(const TrajectoryState& state) const;
+  bool computeChainDcaMetrics(Chain& chain, const TrajectoryState& tpc_state) const;
   double dynamicMeanPhi(unsigned int layer, double previous_dphi, bool has_previous) const;
   double dynamicSigmaPhi(double pt) const;
   double dynamicMeanTheta(unsigned int layer, double previous_dtheta, bool has_previous) const;
@@ -307,6 +314,8 @@ class Full_PolyTrackMatcher : public SubsysReco
   TH2F* m_hInttCrossingVsTpcCrossing{nullptr};
   TH1F* m_hDeltaCrossing{nullptr};
   TH1F* m_hCrossingStatus{nullptr};
+  TH1F* m_hChainDcaScore{nullptr};
+  TH1F* m_hChainDeltaEta0{nullptr};
 };
 
 #endif

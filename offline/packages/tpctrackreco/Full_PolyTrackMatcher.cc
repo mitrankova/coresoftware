@@ -57,7 +57,7 @@ namespace
   {
     return value * value;
   }
-  constexpr double SeedPhiWindow = 0.15;
+  constexpr double SeedPhiWindow = 0.25;
 
   double seedEtaWindow(double pt)
   {
@@ -67,6 +67,20 @@ namespace
   double seedThetaWindow(double pt, double theta)
   {
     return seedEtaWindow(pt) * std::max(std::sin(theta), 1.0e-9);
+  }
+
+  double thetaToEta(double theta)
+  {
+    if (!std::isfinite(theta))
+    {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double half_tan = std::tan(0.5 * theta);
+    if (!std::isfinite(half_tan) || half_tan <= 0.0)
+    {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    return -std::log(half_tan);
   }
 }
 
@@ -689,6 +703,73 @@ double Full_PolyTrackMatcher::trajectoryPhi0NearBeam(const TrajectoryState& stat
   return state.use_tpc_seed ? state.seed_phi0 : state.phi_bline;
 }
 
+double Full_PolyTrackMatcher::trajectoryZ0NearBeam(const TrajectoryState& state) const
+{
+  if (!state.valid)
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (state.use_tpc_seed)
+  {
+    return state.seed_z0;
+  }
+  return state.z_intercept;
+}
+
+double Full_PolyTrackMatcher::trajectoryTheta0NearBeam(const TrajectoryState& state) const
+{
+  if (!state.valid)
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (state.use_tpc_seed)
+  {
+    return std::atan2(1.0, state.seed_slope);
+  }
+  return std::atan2(1.0, state.z_slope);
+}
+
+bool Full_PolyTrackMatcher::computeChainDcaMetrics(Chain& chain, const TrajectoryState& tpc_state) const
+{
+  const double tpc_phi0 = trajectoryPhi0NearBeam(tpc_state);
+  const double silicon_phi0 = trajectoryPhi0NearBeam(chain.state);
+  const double dphi0 = std::fabs(wrapPhi(silicon_phi0 - tpc_phi0));
+  const double dphi0_flip = std::fabs(wrapPhi(silicon_phi0 + M_PI - tpc_phi0));
+  chain.delta_phi0 = std::min(dphi0, dphi0_flip);
+
+  const double tpc_z0 = trajectoryZ0NearBeam(tpc_state);
+  const double silicon_z0 = trajectoryZ0NearBeam(chain.state);
+  chain.delta_z0 = std::fabs(silicon_z0 - tpc_z0);
+
+  const double tpc_theta0 = trajectoryTheta0NearBeam(tpc_state);
+  const double silicon_theta0 = trajectoryTheta0NearBeam(chain.state);
+  chain.delta_theta0 = std::fabs(silicon_theta0 - tpc_theta0);
+
+  const double tpc_eta0 = thetaToEta(tpc_theta0);
+  const double silicon_eta0 = thetaToEta(silicon_theta0);
+  chain.delta_eta0 = std::fabs(silicon_eta0 - tpc_eta0);
+
+  const double phi_scale = SeedPhiWindow;
+  const double theta_scale = seedThetaWindow(chain.pt, tpc_theta0);
+  const double z_scale = dynamicDzWindow(chain.pt);
+  const bool valid = std::isfinite(chain.delta_phi0) &&
+                     std::isfinite(chain.delta_z0) &&
+                     std::isfinite(chain.delta_theta0) &&
+                     std::isfinite(chain.delta_eta0) &&
+                     std::isfinite(phi_scale) && phi_scale > 0.0 &&
+                     std::isfinite(theta_scale) && theta_scale > 0.0 &&
+                     std::isfinite(z_scale) && z_scale > 0.0;
+  if (!valid)
+  {
+    return false;
+  }
+
+  chain.dca_score = square(chain.delta_phi0 / phi_scale) +
+                    square(chain.delta_theta0 / theta_scale) +
+                    square(chain.delta_z0 / z_scale);
+  return std::isfinite(chain.dca_score);
+}
+
 double Full_PolyTrackMatcher::dynamicMeanPhi(unsigned int layer, double previous_dphi, bool has_previous) const
 {
   if (!m_useDynamicResiduals || !has_previous || layer >= m_dynamicPhiMeanOffset.size())
@@ -715,9 +796,8 @@ double Full_PolyTrackMatcher::dynamicMeanTheta(unsigned int layer, double previo
 
 double Full_PolyTrackMatcher::dynamicSigmaTheta(double pt, double pred_theta) const
 {
-  (void) pt;
-  (void) pred_theta;
-  return std::max(m_sigmaTheta, 1.0e-9);
+  const double theta_window = seedThetaWindow(pt, pred_theta);
+  return std::max(theta_window / std::max(m_thetaWindowSigma, 1.0e-9), 1.0e-9);
 }
 
 double Full_PolyTrackMatcher::dynamicDzWindow(double pt) const
@@ -1241,7 +1321,6 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
   }
 
   std::vector<Chain> chains;
-  const double tpc_phi0 = trajectoryPhi0NearBeam(tpc_seed.state);
   for (const unsigned int seed_layer : m_matchLayers)
   {
     for (const SpacePoint& seed_point : silicon_points)
@@ -1358,10 +1437,10 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
         }
       }
 
-      const double silicon_phi0 = trajectoryPhi0NearBeam(chain.state);
-      const double dphi0 = std::fabs(wrapPhi(silicon_phi0 - tpc_phi0));
-      const double dphi0_flip = std::fabs(wrapPhi(silicon_phi0 + M_PI - tpc_phi0));
-      chain.delta_phi0 = std::min(dphi0, dphi0_flip);
+      if (!computeChainDcaMetrics(chain, tpc_seed.state))
+      {
+        continue;
+      }
       chains.push_back(chain);
       if (chains.size() >= m_maxChains)
       {
@@ -1382,14 +1461,13 @@ const Full_PolyTrackMatcher::Chain* Full_PolyTrackMatcher::selectBestChain(const
     {
       continue;
     }
-    if (!std::isfinite(chain.delta_phi0))
+    if (!std::isfinite(chain.dca_score))
     {
       continue;
     }
     if (!best ||
-        chain.delta_phi0 < best->delta_phi0 ||
-        (std::fabs(chain.delta_phi0 - best->delta_phi0) < 1.0e-4 &&
-         chain.hits.size() > best->hits.size()))
+        chain.dca_score < best->dca_score ||
+        (chain.dca_score == best->dca_score && chain.hits.size() > best->hits.size()))
     {
       best = &chain;
     }
@@ -1569,6 +1647,20 @@ void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chai
     out->set_pz(tpc_track.get_pz());
   }
 
+  if (m_writeQA && m_qaFile && chain.hits.size() > 0U &&
+      std::isfinite(chain.dca_score) && chain.dca_score < std::numeric_limits<double>::max())
+  {
+    if (!m_hChainDcaScore)
+    {
+      m_hChainDcaScore = new TH1F("h_chain_dca_score", "selected chain DCA score;DCA score;tracks", 200, 0.0, 200.0);
+      m_hChainDcaScore->SetDirectory(nullptr);
+      m_hChainDeltaEta0 = new TH1F("h_chain_delta_eta0", "selected chain #Delta#eta_{0};#Delta#eta_{0};tracks", 120, 0.0, 0.3);
+      m_hChainDeltaEta0->SetDirectory(nullptr);
+    }
+    m_hChainDcaScore->Fill(chain.dca_score);
+    m_hChainDeltaEta0->Fill(chain.delta_eta0);
+  }
+
   for (const ChainHit& hit : chain.hits)
   {
     out->add_cluster_key(hit.point.key);
@@ -1683,6 +1775,14 @@ int Full_PolyTrackMatcher::End(PHCompositeNode*)
     if (m_hCrossingStatus)
     {
       m_hCrossingStatus->Write();
+    }
+    if (m_hChainDcaScore)
+    {
+      m_hChainDcaScore->Write();
+    }
+    if (m_hChainDeltaEta0)
+    {
+      m_hChainDeltaEta0->Write();
     }
 
     std::cout << Name() << "::End - association calibration summary" << std::endl;
