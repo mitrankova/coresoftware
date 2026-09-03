@@ -58,6 +58,7 @@ namespace
     return value * value;
   }
   constexpr double SeedPhiWindow = 0.25;
+  constexpr double SeedThetaWindow = 4;
 
   double seedEtaWindow(double pt)
   {
@@ -1343,13 +1344,24 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
       const double initial_dphi = wrapPhi(seed_point.phi - tpc_pred_phi);
       const double seed_theta = pointTheta(seed_point);
       const double tpc_seed_theta = std::atan2(seed_point.r, tpc_pred_z);
-      const double phi_window = SeedPhiWindow;
-      const double theta_window = seedThetaWindow(tpc_seed.pt, tpc_seed_theta);
-      if (std::fabs(initial_dphi) > phi_window ||
+      const double phi_window = SeedPhiWindow+0.05;
+      const double theta_window = SeedThetaWindow;
+      //const double seed_eta = thetaToEta(seed_theta);
+      if (std::fabs(initial_dphi) > phi_window  ||
           std::fabs(seed_theta - tpc_seed_theta) > theta_window)
       {
         continue;
       }
+      /*const double tpc_seed_eta = thetaToEta(tpc_seed_theta);
+      const double eta_window = seedEtaWindow(tpc_seed.pt);
+
+      if (std::fabs(initial_dphi) > phi_window ||
+          !std::isfinite(seed_eta) || !std::isfinite(tpc_seed_eta) ||
+          std::fabs(seed_eta - tpc_seed_eta) > eta_window)
+      {
+        continue;
+      }*/
+     
       Chain chain;
       chain.pt = tpc_seed.pt;
       chain.charge = tpc_seed.charge;
