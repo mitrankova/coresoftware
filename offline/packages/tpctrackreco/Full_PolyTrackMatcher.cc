@@ -28,6 +28,7 @@
 #include <TH1F.h>
 #include <TH2F.h>
 #include <TH3F.h>
+#include <TProfile.h>
 #include <TAxis.h>
 
 #include <algorithm>
@@ -57,8 +58,8 @@ namespace
   {
     return value * value;
   }
-  constexpr double SeedPhiWindow = 0.25;
-  constexpr double SeedThetaWindow = 4;
+  constexpr double SeedPhiWindow = 0.15;
+  constexpr double SeedThetaPreWindow = 4;
 
   double seedEtaWindow(double pt)
   {
@@ -454,6 +455,61 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTra
   return best_state;
 }
 
+Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::correctSiliconSeedWithTwoHits(
+    const TrajectoryState& seed_state,
+    const ChainHit& outer_hit,
+    const ChainHit& inner_hit) const
+{
+  TrajectoryState state = seed_state;
+  if (!state.valid || std::fabs(state.seed_q_over_r) <= 1.0e-12)
+  {
+    return state;  // straight-line case: this correction only applies to curved seeds
+  }
+
+  const double radius = 1.0 / std::fabs(state.seed_q_over_r);   // curvature preserved, never refit
+  const double x1 = outer_hit.point.x, y1 = outer_hit.point.y;
+  const double x2 = inner_hit.point.x, y2 = inner_hit.point.y;
+  const double dx = x2 - x1, dy = y2 - y1;
+  const double chord = std::hypot(dx, dy);
+  if (!std::isfinite(chord) || chord <= 1.0e-9 || chord > 2.0 * radius)
+  {
+    return state;  // hits inconsistent with this radius -- leave seed uncorrected
+  }
+
+  const double mx = 0.5 * (x1 + x2), my = 0.5 * (y1 + y2);
+  const double ux = dx / chord, uy = dy / chord;
+  const double h = std::sqrt(std::max(radius * radius - 0.25 * chord * chord, 0.0));
+
+  double best_d2 = std::numeric_limits<double>::max();
+  double cx = 0.0, cy = 0.0;
+  for (const double side : {-1.0, 1.0})
+  {
+    const double ccx = mx + side * h * (-uy);
+    const double ccy = my + side * h * ux;
+    const double d2 = square(ccx - state.seed_cx) + square(ccy - state.seed_cy);
+    if (d2 < best_d2) { best_d2 = d2; cx = ccx; cy = ccy; }
+  }
+
+  const double ox = state.seed_x0, oy = state.seed_y0;
+  const double ocx = cx - ox, ocy = cy - oy;
+  const double L = std::hypot(ocx, ocy);
+  if (!std::isfinite(L) || L <= 1.0e-9)
+  {
+    return state;
+  }
+  const double dca = L - radius;
+  const double fit_sign = state.seed_q_over_r > 0.0 ? -1.0 : 1.0;
+
+  state.seed_x0 = ox + (ocx / L) * dca;
+  state.seed_y0 = oy + (ocy / L) * dca;
+  state.seed_cx = cx;
+  state.seed_cy = cy;
+  state.seed_phi0 = std::atan2(state.seed_y0 - cy, state.seed_x0 - cx) + fit_sign * 0.5 * M_PI;
+  state.valid = std::isfinite(state.seed_x0) && std::isfinite(state.seed_y0) &&
+                std::isfinite(state.seed_phi0);
+  return state;
+}
+
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcSeedTrajectory(const Tpc_PolyTrack& track) const
 {
   TrajectoryState state;
@@ -737,14 +793,17 @@ bool Full_PolyTrackMatcher::computeChainDcaMetrics(Chain& chain, const Trajector
   const double dphi0 = std::fabs(wrapPhi(silicon_phi0 - tpc_phi0));
   const double dphi0_flip = std::fabs(wrapPhi(silicon_phi0 + M_PI - tpc_phi0));
   chain.delta_phi0 = std::min(dphi0, dphi0_flip);
+  chain.signed_delta_phi0 = wrapPhi(silicon_phi0 - tpc_phi0);
 
   const double tpc_z0 = trajectoryZ0NearBeam(tpc_state);
   const double silicon_z0 = trajectoryZ0NearBeam(chain.state);
   chain.delta_z0 = std::fabs(silicon_z0 - tpc_z0);
+  chain.signed_delta_z0 = silicon_z0 - tpc_z0;
 
   const double tpc_theta0 = trajectoryTheta0NearBeam(tpc_state);
   const double silicon_theta0 = trajectoryTheta0NearBeam(chain.state);
   chain.delta_theta0 = std::fabs(silicon_theta0 - tpc_theta0);
+  chain.signed_delta_theta0 = silicon_theta0 - tpc_theta0;
 
   const double tpc_eta0 = thetaToEta(tpc_theta0);
   const double silicon_eta0 = thetaToEta(silicon_theta0);
@@ -1344,8 +1403,8 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
       const double initial_dphi = wrapPhi(seed_point.phi - tpc_pred_phi);
       const double seed_theta = pointTheta(seed_point);
       const double tpc_seed_theta = std::atan2(seed_point.r, tpc_pred_z);
-      const double phi_window = SeedPhiWindow+0.05;
-      const double theta_window = SeedThetaWindow;
+      const double phi_window = SeedPhiWindow+0.15;
+      const double theta_window = SeedThetaPreWindow;
       //const double seed_eta = thetaToEta(seed_theta);
       if (std::fabs(initial_dphi) > phi_window  ||
           std::fabs(seed_theta - tpc_seed_theta) > theta_window)
@@ -1442,6 +1501,18 @@ std::vector<Full_PolyTrackMatcher::Chain> Full_PolyTrackMatcher::buildChains(
           fillQaResiduals(track, chain, best_hit);
           chain = extendWithHit(chain, best_hit);
           chain_used.insert(best_hit.point.key);
+
+          if (chain.hits.size() >= 2)
+          {
+            const ChainHit& outer_hit = chain.hits[chain.hits.size() - 2];
+            const ChainHit& inner_hit = chain.hits.back();
+            TrajectoryState corrected = correctSiliconSeedWithTwoHits(chain.si_reference, outer_hit, inner_hit);
+            if (corrected.valid)
+            {
+              chain.si_reference = corrected;
+              chain.state = corrected;
+            }
+          }
         }
         else
         {
@@ -1671,6 +1742,40 @@ void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chai
     }
     m_hChainDcaScore->Fill(chain.dca_score);
     m_hChainDeltaEta0->Fill(chain.delta_eta0);
+
+    if (std::isfinite(chain.signed_delta_phi0) && std::isfinite(chain.signed_delta_z0) &&
+        std::isfinite(chain.signed_delta_theta0) && std::isfinite(chain.pt))
+    {
+      const std::string charge_label = chain.charge < 0.0 ? "neg" : "pos";
+      const auto fill_signed_profile = [&](const std::string& name_base, const std::string& title,
+                                           double value, double y_min, double y_max) {
+        const std::string key = name_base + "_" + charge_label;
+        TProfile* prof = nullptr;
+        auto found = m_hChainSignedResidualVsPt.find(key);
+        if (found != m_hChainSignedResidualVsPt.end())
+        {
+          prof = found->second;
+        }
+        else
+        {
+          const std::string hist_name = "h_" + key + "_vs_pt";
+          const std::string hist_title = title + " (q " + (chain.charge < 0.0 ? "-" : "+") +
+                                         ");p_{T} [GeV];" + title;
+          prof = new TProfile(hist_name.c_str(), hist_title.c_str(),
+                              static_cast<int>(m_qaPtBins), m_qaPtMin, m_qaPtMax, y_min, y_max);
+          prof->SetDirectory(nullptr);
+          m_hChainSignedResidualVsPt[key] = prof;
+        }
+        prof->Fill(chain.pt, value);
+      };
+
+      fill_signed_profile("chain_signed_dphi0", "signed #Delta#phi_{0} (Si-TPC) [rad]",
+                          chain.signed_delta_phi0, -0.3, 0.3);
+      fill_signed_profile("chain_signed_dz0", "signed #Deltaz_{0} (Si-TPC) [cm]",
+                          chain.signed_delta_z0, -2.0, 2.0);
+      fill_signed_profile("chain_signed_dtheta0", "signed #Delta#theta_{0} (Si-TPC) [rad]",
+                          chain.signed_delta_theta0, -0.3, 0.3);
+    }
   }
 
   for (const ChainHit& hit : chain.hits)
@@ -1770,6 +1875,13 @@ int Full_PolyTrackMatcher::End(PHCompositeNode*)
       }
     }
     for (auto& item : m_hStandardResidual)
+    {
+      if (item.second)
+      {
+        item.second->Write();
+      }
+    }
+    for (auto& item : m_hChainSignedResidualVsPt)
     {
       if (item.second)
       {

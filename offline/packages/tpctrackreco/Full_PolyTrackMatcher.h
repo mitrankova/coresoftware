@@ -20,6 +20,7 @@ class TFile;
 class TH1F;
 class TH2F;
 class TH3F;
+class TProfile;
 class TpcCrossingDecision;
 class TpcCrossingDecisionContainer;
 class Tpc_PolyTrack;
@@ -190,6 +191,9 @@ class Full_PolyTrackMatcher : public SubsysReco
     double delta_phi0{std::numeric_limits<double>::max()};
     double delta_z0{std::numeric_limits<double>::max()};
     double delta_theta0{std::numeric_limits<double>::max()};
+    double signed_delta_phi0{std::numeric_limits<double>::quiet_NaN()};
+    double signed_delta_z0{std::numeric_limits<double>::quiet_NaN()};
+    double signed_delta_theta0{std::numeric_limits<double>::quiet_NaN()};
     double delta_eta0{std::numeric_limits<double>::max()};
     double dca_score{std::numeric_limits<double>::max()};
     unsigned int missing_mask{0};
@@ -219,6 +223,9 @@ class Full_PolyTrackMatcher : public SubsysReco
   TrajectoryState makeSiliconSeedTrajectory(const TrajectoryState& tpc_state,
                                             const Tpc_PolyTrack& track,
                                             const SpacePoint& first_mvtx) const;
+  TrajectoryState correctSiliconSeedWithTwoHits(const TrajectoryState& seed_state,
+                                                const ChainHit& outer_hit,
+                                                const ChainHit& inner_hit) const;
   void updateSiliconTrajectoryHalfResidual(TrajectoryState& state, const ChainHit& hit) const;
   void refitSiliconTrajectoryFromMvtx(Chain& chain) const;
   void refitSiliconTrajectoryFromHits(Chain& chain) const;
@@ -311,6 +318,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   std::map<std::string, TH3F*> m_hResidualCurrentVsPreviousVsPt;
   std::map<std::string, TH3F*> m_hResidualSiVsTpc;
   std::map<std::string, TH1F*> m_hStandardResidual;
+  std::map<std::string, TProfile*> m_hChainSignedResidualVsPt;
   TH2F* m_hInttCrossingVsTpcCrossing{nullptr};
   TH1F* m_hDeltaCrossing{nullptr};
   TH1F* m_hCrossingStatus{nullptr};
