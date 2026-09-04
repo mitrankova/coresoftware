@@ -467,8 +467,8 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::correctSiliconSeed
   }
 
   const double radius = 1.0 / std::fabs(state.seed_q_over_r);   // curvature preserved, never refit
-  const double x1 = outer_hit.point.x, y1 = outer_hit.point.y;
-  const double x2 = inner_hit.point.x, y2 = inner_hit.point.y;
+  const double x1 = outer_hit.point.x, y1 = outer_hit.point.y, z1 = outer_hit.point.z;
+  const double x2 = inner_hit.point.x, y2 = inner_hit.point.y, z2 = inner_hit.point.z;
   const double dx = x2 - x1, dy = y2 - y1;
   const double chord = std::hypot(dx, dy);
   if (!std::isfinite(chord) || chord <= 1.0e-9 || chord > 2.0 * radius)
@@ -505,8 +505,29 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::correctSiliconSeed
   state.seed_cx = cx;
   state.seed_cy = cy;
   state.seed_phi0 = std::atan2(state.seed_y0 - cy, state.seed_x0 - cx) + fit_sign * 0.5 * M_PI;
+  // Independent Si-side z-slope (theta) and z-anchor, derived from the two real hits
+  // themselves -- NOT copied from track.get_seed_slope() (the TPC track's own slope), so
+  // that delta_theta0/delta_z0 against the TPC trajectory are a real, non-circular check.
+  const double start_angle = std::atan2(state.seed_y0 - cy, state.seed_x0 - cx);
+  auto arcTo = [&](double px, double py) -> double
+  {
+    double dangle = unwrapPhiNear(std::atan2(py - cy, px - cx), start_angle) - start_angle;
+    if (fit_sign * dangle < 0.0)
+    {
+      dangle += fit_sign * 2.0 * M_PI;
+    }
+    return std::fabs(radius * dangle);  // same arc convention as predictAtRadius()
+  };
+  const double s_outer = arcTo(x1, y1);
+  const double s_inner = arcTo(x2, y2);
+  if (std::isfinite(s_outer) && std::isfinite(s_inner) && std::fabs(s_outer - s_inner) > 1.0e-6)
+  {
+    state.seed_slope = (z1 - z2) / (s_outer - s_inner);
+    state.seed_z0 = z2 - state.seed_slope * s_inner;
+  }
   state.valid = std::isfinite(state.seed_x0) && std::isfinite(state.seed_y0) &&
-                std::isfinite(state.seed_phi0);
+                std::isfinite(state.seed_phi0) && std::isfinite(state.seed_slope) &&
+                std::isfinite(state.seed_z0);
   return state;
 }
 
@@ -1549,8 +1570,8 @@ const Full_PolyTrackMatcher::Chain* Full_PolyTrackMatcher::selectBestChain(const
       continue;
     }
     if (!best ||
-        chain.dca_score < best->dca_score ||
-        (chain.dca_score == best->dca_score && chain.hits.size() > best->hits.size()))
+        chain.hits.size() > best->hits.size() ||
+        (chain.hits.size() == best->hits.size() && chain.dca_score < best->dca_score))
     {
       best = &chain;
     }
