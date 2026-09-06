@@ -106,10 +106,14 @@ TpcCrossingFinder::~TpcCrossingFinder()
 int TpcCrossingFinder::InitRun(PHCompositeNode* topNode)
 {
   if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) { return Fun4AllReturnCodes::ABORTRUN;
-}
+  }
   if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) { return Fun4AllReturnCodes::ABORTRUN;
-}
-
+  }
+  if (m_triggeredMode)
+  {
+    m_event = 0;
+    return Fun4AllReturnCodes::EVENT_OK;
+  }
   delete m_idealPadMap;
   m_idealPadMap = new IdealPadMap();
   if (m_idealPadMap->load_from_cdb(Verbosity()) != 0 || !m_idealPadMap->is_loaded())
@@ -169,6 +173,12 @@ int TpcCrossingFinder::getNodes(PHCompositeNode* topNode)
   {
     std::cerr << Name() << "::getNodes - missing " << m_inputNodeName << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  // Triggered data: only assembled tracks are needed.
+  if (m_triggeredMode)
+  {
+    return Fun4AllReturnCodes::EVENT_OK;
   }
 
   m_hits = findNode::getClass<TrkrHitSetContainer>(topNode, "TRKR_HITSET");
@@ -1007,8 +1017,37 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
   if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) { return Fun4AllReturnCodes::ABORTEVENT;
 }
   if (!m_assembledTracks || !m_decisions) { return Fun4AllReturnCodes::EVENT_OK;
-}
+  }
   m_decisions->Reset();
+
+  if (m_triggeredMode)
+  {
+    const unsigned int nassembled = m_assembledTracks->size();
+
+    for (unsigned int iassembled = 0; iassembled < nassembled; ++iassembled)
+    {
+      const Tpc_AssembledTrack* assembled =
+          m_assembledTracks->get_track(iassembled);
+
+      if (!assembled)
+      {
+        continue;
+      }
+
+      TpcCrossingDecisionv1* decision = new TpcCrossingDecisionv1();
+      decision->set_assembled_track_id(assembled->get_track_id());
+      decision->set_selected_crossing(m_triggeredCrossing);
+      decision->set_selected_tier(0U);
+      decision->set_number_of_available_crossings(1U);
+      decision->set_number_of_tpc_valid_crossings(1U);
+      decision->set_status(TpcCrossingStatus::SelectedByContainment);
+
+      m_decisions->add_decision(decision);
+    }
+
+    ++m_event;
+    return Fun4AllReturnCodes::EVENT_OK;
+  }
 
   std::set<short> available_crossings = get_available_crossings();
   const std::set<short> intt_crossings = get_intt_crossings();
@@ -1044,20 +1083,6 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
   }
 
   const unsigned int nassembled = m_assembledTracks->size();
-  const auto status_has_assigned_crossing = [](const unsigned char status)
-  {
-    switch (static_cast<TpcCrossingStatus>(status))
-    {
-    case TpcCrossingStatus::SelectedByContainment:
-    case TpcCrossingStatus::SelectedByVertex:
-    case TpcCrossingStatus::SelectedByVertexAmbiguous:
-    case TpcCrossingStatus::SelectedByVertexLoose:
-    case TpcCrossingStatus::SelectedByContainmentAmbiguous:
-      return true;
-    default:
-      return false;
-    }
-  };
   for (unsigned int iassembled = 0; iassembled < nassembled; ++iassembled)
   {
     const Tpc_AssembledTrack* assembled = m_assembledTracks->get_track(iassembled);
@@ -1066,32 +1091,11 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
 
     TpcCrossingDecisionv1* decision = new TpcCrossingDecisionv1();
     std::vector<TpcCrossingCandidate> candidate_qa_records;
-    auto add_decision_with_candidates = [&candidate_qa_records, decision, status_has_assigned_crossing, iassembled, assembled, this]()
+    auto add_decision_with_candidates = [&candidate_qa_records, decision, this]()
     {
       for (const TpcCrossingCandidate& candidate : candidate_qa_records) { decision->add_candidate(candidate);
 }
       m_decisions->add_decision(decision);
-      if (Verbosity() > 0)
-      {
-        std::cout << Name() << "::process_event - event " << m_event
-                  << " assembled_track_index=" << iassembled
-                  << " assembled_track_id=" << assembled->get_track_id();
-        if (status_has_assigned_crossing(decision->get_status()))
-        {
-          std::cout << " assigned_crossing=" << decision->get_selected_crossing();
-        }
-        else
-        {
-          std::cout << " assigned_crossing=none";
-        }
-        std::cout << " status=" << static_cast<int>(decision->get_status())
-                  << " available=" << decision->get_number_of_available_crossings()
-                  << " allowed=" << decision->get_number_of_allowed_crossings()
-                  << " tested=" << decision->get_number_of_tested_crossings()
-                  << " tpc_valid=" << decision->get_number_of_tpc_valid_crossings()
-                  << " vertex_compatible=" << decision->get_number_of_vertex_compatible_crossings()
-                  << std::endl;
-      }
     };
     decision->set_assembled_track_id(assembled->get_track_id());
     decision->set_number_of_available_crossings(static_cast<unsigned short>(std::min<std::size_t>(available_crossings.size(), std::numeric_limits<unsigned short>::max())));
