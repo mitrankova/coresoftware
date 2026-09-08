@@ -37,6 +37,7 @@ class Full_PolyTrackDisplay : public SubsysReco
   }
   void setXYRange(double xymax) { m_xymax = xymax; }
   void setDrawTrackLines(bool v) { m_drawTrackLines = v; }
+  void setDrawFullPolyTrackRecoFit(bool v) { m_drawFullPolyTrackRecoFit = v; }
   void setMagneticFieldTesla(double b) { m_magneticFieldTesla = b; }
   void setUseStraightLineTracks(bool v) { m_useStraightLineTracks = v; }
   void setDrawTpcOnlyFullPolyTracks(bool v) { m_drawTpcOnlyFullPolyTracks = v; }
@@ -72,6 +73,7 @@ class Full_PolyTrackDisplay : public SubsysReco
   double m_unusedSiliconSeedMarkerSize;
   double m_minTrackPt;
   bool m_drawTrackLines;
+  bool m_drawFullPolyTrackRecoFit;
   bool m_useStraightLineTracks;
   bool m_drawTpcOnlyFullPolyTracks;
   bool m_drawUnusedSiliconSeeds;

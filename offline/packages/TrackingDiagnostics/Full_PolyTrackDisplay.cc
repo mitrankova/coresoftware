@@ -222,25 +222,26 @@ namespace
     zmax = std::max(zmax, clipped_z);
   }
 
-  bool tpc_seed_xy_at_z(const Full_PolyTrack* trk,
-                          const double z,
-                          const double magnetic_field_tesla,
-                          const double arc_direction,
-                          const bool use_straight_line,
-                          double& x,
-                          double& y)
+  bool track_xy_at_z(const Full_PolyTrack* trk,
+                     const double z,
+                     const double magnetic_field_tesla,
+                     const double arc_direction,
+                     const bool use_straight_line,
+                     const bool use_full_reco_fit,
+                     double& x,
+                     double& y)
   {
     if (!trk || trk->get_fit_status() == 0 || !std::isfinite(z))
     {
       return false;
     }
 
-    const double x0 = trk->get_seed_x();
-    const double y0 = trk->get_seed_y();
-    const double z0 = trk->get_seed_z();
-    const double px = trk->get_seed_px();
-    const double py = trk->get_seed_py();
-    const double pz = trk->get_seed_pz();
+    const double x0 = use_full_reco_fit ? trk->get_x() : trk->get_seed_x();
+    const double y0 = use_full_reco_fit ? trk->get_y() : trk->get_seed_y();
+    const double z0 = use_full_reco_fit ? trk->get_z() : trk->get_seed_z();
+    const double px = use_full_reco_fit ? trk->get_px() : trk->get_seed_px();
+    const double py = use_full_reco_fit ? trk->get_py() : trk->get_seed_py();
+    const double pz = use_full_reco_fit ? trk->get_pz() : trk->get_seed_pz();
     const double charge = trk->get_charge();
     if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(z0) ||
         !std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz) ||
@@ -315,7 +316,8 @@ namespace
 
       double x = 0.0;
       double y = 0.0;
-      if (!tpc_seed_xy_at_z(trk, point.z, magnetic_field_tesla, arc_direction, use_straight_line, x, y))
+      if (!track_xy_at_z(trk, point.z, magnetic_field_tesla, arc_direction,
+                         use_straight_line, false, x, y))
       {
         continue;
       }
@@ -336,6 +338,7 @@ namespace
                                         const double magnetic_field_tesla,
                                         const double arc_direction,
                                         const bool use_straight_line,
+                                        const bool use_full_reco_fit,
                                         const int color)
   {
     if (!trk || trk->get_fit_status() == 0)
@@ -357,7 +360,8 @@ namespace
       const double z = zmin + f * (zmax - zmin);
       double x = 0.0;
       double y = 0.0;
-      if (!tpc_seed_xy_at_z(trk, z, magnetic_field_tesla, arc_direction, use_straight_line, x, y))
+      if (!track_xy_at_z(trk, z, magnetic_field_tesla, arc_direction,
+                         use_straight_line, use_full_reco_fit, x, y))
       {
         continue;
       }
@@ -380,8 +384,8 @@ namespace
       line->SetPoint(static_cast<int>(i), zs[i], xs[i], ys[i]);
     }
     line->SetLineColor(color);
-    line->SetLineStyle(2);
-    line->SetLineWidth(3);
+    line->SetLineStyle(use_full_reco_fit ? 1 : 2);
+    line->SetLineWidth(use_full_reco_fit ? 4 : 3);
     return line;
   }
 
@@ -409,6 +413,7 @@ Full_PolyTrackDisplay::Full_PolyTrackDisplay(const std::string& name,
   , m_unusedSiliconSeedMarkerSize(0.25)
   , m_minTrackPt(0.1)
   , m_drawTrackLines(true)
+  , m_drawFullPolyTrackRecoFit(false)
   , m_useStraightLineTracks(false)
   , m_drawTpcOnlyFullPolyTracks(true)
   , m_drawUnusedSiliconSeeds(false)
@@ -760,7 +765,7 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
 
         TPolyLine3D* fit_line = make_tpc_seed_fit_line(trk, fit_zmin, fit_zmax, m_xymax,
                                                        m_magneticFieldTesla, arc_direction,
-                                                       use_straight_line, color);
+                                                       use_straight_line, false, color);
         if (fit_line)
         {
           fit_lines.push_back(fit_line);
@@ -768,10 +773,29 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
 
         TPolyLine3D* crossing_fit_line = make_tpc_seed_fit_line(trk, fit_zmin, fit_zmax, m_xymax,
                                                                 m_magneticFieldTesla, arc_direction,
-                                                                use_straight_line, per_crossing_color);
+                                                                use_straight_line, false, per_crossing_color);
         if (crossing_fit_line)
         {
           fit_lines_by_crossing[crossing].push_back(crossing_fit_line);
+        }
+
+        if (m_drawFullPolyTrackRecoFit)
+        {
+          TPolyLine3D* reco_fit_line = make_tpc_seed_fit_line(trk, fit_zmin, fit_zmax, m_xymax,
+                                                              m_magneticFieldTesla, arc_direction,
+                                                              use_straight_line, true, color);
+          if (reco_fit_line)
+          {
+            fit_lines.push_back(reco_fit_line);
+          }
+
+          TPolyLine3D* crossing_reco_fit_line = make_tpc_seed_fit_line(trk, fit_zmin, fit_zmax, m_xymax,
+                                                                       m_magneticFieldTesla, arc_direction,
+                                                                       use_straight_line, true, per_crossing_color);
+          if (crossing_reco_fit_line)
+          {
+            fit_lines_by_crossing[crossing].push_back(crossing_reco_fit_line);
+          }
         }
       }
     }

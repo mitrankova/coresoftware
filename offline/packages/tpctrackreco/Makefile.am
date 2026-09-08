@@ -20,6 +20,7 @@ pkginclude_HEADERS = \
   Full_PolyTrackContainer.h \
   Full_PolyTrackContainerv1.h \
   Full_PolyTrackMatcher.h \
+  Full_PolyTrackReco.h \
   Tpc_ModuleTrackReco.h \
   Tpc_ModuleTrack.h \
   Tpc_ModuleTrackv1.h \
@@ -97,6 +98,7 @@ libtpctrackreco_la_SOURCES = \
   Full_PolyTrackv1.cc \
   Full_PolyTrackContainerv1.cc \
   Full_PolyTrackMatcher.cc \
+  Full_PolyTrackReco.cc \
   Tpc_ModuleTrackReco.cc \
   Tpc_ModuleTrackv1.cc \
   Tpc_ModuleTrackContainerv1.cc \
