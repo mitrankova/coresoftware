@@ -1465,7 +1465,10 @@ const Full_PolyTrackMatcher::SpacePoint* Full_PolyTrackMatcher::findBestMvtxCand
     double vertex_sdphi = sdphi;
     double vertex_sdtheta = sdtheta;
 
-    if (layer < 2)
+    // Calibration mode must retain the uncalibrated standardized residuals.
+    // Applying the narrow vertex-component calibration here would bias both
+    // candidate ranking and the residual distributions being calibrated.
+    if (!m_associationCalibrationMode && layer < 2)
     {
       vertex_sdphi =
           (sdphi - m_vertexPhiMean[layer]) /
