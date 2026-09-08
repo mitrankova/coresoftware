@@ -48,6 +48,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setQAFileName(const std::string& n) { m_qaFileName = n; }
   void setWriteQA(bool v) { m_writeQA = v; }
+  void setUseFixedSiQaTrajectory(bool v) { m_useFixedSiQaTrajectory = v; }
   void setLooseWindow(double rdphi, double dz)
   {
     m_looseRdphiWindow = rdphi;
@@ -184,6 +185,8 @@ class Full_PolyTrackMatcher : public SubsysReco
     std::vector<ChainHit> hits;
     TrajectoryState tpc_reference;
     TrajectoryState si_reference;
+    // Fixed silicon trajectory used only for QA; never updated with silicon hits.
+    TrajectoryState qa_si_reference;
     TrajectoryState state;
     double chi2{0.0};
     double ndf{0.0};
@@ -226,6 +229,8 @@ class Full_PolyTrackMatcher : public SubsysReco
   TrajectoryState correctSiliconSeedWithTwoHits(const TrajectoryState& seed_state,
                                                 const ChainHit& outer_hit,
                                                 const ChainHit& inner_hit) const;
+  TrajectoryState correctSiliconSeedWithAllHits(const TrajectoryState& seed_state,
+                                                const std::vector<ChainHit>& hits) const;
   void updateSiliconTrajectoryHalfResidual(TrajectoryState& state, const ChainHit& hit) const;
   void refitSiliconTrajectoryFromMvtx(Chain& chain) const;
   void refitSiliconTrajectoryFromHits(Chain& chain) const;
@@ -292,10 +297,19 @@ class Full_PolyTrackMatcher : public SubsysReco
   bool m_useSagittaPhiFit{true};
   bool m_useDynamicResiduals{true};
   bool m_associationCalibrationMode{true};
+  bool m_useFixedSiQaTrajectory{false};
   std::array<double, 7> m_dynamicPhiMeanOffset{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   std::array<double, 7> m_dynamicPhiMeanSlope{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
   std::array<double, 7> m_dynamicThetaMeanOffset{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   std::array<double, 7> m_dynamicThetaMeanSlope{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
+  // Narrow vertex-track component in existing standardized-residual units.
+  // L0/L1 are calibrated from h_si_sdphi/h_si_sdtheta.
+  // L2 is intentionally uncalibrated because these QA histograms do not
+  // measure the initial TPC -> MVTX seed association.
+  std::array<double, 3> m_vertexPhiMean{{-0.0267795, 0.0243546, 0.0}};
+  std::array<double, 3> m_vertexPhiSigma{{0.151292, 0.432065, 1.0}};
+  std::array<double, 3> m_vertexThetaMean{{0.000464562, 0.00318868, 0.0}};
+  std::array<double, 3> m_vertexThetaSigma{{0.218231, 0.200289, 1.0}};
   unsigned int m_maxBranchesPerLayer{8};
   unsigned int m_maxChains{256};
   unsigned int m_minSiliconClusters{0};
