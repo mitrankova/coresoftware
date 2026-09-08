@@ -3,6 +3,8 @@
 #ifndef TPCTRACKRECO_FULLPOLYTRACKMATCHER_H
 #define TPCTRACKRECO_FULLPOLYTRACKMATCHER_H
 
+#include "BeamFrameTransform.h"
+
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
@@ -23,6 +25,7 @@ class TH3F;
 class TProfile;
 class TpcCrossingDecision;
 class TpcCrossingDecisionContainer;
+class Tpc_PolyClusterContainer;
 class Tpc_PolyTrack;
 class Tpc_PolyTrackContainer;
 class TrkrClusterCrossingAssoc;
@@ -48,6 +51,12 @@ class Full_PolyTrackMatcher : public SubsysReco
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setQAFileName(const std::string& n) { m_qaFileName = n; }
   void setWriteQA(bool v) { m_writeQA = v; }
+  void setTpcBeamLine(double x0, double dxdz, double y0, double dydz)
+  { m_beamFrame.setTpcBeamLine({x0, dxdz, y0, dydz}); }
+  void setMvtxBeamLine(double x0, double dxdz, double y0, double dydz)
+  { m_beamFrame.setMvtxBeamLine({x0, dxdz, y0, dydz}); }
+  void setInttBeamLine(double x0, double dxdz, double y0, double dydz)
+  { m_beamFrame.setInttBeamLine({x0, dxdz, y0, dydz}); }
   void setUseFixedSiQaTrajectory(bool v) { m_useFixedSiQaTrajectory = v; }
   void setLooseWindow(double rdphi, double dz)
   {
@@ -111,6 +120,8 @@ class Full_PolyTrackMatcher : public SubsysReco
   }
 
  private:
+  // All matcher coordinates below their input-specific conversion are expressed
+  // in one common beam-centered free-space frame. The beam axis is x = y = 0.
   struct SpacePoint
   {
     TrkrDefs::cluskey key{TrkrDefs::CLUSKEYMAX};
@@ -219,10 +230,9 @@ class Full_PolyTrackMatcher : public SubsysReco
   std::vector<SpacePoint> collectSiliconClusters() const;
   const TpcCrossingDecision* findCrossingDecision(unsigned int source_assembled_track_id) const;
   bool findInttCrossing(const Chain& chain, short& crossing) const;
-  bool getGlobalClusterPosition(TrkrDefs::cluskey key, TrkrCluster* cluster, SpacePoint& point) const;
+  bool getSiliconGlobalClusterPosition(TrkrDefs::cluskey key, TrkrCluster* cluster, SpacePoint& point) const;
   TrajectoryState fitTrajectory(const std::vector<SpacePoint>& points) const;
   TrajectoryState makeTpcReferenceTrajectory(const Tpc_PolyTrack& track) const;
-  TrajectoryState makeTpcSeedTrajectory(const Tpc_PolyTrack& track) const;
   TrajectoryState makeSiliconSeedTrajectory(const TrajectoryState& tpc_state,
                                             const Tpc_PolyTrack& track,
                                             const SpacePoint& first_mvtx) const;
@@ -266,6 +276,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   double dynamicSigmaTheta(double pt, double pred_theta) const;
   double dynamicDzWindow(double pt) const;
   unsigned int layerBit(unsigned int layer) const;
+  bool validateBeamFrameTransform() const;
 
   std::string m_tpcTrackNodeName{"TPC_POLYTRACKS"};
   std::string m_tpcClusterNodeName{"TPC_POLYCLUSTERS"};
@@ -276,11 +287,13 @@ class Full_PolyTrackMatcher : public SubsysReco
   std::string m_qaFileName{"full_polytrack_matcher_qa.root"};
 
   Tpc_PolyTrackContainer* m_tpcTracks{nullptr};
+  Tpc_PolyClusterContainer* m_tpcClusters{nullptr};
   TpcCrossingDecisionContainer* m_crossingDecisions{nullptr};
   TrkrClusterCrossingAssoc* m_clusterCrossingAssoc{nullptr};
   TrkrClusterContainer* m_trkrClusters{nullptr};
   ActsGeometry* m_actsGeometry{nullptr};
   Full_PolyTrackContainer* m_fullTracks{nullptr};
+  BeamFrameTransform m_beamFrame;
 
   bool m_writeQA{true};
   double m_looseRdphiWindow{0.2};
@@ -306,10 +319,14 @@ class Full_PolyTrackMatcher : public SubsysReco
   // L0/L1 are calibrated from h_si_sdphi/h_si_sdtheta.
   // L2 is intentionally uncalibrated because these QA histograms do not
   // measure the initial TPC -> MVTX seed association.
-  std::array<double, 3> m_vertexPhiMean{{-0.0267795, 0.0243546, 0.0}};
-  std::array<double, 3> m_vertexPhiSigma{{0.151292, 0.432065, 1.0}};
-  std::array<double, 3> m_vertexThetaMean{{0.000464562, 0.00318868, 0.0}};
-  std::array<double, 3> m_vertexThetaSigma{{0.218231, 0.200289, 1.0}};
+  //std::array<double, 3> m_vertexPhiMean{{-0.0267795, 0.0243546, 0.0}};
+  //std::array<double, 3> m_vertexPhiSigma{{0.151292, 0.432065, 1.0}};
+  //std::array<double, 3> m_vertexThetaMean{{0.000464562, 0.00318868, 0.0}};
+  //std::array<double, 3> m_vertexThetaSigma{{0.218231, 0.200289, 1.0}};
+  std::array<double, 3> m_vertexPhiMean{{0.0308276, 0.0428512, 0}};
+std::array<double, 3> m_vertexPhiSigma{{0.614756, 0.403372, 1}};
+std::array<double, 3> m_vertexThetaMean{{0.000269806, 0.00231699, 0}};
+std::array<double, 3> m_vertexThetaSigma{{0.19255, 0.181783, 1}};
   unsigned int m_maxBranchesPerLayer{8};
   unsigned int m_maxChains{256};
   unsigned int m_minSiliconClusters{0};

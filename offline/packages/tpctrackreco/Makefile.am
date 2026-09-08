@@ -19,6 +19,7 @@ pkginclude_HEADERS = \
   Full_PolyTrackv1.h \
   Full_PolyTrackContainer.h \
   Full_PolyTrackContainerv1.h \
+  BeamFrameTransform.h \
   Full_PolyTrackMatcher.h \
   Full_PolyTrackReco.h \
   Tpc_ModuleTrackReco.h \

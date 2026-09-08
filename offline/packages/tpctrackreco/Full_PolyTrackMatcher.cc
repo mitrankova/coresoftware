@@ -4,6 +4,8 @@
 #include "Full_PolyTrackv1.h"
 #include "TpcCrossingDecision.h"
 #include "TpcCrossingDecisionContainer.h"
+#include "Tpc_PolyCluster.h"
+#include "Tpc_PolyClusterContainer.h"
 #include "Tpc_PolyTrack.h"
 #include "Tpc_PolyTrackContainer.h"
 #include "Tpc_FittingTools.h"
@@ -40,14 +42,6 @@
 
 namespace
 {
-  constexpr double SiliconBeamXIntercept = -0.0407;
-  constexpr double SiliconBeamXSlope = -0.0015;
-  constexpr double SiliconBeamYIntercept = 0.1645;
-  constexpr double SiliconBeamYSlope = -0.0001;
-  constexpr double TpcBeamXIntercept = -0.0103;
-  constexpr double TpcBeamXSlope = -0.0013;
-  constexpr double TpcBeamYIntercept = 0.1814;
-  constexpr double TpcBeamYSlope = -0.0002;
 
   float finite_float(double value)
   {
@@ -122,6 +116,12 @@ int Full_PolyTrackMatcher::Init(PHCompositeNode*)
 
 int Full_PolyTrackMatcher::InitRun(PHCompositeNode* topNode)
 {
+  // Validate that each configured detector beam line maps to the common origin.
+  if (!validateBeamFrameTransform())
+  {
+    std::cerr << Name() << "::InitRun - invalid beam-frame transform configuration" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
   if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)
   {
     return Fun4AllReturnCodes::ABORTRUN;
@@ -140,6 +140,13 @@ int Full_PolyTrackMatcher::getNodes(PHCompositeNode* topNode)
   if (!m_tpcTracks)
   {
     std::cerr << Name() << "::getNodes - missing " << m_tpcTrackNodeName << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  m_tpcClusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_tpcClusterNodeName);
+  if (!m_tpcClusters)
+  {
+    std::cerr << Name() << "::getNodes - missing " << m_tpcClusterNodeName << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
@@ -227,23 +234,54 @@ unsigned int Full_PolyTrackMatcher::layerBit(unsigned int layer) const
   return layer < 32U ? (1U << layer) : 0U;
 }
 
-bool Full_PolyTrackMatcher::getGlobalClusterPosition(TrkrDefs::cluskey key, TrkrCluster* cluster, SpacePoint& point) const
+bool Full_PolyTrackMatcher::validateBeamFrameTransform() const
+{
+  const auto check = [this](const BeamFrameTransform::BeamLine& line)
+  {
+    for (const double z : {-100.0, 0.0, 100.0})
+    {
+      const auto centered = m_beamFrame.toBeamFrame(
+          line, line.x0 + line.dxdz * z, line.y0 + line.dydz * z, z);
+      if (!std::isfinite(centered.x) || !std::isfinite(centered.y) ||
+          std::fabs(centered.x) > 1.0e-12 || std::fabs(centered.y) > 1.0e-12)
+      {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  return check(m_beamFrame.tpcBeamLine()) &&
+         check(m_beamFrame.mvtxBeamLine()) &&
+         check(m_beamFrame.inttBeamLine());
+}
+
+bool Full_PolyTrackMatcher::getSiliconGlobalClusterPosition(TrkrDefs::cluskey key, TrkrCluster* cluster, SpacePoint& point) const
 {
   if (!cluster || !m_actsGeometry)
   {
     return false;
   }
 
+  const auto trkrid = static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(key));
+  if (trkrid != TrkrDefs::mvtxId && trkrid != TrkrDefs::inttId)
+  {
+    return false;
+  }
+
   const auto global = m_actsGeometry->getGlobalPosition(key, cluster);
+  const auto& beamLine = trkrid == TrkrDefs::mvtxId ?
+      m_beamFrame.mvtxBeamLine() : m_beamFrame.inttBeamLine();
+  const auto centered = m_beamFrame.toBeamFrame(
+      beamLine, global.x(), global.y(), global.z());
   point.key = key;
   point.layer = TrkrDefs::getLayer(key);
-  point.x = global.x();
-  point.y = global.y();
-  point.z = global.z();
+  point.x = centered.x;
+  point.y = centered.y;
+  point.z = centered.z;
   point.r = std::hypot(point.x, point.y);
   point.phi = std::atan2(point.y, point.x);
 
-  const auto trkrid = TrkrDefs::getTrkrId(key);
   if (trkrid == TrkrDefs::inttId)
   {
     point.ladder = InttDefs::getLadderPhiId(key);
@@ -282,7 +320,7 @@ std::vector<Full_PolyTrackMatcher::SpacePoint> Full_PolyTrackMatcher::collectSil
         for (auto iter = range.first; iter != range.second; ++iter)
         {
           SpacePoint point;
-          if (getGlobalClusterPosition(iter->first, iter->second, point))
+          if (getSiliconGlobalClusterPosition(iter->first, iter->second, point))
           {
             points.push_back(point);
           }
@@ -316,35 +354,50 @@ const TpcCrossingDecision* Full_PolyTrackMatcher::findCrossingDecision(unsigned 
 
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcReferenceTrajectory(const Tpc_PolyTrack& track) const
 {
-  TrajectoryState state = makeTpcSeedTrajectory(track);
-  if (!state.valid || !m_trkrClusters)
+  TrajectoryState state;
+  if (track.get_fit_status() == 0 || !m_tpcClusters)
   {
     return state;
   }
 
-  std::vector<SpacePoint> points;
-  points.reserve(track.size_cluster_keys() + 1U);
-  for (unsigned int i = 0; i < track.size_cluster_keys(); ++i)
+  std::map<TrkrDefs::cluskey, const Tpc_PolyCluster*> clustersByKey;
+  for (unsigned int i = 0; i < m_tpcClusters->size(); ++i)
   {
-    const TrkrDefs::cluskey key = track.get_cluster_key(i);
-    TrkrCluster* cluster = m_trkrClusters->findCluster(key);
-    SpacePoint point;
-    if (cluster && getGlobalClusterPosition(key, cluster, point))
+    const Tpc_PolyCluster* cluster = m_tpcClusters->get_cluster(i);
+    if (cluster)
     {
-      points.push_back(point);
+      clustersByKey[cluster->get_trkr_cluster_key()] = cluster;
     }
   }
 
-  const double beam_z = std::isfinite(track.get_seed_z0()) ? track.get_seed_z0() : track.get_z();
-  SpacePoint beam_point;
-  beam_point.z = beam_z;
-  beam_point.x = TpcBeamXIntercept + TpcBeamXSlope * beam_z;
-  beam_point.y = TpcBeamYIntercept + TpcBeamYSlope * beam_z;
-  beam_point.r = std::hypot(beam_point.x, beam_point.y);
-  beam_point.phi = std::atan2(beam_point.y, beam_point.x);
-  if (std::isfinite(beam_point.r) && beam_point.r > 0.0)
+  std::vector<SpacePoint> points;
+  points.reserve(track.size_cluster_keys());
+  for (unsigned int i = 0; i < track.size_cluster_keys(); ++i)
   {
-    points.push_back(beam_point);
+    const TrkrDefs::cluskey key = track.get_cluster_key(i);
+    const auto clusterIter = clustersByKey.find(key);
+    if (clusterIter == clustersByKey.end())
+    {
+      continue;
+    }
+
+    const Tpc_PolyCluster* cluster = clusterIter->second;
+    const auto centered = m_beamFrame.toBeamFrame(
+        m_beamFrame.tpcBeamLine(), cluster->get_centroid_x(),
+        cluster->get_centroid_y(), cluster->get_centroid_z());
+    SpacePoint point;
+    point.key = key;
+    point.layer = TrkrDefs::getLayer(key);
+    point.x = centered.x;
+    point.y = centered.y;
+    point.z = centered.z;
+    point.r = std::hypot(point.x, point.y);
+    point.phi = std::atan2(point.y, point.x);
+    if (std::isfinite(point.x) && std::isfinite(point.y) &&
+        std::isfinite(point.z) && point.r > 0.0)
+    {
+      points.push_back(point);
+    }
   }
 
   TrajectoryState fitted = fitTrajectory(points);
@@ -353,18 +406,11 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcReferenceTr
     return state;
   }
 
-  fitted.seed_x0 = state.seed_x0;
-  fitted.seed_y0 = state.seed_y0;
-  fitted.seed_z0 = state.seed_z0;
-  fitted.seed_cx = state.seed_cx;
-  fitted.seed_cy = state.seed_cy;
-  fitted.seed_phi0 = state.seed_phi0;
-  fitted.seed_slope = state.seed_slope;
-  fitted.seed_q_over_r = fitted.phi_sagitta_ok ? fitted.phi_invR : state.seed_q_over_r;
-  fitted.z_slope = state.seed_slope;
-  fitted.z_intercept = state.seed_z0 - state.seed_slope * std::hypot(state.seed_x0, state.seed_y0);
+  // Retain only translation-invariant TPC seed properties. All positional
+  // trajectory information comes from the centered-cluster refit above.
+  fitted.seed_slope = track.get_seed_slope();
+  fitted.seed_q_over_r = fitted.phi_sagitta_ok ? fitted.phi_invR : track.get_seed_q_over_r();
   fitted.use_tpc_seed = false;
-  fitted.valid = true;
   return fitted;
 }
 
@@ -376,19 +422,16 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTra
   TrajectoryState state;
   const double q_over_r = std::fabs(tpc_state.seed_q_over_r) > 1.0e-12 ?
                             tpc_state.seed_q_over_r : track.get_seed_q_over_r();
-  const double beam_z = first_mvtx.z;
-  const double beam_x = SiliconBeamXIntercept + SiliconBeamXSlope * beam_z;
-  const double beam_y = SiliconBeamYIntercept + SiliconBeamYSlope * beam_z;
-  const double dx = first_mvtx.x - beam_x;
-  const double dy = first_mvtx.y - beam_y;
+  const double dx = first_mvtx.x;
+  const double dy = first_mvtx.y;
   const double chord = std::hypot(dx, dy);
   if (!std::isfinite(chord) || chord <= 1.0e-9 || !std::isfinite(q_over_r))
   {
     return state;
   }
 
-  state.seed_x0 = beam_x;
-  state.seed_y0 = beam_y;
+  state.seed_x0 = 0.0;
+  state.seed_y0 = 0.0;
   state.seed_q_over_r = q_over_r;
   state.seed_slope = track.get_seed_slope();
   state.use_tpc_seed = true;
@@ -410,13 +453,19 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTra
     return state;
   }
 
-  const double mx = 0.5 * (beam_x + first_mvtx.x);
-  const double my = 0.5 * (beam_y + first_mvtx.y);
+  const double mx = 0.5 * first_mvtx.x;
+  const double my = 0.5 * first_mvtx.y;
   const double ux = dx / chord;
   const double uy = dy / chord;
   const double h = std::sqrt(std::max(radius * radius - 0.25 * chord * chord, 0.0));
   const double fit_sign = q_over_r > 0.0 ? -1.0 : 1.0;
 
+  // Both circle centers below pass exactly through the beam origin and the
+  // first silicon hit. Consequently, selecting between them with the hit
+  // residual is ill-defined (both residuals are zero up to roundoff) and can
+  // pick the branch that reaches the hit only after nearly a full revolution.
+  // Select the shortest forward arc in the direction fixed by q/R instead.
+  double best_arc = std::numeric_limits<double>::max();
   double best_residual = std::numeric_limits<double>::max();
   TrajectoryState best_state;
   for (const double side : {-1.0, 1.0})
@@ -424,7 +473,7 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTra
     TrajectoryState candidate = state;
     candidate.seed_cx = mx + side * h * (-uy);
     candidate.seed_cy = my + side * h * ux;
-    const double start_angle = std::atan2(beam_y - candidate.seed_cy, beam_x - candidate.seed_cx);
+    const double start_angle = std::atan2(-candidate.seed_cy, -candidate.seed_cx);
     const double hit_angle = std::atan2(first_mvtx.y - candidate.seed_cy, first_mvtx.x - candidate.seed_cx);
     double dangle = unwrapPhiNear(hit_angle, start_angle) - start_angle;
     if (fit_sign * dangle < 0.0)
@@ -444,8 +493,9 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeSiliconSeedTra
     if (candidate.valid && predictAtRadius(candidate, first_mvtx.r, pred_phi, pred_z, pred_x, pred_y))
     {
       const double residual = square(first_mvtx.r * wrapPhi(first_mvtx.phi - pred_phi)) + square(first_mvtx.z - pred_z);
-      if (residual < best_residual)
+      if (arc < best_arc || (arc == best_arc && residual < best_residual))
       {
+        best_arc = arc;
         best_residual = residual;
         best_state = candidate;
       }
@@ -632,35 +682,6 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::correctSiliconSeed
                 std::isfinite(state.seed_z0);
   return state;
 }
-
-Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcSeedTrajectory(const Tpc_PolyTrack& track) const
-{
-  TrajectoryState state;
-  if (track.get_fit_status() == 0)
-  {
-    return state;
-  }
-
-  state.seed_x0 = track.get_seed_x0();
-  state.seed_y0 = track.get_seed_y0();
-  state.seed_z0 = track.get_seed_z0();
-  state.seed_cx = track.get_helix_x0();
-  state.seed_cy = track.get_helix_y0();
-  state.seed_phi0 = track.get_seed_phi();
-  state.seed_slope = track.get_seed_slope();
-  state.seed_q_over_r = track.get_seed_q_over_r();
-  state.use_tpc_seed = true;
-  state.valid = std::isfinite(state.seed_x0) && std::isfinite(state.seed_y0) &&
-                std::isfinite(state.seed_z0) && std::isfinite(state.seed_phi0) &&
-                std::isfinite(state.seed_slope) && std::isfinite(state.seed_q_over_r);
-  if (std::fabs(state.seed_q_over_r) > 1.0e-12)
-  {
-    state.valid = state.valid && std::isfinite(state.seed_cx) && std::isfinite(state.seed_cy);
-  }
-  return state;
-}
-
-
 
 void Full_PolyTrackMatcher::updateSiliconTrajectoryHalfResidual(TrajectoryState& state, const ChainHit& hit) const
 {
@@ -855,12 +876,8 @@ double Full_PolyTrackMatcher::trajectoryPhi0NearBeam(const TrajectoryState& stat
     return state.seed_phi0;
   }
 
-  const double beam_z = std::isfinite(state.seed_z0) ? state.seed_z0 : 0.0;
-  const double beam_x = TpcBeamXIntercept + TpcBeamXSlope * beam_z;
-  const double beam_y = TpcBeamYIntercept + TpcBeamYSlope * beam_z;
-  const double r_beam = std::hypot(beam_x, beam_y);
-  const double r1 = std::max(r_beam + 0.01, 0.01);
-  const double r2 = r1 + 0.01;
+  const double r1 = 0.01;
+  const double r2 = 0.02;
 
   double phi1 = 0.0;
   double z1 = 0.0;
