@@ -93,6 +93,7 @@ int PHTrackCleaner::process_event(PHCompositeNode * /*topNode*/)
 
   std::map<std::pair<unsigned int, unsigned int>, unsigned int> best_track_by_tpc_group;
   std::map<std::pair<unsigned int, unsigned int>, double> best_quality_by_tpc_group;
+  std::map<std::pair<unsigned int, unsigned int>, bool> best_has_silicon_seed_by_tpc_group;
 
   // loop over the fitted tracks and keep only the best track per TPC group.
   // Crossing duplicates share the source assembled-track group.
@@ -112,6 +113,7 @@ int PHTrackCleaner::process_event(PHCompositeNode * /*topNode*/)
     }
 
     const auto tpc_group = get_tpc_group(track, track_id);
+    const bool has_silicon_seed = track->get_silicon_seed() != nullptr;
 
     if (Verbosity() > 1)
     {
@@ -134,10 +136,14 @@ int PHTrackCleaner::process_event(PHCompositeNode * /*topNode*/)
     }
 
     const auto best_iter = best_quality_by_tpc_group.find(tpc_group);
-    if (best_iter == best_quality_by_tpc_group.end() || qual < best_iter->second)
+    const bool is_better = best_iter == best_quality_by_tpc_group.end() ||
+                           (has_silicon_seed && !best_has_silicon_seed_by_tpc_group[tpc_group]) ||
+                           (has_silicon_seed == best_has_silicon_seed_by_tpc_group[tpc_group] && qual < best_iter->second);
+    if (is_better)
     {
       best_track_by_tpc_group[tpc_group] = track_id;
       best_quality_by_tpc_group[tpc_group] = qual;
+      best_has_silicon_seed_by_tpc_group[tpc_group] = has_silicon_seed;
     }
   }
 
