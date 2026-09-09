@@ -40,7 +40,7 @@
 class PHCompositeNode;
 class TrkrCluster;
 class TrackSeed;
-class TrackSeed_v2;
+class TrackSeed_v3;
 
 namespace bg = boost::geometry;
 namespace bgi = boost::geometry::index;
@@ -195,10 +195,10 @@ class PHCASiliconSeeding : public PHTrackSeeding
   int FindSeeds(const PositionMap&, const keyListPerLayer&);
 
   void QueryTree(const bgi::rtree<pointKey, bgi::quadratic<16>>& rtree, double phimin, double zmin, double phimax, double zmax, std::vector<pointKey>& returned_values) const;
-  float getSeedQuality(const TrackSeed_v2& seed, const PositionMap& globalPositions) const;
-  void HelixPropagate(std::vector<TrackSeed_v2>& seeds, const PositionMap& globalPositions) const;
-  void FitSeed(TrackSeed_v2& seed, const PositionMap& globalPositions) const;
-  std::vector<TrackSeed_v2> FitSeeds(const std::vector<keyList>& seeds, const PositionMap& globalPositions) const;
+  float getSeedQuality(const TrackSeed_v3& seed, const PositionMap& globalPositions) const;
+  void HelixPropagate(std::vector<TrackSeed_v3>& seeds, const PositionMap& globalPositions) const;
+  void FitSeed(TrackSeed_v3& seed, const PositionMap& globalPositions) const;
+  std::vector<TrackSeed_v3> FitSeeds(const std::vector<keyList>& seeds, const PositionMap& globalPositions) const;
 
   std::set<short> GetINTTClusterCrossings(const TrkrDefs::cluskey ckey) const;
   short GetCleanINTTClusterCrossing(const TrkrDefs::cluskey ckey) const;
@@ -206,7 +206,7 @@ class PHCASiliconSeeding : public PHTrackSeeding
   bool ClusterTimesAreCompatible(const uint8_t trkr_id, const int time_index, const TrkrDefs::cluskey ckey) const;
   bool ClusterTimesAreCompatible(const TrkrDefs::cluskey clus_a, const TrkrDefs::cluskey clus_b) const;
 
-  void publishSeeds(const std::vector<TrackSeed_v2>& seeds) const;
+  void publishSeeds(const std::vector<TrackSeed_v3>& seeds) const;
 
   // set up layer radii
   void SetupDefaultLayerRadius();

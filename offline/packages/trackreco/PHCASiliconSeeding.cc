@@ -27,7 +27,7 @@
 #include <trackbase/TrkrDefs.h>  // for getLayer, clu...
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedHelper.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 // cylinder geometry for mvtx and intt
 #include <g4detectors/PHG4CylinderGeom.h>
@@ -325,7 +325,7 @@ int PHCASiliconSeeding::FindSeeds(const PHCASiliconSeeding::PositionMap& globalP
   std::vector<std::vector<Triplet>> triplets = CreateLinks(globalPositions, ckeys);
   keyLists trackSeedKeyLists = FollowLinks(triplets);
 
-  std::vector<TrackSeed_v2> seeds = FitSeeds(trackSeedKeyLists, globalPositions);
+  std::vector<TrackSeed_v3> seeds = FitSeeds(trackSeedKeyLists, globalPositions);
   HelixPropagate(seeds, globalPositions);
   HelixPropagate(seeds, globalPositions);  // each call extends seed by up to one cluster
 
@@ -823,7 +823,7 @@ std::vector<PHCASiliconSeeding::keyList> PHCASiliconSeeding::FollowLinks(const s
   return finishedSeeds;
 }
 
-float PHCASiliconSeeding::getSeedQuality(const TrackSeed_v2& seed, const PHCASiliconSeeding::PositionMap& globalPositions) const
+float PHCASiliconSeeding::getSeedQuality(const TrackSeed_v3& seed, const PHCASiliconSeeding::PositionMap& globalPositions) const
 {
   std::vector<std::pair<double, double>> xy_pts;
   std::vector<std::pair<double, double>> rz_pts;
@@ -853,9 +853,9 @@ float PHCASiliconSeeding::getSeedQuality(const TrackSeed_v2& seed, const PHCASil
   return chi2 / ndf;
 }
 
-void PHCASiliconSeeding::HelixPropagate(std::vector<TrackSeed_v2>& seeds, const PHCASiliconSeeding::PositionMap& globalPositions) const
+void PHCASiliconSeeding::HelixPropagate(std::vector<TrackSeed_v3>& seeds, const PHCASiliconSeeding::PositionMap& globalPositions) const
 {
-  for (TrackSeed_v2& seed : seeds)
+  for (TrackSeed_v3& seed : seeds)
   {
     if (Verbosity() > 3)
     {
@@ -1102,9 +1102,9 @@ void PHCASiliconSeeding::HelixPropagate(std::vector<TrackSeed_v2>& seeds, const 
   }
 }
 
-std::vector<TrackSeed_v2> PHCASiliconSeeding::FitSeeds(const std::vector<PHCASiliconSeeding::keyList>& chains, const PHCASiliconSeeding::PositionMap& globalPositions) const
+std::vector<TrackSeed_v3> PHCASiliconSeeding::FitSeeds(const std::vector<PHCASiliconSeeding::keyList>& chains, const PHCASiliconSeeding::PositionMap& globalPositions) const
 {
-  std::vector<TrackSeed_v2> clean_chains;
+  std::vector<TrackSeed_v3> clean_chains;
 
   for (const auto& chain : chains)
   {
@@ -1141,7 +1141,7 @@ std::vector<TrackSeed_v2> PHCASiliconSeeding::FitSeeds(const std::vector<PHCASil
       continue;
     }
 
-    TrackSeed_v2 trackseed;
+    TrackSeed_v3 trackseed;
     for (const auto& key : chain)
     {
       trackseed.insert_cluster_key(key);
@@ -1199,7 +1199,7 @@ std::vector<TrackSeed_v2> PHCASiliconSeeding::FitSeeds(const std::vector<PHCASil
   return clean_chains;
 }
 
-void PHCASiliconSeeding::FitSeed(TrackSeed_v2& seed, const PositionMap& globalPositions) const
+void PHCASiliconSeeding::FitSeed(TrackSeed_v3& seed, const PositionMap& globalPositions) const
 {
   if (Verbosity() > 3)
   {
@@ -1270,11 +1270,11 @@ void PHCASiliconSeeding::FitSeed(TrackSeed_v2& seed, const PositionMap& globalPo
   }
 }
 
-void PHCASiliconSeeding::publishSeeds(const std::vector<TrackSeed_v2>& seeds) const
+void PHCASiliconSeeding::publishSeeds(const std::vector<TrackSeed_v3>& seeds) const
 {
   for (const auto& seed : seeds)
   {
-    auto pseed = std::make_unique<TrackSeed_v2>(seed);
+    auto pseed = std::make_unique<TrackSeed_v3>(seed);
     if (Verbosity() > 4)
     {
       pseed->identify();
