@@ -25,6 +25,7 @@ pkginclude_HEADERS = \
   TrackSeed.h \
   TrackSeed_v1.h \
   TrackSeed_v2.h \
+  TrackSeed_v3.h \
   SvtxTrackSeed_v1.h \
   SvtxTrackSeed_v2.h \
   SvtxTrackSeed_v3.h \
@@ -79,6 +80,7 @@ ROOTDICTS = \
   TrackSeed_Dict.cc \
   TrackSeed_v1_Dict.cc \
   TrackSeed_v2_Dict.cc \
+  TrackSeed_v3_Dict.cc \
   SvtxTrackSeed_v1_Dict.cc \
   SvtxTrackSeed_v2_Dict.cc \
   SvtxTrackSeed_v3_Dict.cc \
@@ -142,6 +144,7 @@ libtrackbase_historic_io_la_SOURCES = \
   TrackSeed.cc \
   TrackSeed_v1.cc \
   TrackSeed_v2.cc \
+  TrackSeed_v3.cc \
   SvtxTrackSeed_v1.cc \
   SvtxTrackSeed_v2.cc \
   SvtxTrackSeed_v3.cc \

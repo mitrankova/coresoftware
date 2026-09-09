@@ -31,7 +31,7 @@
 
 #include <trackbase_historic/ActsTransformations.h>
 #include <trackbase_historic/TrackSeedContainer.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -193,7 +193,7 @@ int PHSimpleKFProp::process_event(PHCompositeNode* topNode)
 
   // list of cluster chains
   std::vector<std::vector<TrkrDefs::cluskey>> new_chains;
-  std::vector<TrackSeed_v2> unused_tracks;
+  std::vector<TrackSeed_v3> unused_tracks;
 
   timer.restart();
   #pragma omp parallel
@@ -210,7 +210,7 @@ int PHSimpleKFProp::process_event(PHCompositeNode* topNode)
     PHTimer timer_mp("KFPropTimer_parallel");
 
     std::vector<std::vector<TrkrDefs::cluskey>> local_chains;
-    std::vector<TrackSeed_v2> local_unused;
+    std::vector<TrackSeed_v3> local_unused;
 
     #pragma omp for schedule(static)
     for (size_t track_it = 0; track_it != _track_map->size(); ++track_it)
@@ -1327,7 +1327,7 @@ std::vector<keylist> PHSimpleKFProp::RemoveBadClusters(const std::vector<keylist
   return clean_chains;
 }
 
-void PHSimpleKFProp::rejectAndPublishSeeds(std::vector<TrackSeed_v2>& seeds, const PositionMap& positions, std::vector<float>& trackChi2)
+void PHSimpleKFProp::rejectAndPublishSeeds(std::vector<TrackSeed_v3>& seeds, const PositionMap& positions, std::vector<float>& trackChi2)
 {
 
   PHTimer timer("KFPropTimer");
@@ -1420,7 +1420,7 @@ void PHSimpleKFProp::rejectAndPublishSeeds(std::vector<TrackSeed_v2>& seeds, con
 
 }
 
-void PHSimpleKFProp::publishSeeds(const std::vector<TrackSeed_v2>& seeds)
+void PHSimpleKFProp::publishSeeds(const std::vector<TrackSeed_v3>& seeds)
 {
   for (const auto& seed : seeds)
   {

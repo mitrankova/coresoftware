@@ -32,7 +32,7 @@
 #include <trackbase_historic/TrackSeed.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedContainer_v1.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 // sPHENIX includes
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -323,7 +323,7 @@ int PHLineLaserReco::process_event(PHCompositeNode* topNode)
   }
     
   _nevent++;
-  std::vector<TrackSeed_v2> clean_chains;
+  std::vector<TrackSeed_v3> clean_chains;
   //Fill rtree
   bgi::rtree<pointInd, bgi::quadratic<16> > rtree;
 

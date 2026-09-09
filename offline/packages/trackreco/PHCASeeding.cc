@@ -397,7 +397,7 @@ int PHCASeeding::FindSeedsWithMerger(const PHCASeeding::PositionMap& globalPosit
     t_makeseeds->stop();
     std::cout << "Time to make seeds: " << t_makeseeds->elapsed() / 1000 << " s" << std::endl;
   }
-  std::vector<TrackSeed_v2> seeds = RemoveBadClusters(trackSeedKeyLists, globalPositions);
+  std::vector<TrackSeed_v3> seeds = RemoveBadClusters(trackSeedKeyLists, globalPositions);
 
   publishSeeds(seeds);
   return seeds.size();
@@ -885,13 +885,13 @@ PHCASeeding::keyLists PHCASeeding::FollowBiLinks(const PHCASeeding::keyLinks& tr
   return grown_seeds;
 }
 
-std::vector<TrackSeed_v2> PHCASeeding::RemoveBadClusters(const std::vector<PHCASeeding::keyList>& chains, const PHCASeeding::PositionMap& globalPositions) const
+std::vector<TrackSeed_v3> PHCASeeding::RemoveBadClusters(const std::vector<PHCASeeding::keyList>& chains, const PHCASeeding::PositionMap& globalPositions) const
 {
   if (Verbosity() > 0)
   {
     std::cout << "removing bad clusters" << std::endl;
   }
-  std::vector<TrackSeed_v2> clean_chains;
+  std::vector<TrackSeed_v3> clean_chains;
 
   for (const auto& chain : chains)
   {
@@ -924,7 +924,7 @@ std::vector<TrackSeed_v2> PHCASeeding::RemoveBadClusters(const std::vector<PHCAS
     const std::vector<double> xy_resid = TrackFitUtils::getCircleClusterResiduals(xy_pts, R, X0, Y0);
 
     // assign clusters to seed
-    TrackSeed_v2 trackseed;
+    TrackSeed_v3 trackseed;
     for (const auto& key : chain)
     {
       trackseed.insert_cluster_key(key);
@@ -939,11 +939,11 @@ std::vector<TrackSeed_v2> PHCASeeding::RemoveBadClusters(const std::vector<PHCAS
   return clean_chains;
 }
 
-void PHCASeeding::publishSeeds(const std::vector<TrackSeed_v2>& seeds) const
+void PHCASeeding::publishSeeds(const std::vector<TrackSeed_v3>& seeds) const
 {
   for (const auto& seed : seeds)
   {
-    auto pseed = std::make_unique<TrackSeed_v2>(seed);
+    auto pseed = std::make_unique<TrackSeed_v3>(seed);
     if (Verbosity() > 4)
     {
       pseed->identify();

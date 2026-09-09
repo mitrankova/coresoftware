@@ -3,7 +3,7 @@
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase_historic/SvtxTrackSeed_v1.h>
 #include <trackbase_historic/TrackSeedContainer_v1.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -209,7 +209,7 @@ int PHSiliconHelicalPropagator::process_event(PHCompositeNode* /*topNode*/)
           std::cout << "key " << (unsigned int) key << std::endl;
         }
       }
-      std::unique_ptr<TrackSeed_v2> si_seed = std::make_unique<TrackSeed_v2>();
+      std::unique_ptr<TrackSeed_v3> si_seed = std::make_unique<TrackSeed_v3>();
       std::map<short, int> crossing_frequency;
       Acts::Vector3 tpcExGlobal = clusterPositions.front();
       for (auto& clusterkey : newkeys)

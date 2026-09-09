@@ -13,7 +13,7 @@
 #include <trackbase_historic/SvtxTrackSeed_v1.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedContainer_v1.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 
 #include <cmath>
@@ -241,7 +241,7 @@ int PHCosmicSiliconPropagator::process_event(PHCompositeNode* /*unused*/)
     if ((tpcClusKeys.size() + newClusKeys.size() > 25))
     {
       // TODO: should include distortion corrections
-      std::unique_ptr<TrackSeed_v2> si_seed = std::make_unique<TrackSeed_v2>();
+      std::unique_ptr<TrackSeed_v3> si_seed = std::make_unique<TrackSeed_v3>();
       std::map<TrkrDefs::cluskey, Acts::Vector3> silposmap, tpcposmap;
       for (auto& key : tpcClusKeys)
       {
