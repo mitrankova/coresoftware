@@ -13,7 +13,7 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/ActsSurfaceMaps.h>
 #include <trackbase/ActsTrackingGeometry.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 
 #include <map>
@@ -29,7 +29,7 @@ class PHGhostRejection
 {
  public:
   /* PHGhostRejection() {} */
-  PHGhostRejection(unsigned int verbosity, const std::vector<TrackSeed_v2>& _seeds)
+  PHGhostRejection(unsigned int verbosity, const std::vector<TrackSeed_v3>& _seeds)
     : m_verbosity { verbosity }
     , seeds { _seeds }
     , m_rejected { std::vector<bool> (seeds.size(), false) }
@@ -60,7 +60,7 @@ class PHGhostRejection
 
  private:
   unsigned int m_verbosity;
-  const std::vector<TrackSeed_v2>& seeds;
+  const std::vector<TrackSeed_v3>& seeds;
   std::vector<bool> m_rejected {}; // id
   double _phi_cut = std::numeric_limits<double>::max();
   double _eta_cut = std::numeric_limits<double>::max();

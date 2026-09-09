@@ -18,7 +18,7 @@
 #include <tpc/TpcGlobalPositionWrapper.h>
 
 #include <trackbase/TrkrDefs.h>  // for cluskey
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 #include <phool/PHTimer.h>  // for PHTimer
 
@@ -228,10 +228,10 @@ class PHCASeeding : public PHTrackSeeding
   int FindSeedsWithMerger(const PositionMap&, const keyListPerLayer&);
 
   void QueryTree(const bgi::rtree<pointKey, bgi::quadratic<16>>& rtree, double phimin, double zmin, double phimax, double zmax, std::vector<pointKey>& returned_values) const;
-  std::vector<TrackSeed_v2> RemoveBadClusters(const std::vector<keyList>& seeds, const PositionMap& globalPositions) const;
+  std::vector<TrackSeed_v3> RemoveBadClusters(const std::vector<keyList>& seeds, const PositionMap& globalPositions) const;
   double getMengerCurvature(TrkrDefs::cluskey a, TrkrDefs::cluskey b, TrkrDefs::cluskey c, const PositionMap& globalPositions) const;
 
-  void publishSeeds(const std::vector<TrackSeed_v2>& seeds) const;
+  void publishSeeds(const std::vector<TrackSeed_v3>& seeds) const;
 
   // int _nlayers_all;
   // unsigned int _nlayers_seeding;

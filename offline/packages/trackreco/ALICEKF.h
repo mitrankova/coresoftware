@@ -9,7 +9,7 @@
 #include <trackbase/TrkrCluster.h>
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrDefs.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 #include <Acts/Definitions/Algebra.hpp>
 
@@ -21,7 +21,7 @@
 #include <vector>
 
 using PositionMap = std::map<TrkrDefs::cluskey, Acts::Vector3>;
-using TrackSeedAliceSeedMap = std::pair<std::vector<TrackSeed_v2>, std::vector<GPUTPCTrackParam>>;
+using TrackSeedAliceSeedMap = std::pair<std::vector<TrackSeed_v3>, std::vector<GPUTPCTrackParam>>;
 
 class ALICEKF
 {

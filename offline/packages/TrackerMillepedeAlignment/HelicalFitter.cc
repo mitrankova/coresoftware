@@ -25,7 +25,7 @@
 #include <trackbase_historic/SvtxTrackState_v1.h>
 #include <trackbase_historic/SvtxTrack_v4.h>
 #include <trackbase_historic/TrackSeedHelper.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 #include <globalvertex/SvtxVertex.h>
 #include <globalvertex/SvtxVertexMap.h>
@@ -369,7 +369,7 @@ int HelicalFitter::process_event(PHCompositeNode* /*unused*/)
       {
         continue;  // discard this TPC seed, did not get a good match to silicon
       }
-      auto trackseed = std::make_unique<TrackSeed_v2>();
+      auto trackseed = std::make_unique<TrackSeed_v3>();
       for (auto& ckey : cluskey_vec)
       {
         if (TrkrDefs::getTrkrId(ckey) == TrkrDefs::TrkrId::mvtxId ||
@@ -454,7 +454,7 @@ int HelicalFitter::process_event(PHCompositeNode* /*unused*/)
     /// use the track seed functions to help get the track trajectory values
     /// in the usual coordinates
 
-    TrackSeed_v2 someseed;
+    TrackSeed_v3 someseed;
     for (auto& ckey : cluskey_vec)
     {
       someseed.insert_cluster_key(ckey);

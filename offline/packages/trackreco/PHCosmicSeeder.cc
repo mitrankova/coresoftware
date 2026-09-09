@@ -14,7 +14,7 @@
 #include <trackbase/TrkrDefs.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedContainer_v1.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase/TrkrCluster.h>
 
 #include <TFile.h>
@@ -171,7 +171,7 @@ int PHCosmicSeeder::process_event(PHCompositeNode* /*unused*/)
           longestseed.xzslope};
       m_tup->Fill(seed_data);
     }
-    auto svtxseed = std::make_unique<TrackSeed_v2>();
+    auto svtxseed = std::make_unique<TrackSeed_v3>();
     for (auto& key : seed_A.ckeys)
     {
       svtxseed->insert_cluster_key(key);

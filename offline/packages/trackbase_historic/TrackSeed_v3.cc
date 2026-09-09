@@ -1,20 +1,20 @@
-#include "TrackSeed_v2.h"
+#include "TrackSeed_v3.h"
 
-TrackSeed_v2::TrackSeed_v2(const TrackSeed& seed)
+TrackSeed_v3::TrackSeed_v3(const TrackSeed& seed)
 {
-  TrackSeed_v2::CopyFrom(seed);
+  TrackSeed_v3::CopyFrom(seed);
 }
 
 // have to suppress missingMemberCopy from cppcheck, it does not
 // go down to the CopyFrom method where things are done correctly
 // cppcheck-suppress missingMemberCopy
-TrackSeed_v2::TrackSeed_v2(const TrackSeed_v2& seed)
+TrackSeed_v3::TrackSeed_v3(const TrackSeed_v3& seed)
   : TrackSeed(seed)
 {
-  TrackSeed_v2::CopyFrom(seed);
+  TrackSeed_v3::CopyFrom(seed);
 }
 
-TrackSeed_v2& TrackSeed_v2::operator=(const TrackSeed_v2& seed)
+TrackSeed_v3& TrackSeed_v3::operator=(const TrackSeed_v3& seed)
 {
   if (this != &seed)
   {
@@ -23,7 +23,7 @@ TrackSeed_v2& TrackSeed_v2::operator=(const TrackSeed_v2& seed)
   return *this;
 }
 
-void TrackSeed_v2::CopyFrom(const TrackSeed& seed)
+void TrackSeed_v3::CopyFrom(const TrackSeed& seed)
 {
   if (this == &seed)
   {
@@ -37,17 +37,19 @@ void TrackSeed_v2::CopyFrom(const TrackSeed& seed)
   m_slope = seed.get_slope();
   m_Z0 = seed.get_Z0();
   m_crossing = seed.get_crossing();
+  m_tpc_seed_index = seed.get_tpc_seed_index();
   m_phi = seed.get_phi();
   m_cluster_keys.clear();
   std::copy(seed.begin_cluster_keys(), seed.end_cluster_keys(),
             std::inserter(m_cluster_keys, m_cluster_keys.begin()));
 }
 
-void TrackSeed_v2::identify(std::ostream& os) const
+void TrackSeed_v3::identify(std::ostream& os) const
 {
-  os << "TrackSeed_v2 object ";
+  os << "TrackSeed_v3 object ";
   os << "charge " << get_charge() << std::endl;
   os << "beam crossing " << get_crossing() << std::endl;
+  os << "tpc seed index " << get_tpc_seed_index() << std::endl;
   os << "(pt,pz) = (" << get_pt()
      << ", " << get_pz() << ")" << std::endl;
   os << " phi " << m_phi << " eta " << get_eta() << std::endl;
@@ -71,13 +73,13 @@ void TrackSeed_v2::identify(std::ostream& os) const
   return;
 }
 
-float TrackSeed_v2::get_pt() const
+float TrackSeed_v3::get_pt() const
 {
   /// Scaling factor for radius in 1.4T field
   return 0.3 * 1.4 / 100. * fabs(1. / m_qOverR);
 }
 
-float TrackSeed_v2::get_theta() const
+float TrackSeed_v3::get_theta() const
 {
   float theta = atan(1. / m_slope);
   /// Normalize to 0<theta<pi
@@ -88,32 +90,32 @@ float TrackSeed_v2::get_theta() const
   return theta;
 }
 
-float TrackSeed_v2::get_eta() const
+float TrackSeed_v3::get_eta() const
 {
   return -log(tan(get_theta() / 2.));
 }
 
-float TrackSeed_v2::get_p() const
+float TrackSeed_v3::get_p() const
 {
   return get_pt() * std::cosh(get_eta());
 }
 
-float TrackSeed_v2::get_px() const
+float TrackSeed_v3::get_px() const
 {
   return get_pt() * std::cos(m_phi);
 }
 
-float TrackSeed_v2::get_py() const
+float TrackSeed_v3::get_py() const
 {
   return get_pt() * std::sin(m_phi);
 }
 
-float TrackSeed_v2::get_pz() const
+float TrackSeed_v3::get_pz() const
 {
   return get_p() * std::cos(get_theta());
 }
 
-int TrackSeed_v2::get_charge() const
+int TrackSeed_v3::get_charge() const
 {
   return (m_qOverR < 0) ? -1 : 1;
 }

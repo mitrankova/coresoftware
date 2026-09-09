@@ -20,7 +20,7 @@
 #include <trackbase_historic/SvtxTrackSeed_v1.h>
 #include <trackbase_historic/TrackSeedContainer_v1.h>
 #include <trackbase_historic/TrackSeed_FastSim_v2.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 
 #include <g4main/PHG4Hit.h>  // for PHG4Hit

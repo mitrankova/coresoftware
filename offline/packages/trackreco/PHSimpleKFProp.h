@@ -204,9 +204,9 @@ class PHSimpleKFProp : public SubsysReco
 
   std::unique_ptr<ALICEKF> fitter;
 
-  void rejectAndPublishSeeds(std::vector<TrackSeed_v2>& seeds, const PositionMap& positions, std::vector<float>& trackChi2);
+  void rejectAndPublishSeeds(std::vector<TrackSeed_v3>& seeds, const PositionMap& positions, std::vector<float>& trackChi2);
 
-  void publishSeeds(const std::vector<TrackSeed_v2>&);
+  void publishSeeds(const std::vector<TrackSeed_v3>&);
 
   int _max_propagation_steps = 200;
 

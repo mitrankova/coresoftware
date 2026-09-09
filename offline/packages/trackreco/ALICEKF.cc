@@ -475,7 +475,7 @@ TrackSeedAliceSeedMap ALICEKF::ALICEKalmanFilter(const std::vector<keylist>& tra
 {
   //  TFile* f = new TFile("/sphenix/u/mjpeters/macros_hybrid/detectors/sPHENIX/pull.root", "RECREATE");
   //  TNtuple* ntp = new TNtuple("pull","pull","cx:cy:cz:xerr:yerr:zerr:tx:ty:tz:layer:xsize:ysize:phisize:phierr:zsize");
-  std::vector<TrackSeed_v2> seeds_vector;
+  std::vector<TrackSeed_v3> seeds_vector;
   std::vector<GPUTPCTrackParam> alice_seeds_vector;
   int nseeds = 0;
   int ncandidates = -1;
@@ -737,7 +737,7 @@ TrackSeedAliceSeedMap ALICEKF::ALICEKalmanFilter(const std::vector<keylist>& tra
     {
       continue;
     }
-    TrackSeed_v2 track;
+    TrackSeed_v3 track;
     //    track.set_vertex_id(_vertex_ids[best_vtx]);
     for (unsigned long j : outputKeyChain)
     {

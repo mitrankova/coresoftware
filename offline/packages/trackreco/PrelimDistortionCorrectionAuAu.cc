@@ -30,7 +30,7 @@
 
 #include <trackbase_historic/ActsTransformations.h>
 #include <trackbase_historic/TrackSeedContainer.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 
 #include <Geant4/G4SystemOfUnits.hh>
@@ -285,7 +285,7 @@ int PrelimDistortionCorrectionAuAu::process_event(PHCompositeNode* /*topNode*/)
 }
 
 //____________________________________________________________________________________________________________
-void PrelimDistortionCorrectionAuAu::publishSeeds(std::vector<TrackSeed_v2>& seeds, const PrelimDistortionCorrectionAuAu::PositionMap& positions) const
+void PrelimDistortionCorrectionAuAu::publishSeeds(std::vector<TrackSeed_v3>& seeds, const PrelimDistortionCorrectionAuAu::PositionMap& positions) const
 {
   int seed_index = 0;
   for(auto& seed: seeds )
