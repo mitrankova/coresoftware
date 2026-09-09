@@ -23,7 +23,7 @@
 #include <trackbase_historic/SvtxTrackMap.h>
 #include <trackbase_historic/SvtxTrackMap_v2.h>
 #include <trackbase_historic/SvtxTrackState_v1.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 
 #include <globalvertex/SvtxVertex.h>
@@ -154,7 +154,7 @@ int PHActsGSF::process_event(PHCompositeNode* topNode)
     }
     const auto seed = makeSeed(track, pSurface);
 
-    auto svtxseed = new TrackSeed_v2();
+    auto svtxseed = new TrackSeed_v3();
     std::map<TrkrDefs::cluskey, Acts::Vector3> clusterPositions;
     for (auto& cKey : get_cluster_keys(track))
     {

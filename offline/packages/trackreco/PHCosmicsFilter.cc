@@ -26,7 +26,7 @@
 #include <trackbase_historic/TrackSeed.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedContainer_v1.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 // sPHENIX includes
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -262,7 +262,7 @@ int PHCosmicsFilter::process_event(PHCompositeNode* topNode)
   }
     
   _nevent++;
-  std::vector<TrackSeed_v2> clean_chains;
+  std::vector<TrackSeed_v3> clean_chains;
   //Fill rtree
   bgi::rtree<pointKey, bgi::quadratic<16> > rtree;
 
@@ -524,14 +524,14 @@ int PHCosmicsFilter::process_event(PHCompositeNode* topNode)
     //Assemble tracks
     if(_create_tracks){
       if(trkclusters.size()>=20){
-	auto trackseed = std::make_unique<TrackSeed_v2>();
+	auto trackseed = std::make_unique<TrackSeed_v3>();
 	for(const auto& cluskeys:trkclusters){
 	  //      for(vector<pointKey>::iterator cluskeys =trkclusters.begin();cluskeys!=trkclusters.end();trkclusters++){
 	  
 	  trackseed->insert_cluster_key(cluskeys.second);
 	}
 	//    clean_chains.push_back(trackseed);
-	// auto pseed = std::make_unique<TrackSeed_v2>(trackseed);
+	// auto pseed = std::make_unique<TrackSeed_v3>(trackseed);
 	m_seedContainer->insert(trackseed.get()); 
 	cout << "number trk keys is " << trackseed->size_cluster_keys() << endl;
 	numberofseeds++;

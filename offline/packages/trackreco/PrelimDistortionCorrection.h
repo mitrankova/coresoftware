@@ -28,7 +28,7 @@ class TpcDistortionCorrectionContainer;
 class TrkrClusterContainer;
 class SvtxTrackMap;
 class TrackSeedContainer;
-class TrackSeed_v2;
+class TrackSeed_v3;
 
 class PrelimDistortionCorrection : public SubsysReco
 {
@@ -70,7 +70,7 @@ class PrelimDistortionCorrection : public SubsysReco
 
   //! put refitted seeds on map
   using PositionMap = std::map<TrkrDefs::cluskey, Acts::Vector3>;
-  void publishSeeds(std::vector<TrackSeed_v2>& seeds, const PositionMap &positions) const;
+  void publishSeeds(std::vector<TrackSeed_v3>& seeds, const PositionMap &positions) const;
 
   /// tpc distortion correction utility class
   TpcDistortionCorrection m_distortionCorrection;

@@ -9,7 +9,7 @@
 #include <trackbase/TrkrDefs.h>  // for cluskey, getLayer, TrkrId
 
 #include <trackbase_historic/TrackSeed.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 

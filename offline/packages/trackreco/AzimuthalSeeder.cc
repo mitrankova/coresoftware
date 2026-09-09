@@ -17,7 +17,7 @@
 #include <trackbase_historic/TrackSeed.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedContainer_v1.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedHelper.h>
 
 #include <TFile.h>
@@ -182,7 +182,7 @@ int AzimuthalSeeder::process_event(PHCompositeNode * /*unused*/)
     {
       continue;
     }
-    std::unique_ptr<TrackSeed_v2> si_seed = std::make_unique<TrackSeed_v2>();
+    std::unique_ptr<TrackSeed_v3> si_seed = std::make_unique<TrackSeed_v3>();
     for (auto &key : s.ckeys)
     {
       si_seed->insert_cluster_key(key);

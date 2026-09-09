@@ -15,7 +15,7 @@
 #include <trackbase_historic/ActsTransformations.h>
 #include <trackbase_historic/SvtxTrack.h>  // for SvtxTrack, SvtxTrack::C...
 #include <trackbase_historic/SvtxTrackMap_v2.h>
-#include <trackbase_historic/TrackSeed_v2.h>
+#include <trackbase_historic/TrackSeed_v3.h>
 
 #include <Acts/Geometry/GeometryIdentifier.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
