@@ -26,7 +26,9 @@ enum class TpcCrossingStatus : unsigned char
   NoValidCrossing = 12,
   SelectedByVertexAmbiguous = 13,
   SelectedByVertexLoose = 14,
-  SelectedByContainmentAmbiguous = 15
+  SelectedByContainmentAmbiguous = 15,
+  SelectedBySiliconTrack = 16,
+  SiliconTrackIncompatible = 17
 };
 
 enum class TpcCrossingCandidateStage : unsigned char
