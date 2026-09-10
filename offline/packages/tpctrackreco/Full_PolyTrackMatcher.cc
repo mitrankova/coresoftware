@@ -25,6 +25,7 @@
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrClusterCrossingAssoc.h>
 #include <trackbase/TrkrDefs.h>
+#include <trackbase/TpcDefs.h>
 
 #include <TFile.h>
 #include <TH1F.h>
@@ -382,15 +383,15 @@ Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::makeTpcReferenceTr
     }
 
     const Tpc_PolyCluster* cluster = clusterIter->second;
-    const auto centered = m_beamFrame.toBeamFrame(
-        m_beamFrame.tpcBeamLine(), cluster->get_centroid_x(),
-        cluster->get_centroid_y(), cluster->get_centroid_z());
     SpacePoint point;
     point.key = key;
     point.layer = TrkrDefs::getLayer(key);
-    point.x = centered.x;
-    point.y = centered.y;
-    point.z = centered.z;
+    // Keep TPC coordinates in their native detector frame. Only silicon is
+    // transformed into its beam frame. Correct the measured Si-TPC z0 offset
+    // before constructing the TPC reference trajectory.
+    point.x = cluster->get_centroid_x();
+    point.y = cluster->get_centroid_y();
+    point.z = cluster->get_centroid_z() + m_tpcZOffset;
     point.r = std::hypot(point.x, point.y);
     point.phi = std::atan2(point.y, point.x);
     if (std::isfinite(point.x) && std::isfinite(point.y) &&
@@ -749,29 +750,30 @@ void Full_PolyTrackMatcher::refitSiliconTrajectoryFromMvtx(Chain& chain) const
 
 void Full_PolyTrackMatcher::refitSiliconTrajectoryFromHits(Chain& chain) const
 {
-  if (chain.hits.size() < 2U)
-  {
-    return;
-  }
-
-  std::vector<SpacePoint> fit_points;
-  fit_points.reserve(chain.hits.size());
+  std::vector<ChainHit> mvtx_hits;
+  mvtx_hits.reserve(chain.hits.size());
   for (const ChainHit& hit : chain.hits)
   {
-    fit_points.push_back(hit.point);
+    if (static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(hit.point.key)) == TrkrDefs::mvtxId)
+    {
+      mvtx_hits.push_back(hit);
+    }
   }
-
-  TrajectoryState refit = fitTrajectory(fit_points);
-  if (!refit.valid)
+  if (mvtx_hits.size() < 2U)
   {
     return;
   }
 
-  refit.use_tpc_seed = false;
-  refit.use_silicon_seed = true;
-  refit.seed_z0 = chain.si_reference.seed_z0;
-  chain.state = refit;
-  chain.fit_points = fit_points;
+  // Do not perform a free circle refit. Translate a circle whose signed
+  // curvature is inherited from the TPC seed to minimize the MVTX residuals.
+  const double tpc_q_over_r = chain.si_reference.seed_q_over_r;
+  TrajectoryState adjusted = correctSiliconSeedWithAllHits(chain.si_reference, mvtx_hits);
+  if (adjusted.valid)
+  {
+    adjusted.seed_q_over_r = tpc_q_over_r;
+    chain.si_reference = adjusted;
+    chain.state = adjusted;
+  }
 }
 
 Full_PolyTrackMatcher::TrajectoryState Full_PolyTrackMatcher::fitTrajectory(const std::vector<SpacePoint>& points) const
@@ -947,6 +949,7 @@ bool Full_PolyTrackMatcher::computeChainDcaMetrics(Chain& chain, const Trajector
 
   const double tpc_eta0 = thetaToEta(tpc_theta0);
   const double silicon_eta0 = thetaToEta(silicon_theta0);
+  chain.signed_delta_eta0 = silicon_eta0 - tpc_eta0;
   chain.delta_eta0 = std::fabs(silicon_eta0 - tpc_eta0);
 
   const double phi_scale = SeedPhiWindow;
@@ -1761,7 +1764,11 @@ const Full_PolyTrackMatcher::Chain* Full_PolyTrackMatcher::selectBestChain(const
     {
       continue;
     }
-    if (!std::isfinite(chain.dca_score))
+    if (!std::isfinite(chain.dca_score) || chain.dca_score >= m_maxChainDcaScore)
+    {
+      continue;
+    }
+    if (!std::isfinite(chain.delta_eta0) || chain.delta_eta0 >= m_maxChainDeltaEta)
     {
       continue;
     }
@@ -1786,11 +1793,15 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
     return out;
   }
 
+  // INTT is optional supporting information. Freeze the MVTX-selected
+  // trajectory so no INTT hit can steer a later INTT layer.
+  const TrajectoryState intt_reference = mvtx_chain.state;
+
   for (const unsigned int layer : m_inttMatchLayers)
   {
     const SpacePoint* best_point = nullptr;
     ChainHit best_hit;
-    double best_chi2 = std::numeric_limits<double>::max();
+    double best_score = std::numeric_limits<double>::max();
 
     for (const SpacePoint& point : silicon_points)
     {
@@ -1803,7 +1814,7 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
       double pred_z = 0.0;
       double pred_x = 0.0;
       double pred_y = 0.0;
-      if (!predictAtRadius(out.si_reference, point.r, pred_phi, pred_z, pred_x, pred_y))
+      if (!predictAtRadius(intt_reference, point.r, pred_phi, pred_z, pred_x, pred_y))
       {
         continue;
       }
@@ -1811,29 +1822,25 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
       const double dphi = wrapPhi(point.phi - pred_phi);
       const double rdphi = point.r * dphi;
       const double dz = point.z - pred_z;
-      if (std::fabs(rdphi) > m_looseRdphiWindow || std::fabs(dz) > m_inttDzWindow)
+      if (std::fabs(rdphi) > m_inttRdphiWindow || std::fabs(dz) > m_inttDzWindow)
       {
         continue;
       }
 
       const double pred_theta = std::atan2(point.r, pred_z);
       const double dtheta = pointTheta(point) - pred_theta;
-      const double mean_phi = dynamicMeanPhi(layer, out.previous_dphi, out.has_previous_residual);
-      const double mean_theta = dynamicMeanTheta(layer, out.previous_dtheta, out.has_previous_residual);
+      const double mean_phi = dynamicMeanPhi(layer, mvtx_chain.previous_dphi, mvtx_chain.has_previous_residual);
+      const double mean_theta = dynamicMeanTheta(layer, mvtx_chain.previous_dtheta, mvtx_chain.has_previous_residual);
       const double sigma_phi = dynamicSigmaPhi(out.pt);
       const double sigma_theta = dynamicSigmaTheta(out.pt, pred_theta);
       const double sdphi = (dphi - mean_phi) / sigma_phi;
       const double sdtheta = (dtheta - mean_theta) / sigma_theta;
-      if (!m_associationCalibrationMode &&
-          (std::fabs(sdphi) > m_phiWindowSigma || std::fabs(sdtheta) > m_thetaWindowSigma))
-      {
-        continue;
-      }
-
+      // Standardized residuals and dtheta are retained for QA only.
       const double chi2 = square(sdphi) + square(sdtheta);
-      if (chi2 < best_chi2)
+      const double score = std::fabs(rdphi);
+      if (score < best_score)
       {
-        best_chi2 = chi2;
+        best_score = score;
         best_point = &point;
         best_hit.point = point;
         best_hit.pred_phi = pred_phi;
@@ -1883,11 +1890,9 @@ Full_PolyTrackMatcher::Chain Full_PolyTrackMatcher::attachClosestInttClusters(
     if (best_point)
     {
       fillQaResiduals(track, out, best_hit);
-      out = extendWithHit(out, best_hit);
-    }
-    else
-    {
-      out = extendMissing(out, layer);
+      // Preserve the MVTX trajectory, score, DCA metrics, missing-layer
+      // state, and residual history; attach only the INTT hit and QA state.
+      out.hits.push_back(best_hit);
     }
   }
 
@@ -1956,9 +1961,121 @@ void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chai
       m_hChainDcaScore->SetDirectory(nullptr);
       m_hChainDeltaEta0 = new TH1F("h_chain_delta_eta0", "selected chain #Delta#eta_{0};#Delta#eta_{0};tracks", 120, 0.0, 0.3);
       m_hChainDeltaEta0->SetDirectory(nullptr);
+      m_hChainSignedDz0VsSiZ0 = new TH2F(
+          "h_chain_signed_dz0_vs_si_z0",
+          "selected chain signed #Deltaz_{0} vs Si z_{0};Si seed z_{0} [cm];z_{0}^{Si}-z_{0}^{TPC} [cm]",
+          240, -20.0, 20.0, 200, -10.0, 10.0);
+      m_hChainSignedDz0VsSiZ0->SetDirectory(nullptr);
+      m_hChainSignedDeta0VsSiZ0 = new TH2F(
+          "h_chain_signed_deta0_vs_si_z0",
+          "selected chain signed #Delta#eta_{0} vs Si z_{0};Si seed z_{0} [cm];#eta_{0}^{Si}-#eta_{0}^{TPC}",
+          240, -20.0, 20.0, 200, -0.5, 0.5);
+      m_hChainSignedDeta0VsSiZ0->SetDirectory(nullptr);
+      m_hChainSignedDz0VsSiZ0South = new TH2F(
+          "h_chain_signed_dz0_vs_si_z0_south",
+          "selected south-TPC chain signed #Deltaz_{0} vs Si z_{0};Si seed z_{0} [cm];z_{0}^{Si}-z_{0}^{TPC} [cm]",
+          240, -20.0, 20.0, 200, -10.0, 10.0);
+      m_hChainSignedDz0VsSiZ0South->SetDirectory(nullptr);
+      m_hChainSignedDz0VsSiZ0North = new TH2F(
+          "h_chain_signed_dz0_vs_si_z0_north",
+          "selected north-TPC chain signed #Deltaz_{0} vs Si z_{0};Si seed z_{0} [cm];z_{0}^{Si}-z_{0}^{TPC} [cm]",
+          240, -20.0, 20.0, 200, -10.0, 10.0);
+      m_hChainSignedDz0VsSiZ0North->SetDirectory(nullptr);
+      m_hChainSignedDeta0VsSiZ0South = new TH2F(
+          "h_chain_signed_deta0_vs_si_z0_south",
+          "selected south-TPC chain signed #Delta#eta_{0} vs Si z_{0};Si seed z_{0} [cm];#eta_{0}^{Si}-#eta_{0}^{TPC}",
+          240, -20.0, 20.0, 200, -0.5, 0.5);
+      m_hChainSignedDeta0VsSiZ0South->SetDirectory(nullptr);
+      m_hChainSignedDeta0VsSiZ0North = new TH2F(
+          "h_chain_signed_deta0_vs_si_z0_north",
+          "selected north-TPC chain signed #Delta#eta_{0} vs Si z_{0};Si seed z_{0} [cm];#eta_{0}^{Si}-#eta_{0}^{TPC}",
+          240, -20.0, 20.0, 200, -0.5, 0.5);
+      m_hChainSignedDeta0VsSiZ0North->SetDirectory(nullptr);
+      m_hChainSignedDphi0VsTpcPhi0 = new TH2F(
+          "h_chain_signed_dphi0_vs_tpc_phi0",
+          "selected chain signed #Delta#phi_{0} vs TPC #phi_{0};TPC seed #phi_{0} [rad];#phi_{0}^{Si}-#phi_{0}^{TPC} [rad]",
+          180, -M_PI, M_PI, 200, -0.3, 0.3);
+      m_hChainSignedDphi0VsTpcPhi0->SetDirectory(nullptr);
     }
     m_hChainDcaScore->Fill(chain.dca_score);
     m_hChainDeltaEta0->Fill(chain.delta_eta0);
+    const double silicon_z0 = trajectoryZ0NearBeam(chain.state);
+    unsigned int tpc_side = 2U;
+    for (unsigned int i = 0; i < tpc_track.size_cluster_keys(); ++i)
+    {
+      const TrkrDefs::cluskey key = tpc_track.get_cluster_key(i);
+      if (TrkrDefs::getTrkrId(key) == TrkrDefs::tpcId)
+      {
+        tpc_side = TpcDefs::getSide(key);
+        break;
+      }
+    }
+    if (std::isfinite(silicon_z0) && std::isfinite(chain.signed_delta_z0))
+    {
+      m_hChainSignedDz0VsSiZ0->Fill(silicon_z0, chain.signed_delta_z0);
+      if (tpc_side == 0U) m_hChainSignedDz0VsSiZ0South->Fill(silicon_z0, chain.signed_delta_z0);
+      if (tpc_side == 1U) m_hChainSignedDz0VsSiZ0North->Fill(silicon_z0, chain.signed_delta_z0);
+    }
+    if (std::isfinite(silicon_z0) && std::isfinite(chain.signed_delta_eta0))
+    {
+      m_hChainSignedDeta0VsSiZ0->Fill(silicon_z0, chain.signed_delta_eta0);
+      if (tpc_side == 0U) m_hChainSignedDeta0VsSiZ0South->Fill(silicon_z0, chain.signed_delta_eta0);
+      if (tpc_side == 1U) m_hChainSignedDeta0VsSiZ0North->Fill(silicon_z0, chain.signed_delta_eta0);
+    }
+
+    const double tpc_phi0 = trajectoryPhi0NearBeam(chain.tpc_reference);
+    if (std::isfinite(tpc_phi0) && std::isfinite(chain.signed_delta_phi0))
+    {
+      m_hChainSignedDphi0VsTpcPhi0->Fill(wrapPhi(tpc_phi0), chain.signed_delta_phi0);
+    }
+
+    const auto fill_vertex_correlations = [&](const std::string& detector,
+                                               const std::string& frame,
+                                               double vx, double vy, double vz) {
+      if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(vz))
+      {
+        return;
+      }
+      const std::string prefix = "h_seed_vertex_" + detector + "_" + frame;
+      const std::string label = detector == "tpc" ? "TPC" : "Si";
+      const std::string frame_label = detector == "tpc" ?
+          "TPC detector frame (no beam transform)" :
+          (frame == "before_beam_frame" ? "before shared beam frame" : "after shared beam frame");
+      auto get_hist = [&](const std::string& suffix, const std::string& axes,
+                          int xbins, double xmin, double xmax,
+                          int ybins, double ymin, double ymax) {
+        const std::string key = prefix + "_" + suffix;
+        auto found = m_hSeedVertexCorrelations.find(key);
+        if (found != m_hSeedVertexCorrelations.end())
+        {
+          return found->second;
+        }
+        const std::string title = label + " seed vertex " + frame_label + ";" + axes;
+        TH2F* hist = new TH2F(key.c_str(), title.c_str(), xbins, xmin, xmax, ybins, ymin, ymax);
+        hist->SetDirectory(nullptr);
+        m_hSeedVertexCorrelations[key] = hist;
+        return hist;
+      };
+      get_hist("vx_vs_vy", "v_{x} [cm];v_{y} [cm]", 200, -1.0, 1.0, 200, -1.0, 1.0)->Fill(vx, vy);
+      get_hist("vx_vs_vz", "v_{x} [cm];v_{z} [cm]", 200, -1.0, 1.0, 240, -20.0, 20.0)->Fill(vx, vz);
+      get_hist("vy_vs_vz", "v_{y} [cm];v_{z} [cm]", 200, -1.0, 1.0, 240, -20.0, 20.0)->Fill(vy, vz);
+    };
+
+    const double tpc_z_aligned = tpc_track.get_z() + m_tpcZOffset;
+    fill_vertex_correlations("tpc", "before_beam_frame",
+                             tpc_track.get_x(), tpc_track.get_y(), tpc_z_aligned);
+    // Preserve the existing QA histogram name for compatibility. Both TPC
+    // histograms now contain the untransformed detector-frame coordinates.
+    fill_vertex_correlations("tpc", "after_beam_frame",
+                             tpc_track.get_x(), tpc_track.get_y(), tpc_z_aligned);
+
+    const double si_vx_after = chain.state.seed_x0;
+    const double si_vy_after = chain.state.seed_y0;
+    const auto& mvtx_beam = m_beamFrame.mvtxBeamLine();
+    const double si_vx_before = si_vx_after + mvtx_beam.x0 + mvtx_beam.dxdz * silicon_z0;
+    const double si_vy_before = si_vy_after + mvtx_beam.y0 + mvtx_beam.dydz * silicon_z0;
+    fill_vertex_correlations("si", "before_beam_frame", si_vx_before, si_vy_before, silicon_z0);
+    fill_vertex_correlations("si", "after_beam_frame", si_vx_after, si_vy_after, silicon_z0);
 
     if (std::isfinite(chain.signed_delta_phi0) && std::isfinite(chain.signed_delta_z0) &&
         std::isfinite(chain.signed_delta_theta0) && std::isfinite(chain.pt))
@@ -2010,8 +2127,10 @@ void Full_PolyTrackMatcher::fillTrack(const Tpc_PolyTrack& tpc_track, const Chai
 bool Full_PolyTrackMatcher::passesTpcAssociationCuts(const Tpc_PolyTrack& tpc_track) const
 {
   const double pt = std::hypot(tpc_track.get_px(), tpc_track.get_py());
+  const double pca_r = std::hypot(tpc_track.get_x(), tpc_track.get_y());
   return tpc_track.get_nclusters() > m_tpcAssociationClusterCut &&
-         std::isfinite(pt) && pt > m_tpcAssociationPtCut;
+         std::isfinite(pt) && pt > m_tpcAssociationPtCut &&
+         std::isfinite(pca_r) && pca_r < m_tpcAssociationPcaRCut;
 }
 
 int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
@@ -2043,19 +2162,11 @@ int Full_PolyTrackMatcher::process_event(PHCompositeNode* topNode)
 
     std::vector<Chain> chains = buildChains(*tpc_track, silicon_points);
     const Chain* best = selectBestChain(chains);
-    Chain unmatched_chain;
-    const Chain* selected_chain = best;
-    if (!selected_chain)
-    {
-      selected_chain = chains.empty() ? &unmatched_chain : &chains.front();
-    }
-
-    Chain output_chain = *selected_chain;
+    Chain output_chain;
     if (best)
     {
       output_chain = attachClosestInttClusters(*tpc_track, *best, silicon_points);
       fillQaCrossing(*tpc_track, output_chain);
-      refitSiliconTrajectoryFromHits(output_chain);
     }
     fillTrack(*tpc_track, output_chain);
   }
@@ -2105,6 +2216,13 @@ int Full_PolyTrackMatcher::End(PHCompositeNode*)
         item.second->Write();
       }
     }
+    for (auto& item : m_hSeedVertexCorrelations)
+    {
+      if (item.second)
+      {
+        item.second->Write();
+      }
+    }
     if (m_hInttCrossingVsTpcCrossing)
     {
       m_hInttCrossingVsTpcCrossing->Write();
@@ -2125,6 +2243,19 @@ int Full_PolyTrackMatcher::End(PHCompositeNode*)
     {
       m_hChainDeltaEta0->Write();
     }
+    if (m_hChainSignedDz0VsSiZ0)
+    {
+      m_hChainSignedDz0VsSiZ0->Write();
+    }
+    if (m_hChainSignedDeta0VsSiZ0)
+    {
+      m_hChainSignedDeta0VsSiZ0->Write();
+    }
+    if (m_hChainSignedDz0VsSiZ0South) m_hChainSignedDz0VsSiZ0South->Write();
+    if (m_hChainSignedDz0VsSiZ0North) m_hChainSignedDz0VsSiZ0North->Write();
+    if (m_hChainSignedDeta0VsSiZ0South) m_hChainSignedDeta0VsSiZ0South->Write();
+    if (m_hChainSignedDeta0VsSiZ0North) m_hChainSignedDeta0VsSiZ0North->Write();
+    if (m_hChainSignedDphi0VsTpcPhi0) m_hChainSignedDphi0VsTpcPhi0->Write();
 
     std::cout << Name() << "::End - association calibration summary" << std::endl;
     for (unsigned int layer = 0; layer < m_dynamicPhiMeanOffset.size(); ++layer)

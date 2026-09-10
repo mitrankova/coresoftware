@@ -53,6 +53,7 @@ class Full_PolyTrackMatcher : public SubsysReco
   void setWriteQA(bool v) { m_writeQA = v; }
   void setTpcBeamLine(double x0, double dxdz, double y0, double dydz)
   { m_beamFrame.setTpcBeamLine({x0, dxdz, y0, dydz}); }
+  void setTpcZOffset(double v) { m_tpcZOffset = v; }
   void setMvtxBeamLine(double x0, double dxdz, double y0, double dydz)
   { m_beamFrame.setMvtxBeamLine({x0, dxdz, y0, dydz}); }
   void setInttBeamLine(double x0, double dxdz, double y0, double dydz)
@@ -64,6 +65,7 @@ class Full_PolyTrackMatcher : public SubsysReco
     m_looseDzWindow = dz;
   }
   void setInttDzWindow(double dz) { m_inttDzWindow = dz; }
+  void setInttRdphiWindow(double v) { m_inttRdphiWindow = v; }
   void setSeedThetaWindow(double theta) { m_seedThetaWindow = theta; }
   void setResidualSigma(double rdphi, double dz)
   {
@@ -71,11 +73,14 @@ class Full_PolyTrackMatcher : public SubsysReco
     m_sigmaDz = dz;
   }
   void setMissingLayerPenalty(double v) { m_missingLayerPenalty = v; }
+  void setMaxChainDcaScore(double v) { m_maxChainDcaScore = v; }
+  void setMaxChainDeltaEta(double v) { m_maxChainDeltaEta = v; }
   void setMaxBranchesPerLayer(unsigned int v) { m_maxBranchesPerLayer = v; }
   void setMaxChains(unsigned int v) { m_maxChains = v; }
   void setMinSiliconClusters(unsigned int v) { m_minSiliconClusters = v; }
   void setTpcAssociationClusterCut(unsigned int v) { m_tpcAssociationClusterCut = v; }
   void setTpcAssociationPtCut(double v) { m_tpcAssociationPtCut = v; }
+  void setTpcAssociationPcaRCut(double v) { m_tpcAssociationPcaRCut = v; }
   void setTpcAssociationCuts(unsigned int nclusters, double pt)
   {
     m_tpcAssociationClusterCut = nclusters;
@@ -208,6 +213,7 @@ class Full_PolyTrackMatcher : public SubsysReco
     double signed_delta_phi0{std::numeric_limits<double>::quiet_NaN()};
     double signed_delta_z0{std::numeric_limits<double>::quiet_NaN()};
     double signed_delta_theta0{std::numeric_limits<double>::quiet_NaN()};
+    double signed_delta_eta0{std::numeric_limits<double>::quiet_NaN()};
     double delta_eta0{std::numeric_limits<double>::max()};
     double dca_score{std::numeric_limits<double>::max()};
     unsigned int missing_mask{0};
@@ -294,10 +300,13 @@ class Full_PolyTrackMatcher : public SubsysReco
   ActsGeometry* m_actsGeometry{nullptr};
   Full_PolyTrackContainer* m_fullTracks{nullptr};
   BeamFrameTransform m_beamFrame;
+  // Additive correction applied to TPC cluster z before the TPC trajectory fit.
+  double m_tpcZOffset{-0.8};
 
   bool m_writeQA{true};
-  double m_looseRdphiWindow{0.2};
+  double m_looseRdphiWindow{0.15};
   double m_looseDzWindow{0.5};
+  double m_inttRdphiWindow{0.15};
   double m_inttDzWindow{1.0};
   double m_seedThetaWindow{0.02};
   double m_sigmaRdphi{0.15};
@@ -307,6 +316,8 @@ class Full_PolyTrackMatcher : public SubsysReco
   double m_phiWindowSigma{3.0};
   double m_thetaWindowSigma{3.0};
   double m_missingLayerPenalty{6.0};
+  double m_maxChainDcaScore{5.0};
+  double m_maxChainDeltaEta{0.2};
   bool m_useSagittaPhiFit{true};
   bool m_useDynamicResiduals{true};
   bool m_associationCalibrationMode{true};
@@ -323,15 +334,21 @@ class Full_PolyTrackMatcher : public SubsysReco
   //std::array<double, 3> m_vertexPhiSigma{{0.151292, 0.432065, 1.0}};
   //std::array<double, 3> m_vertexThetaMean{{0.000464562, 0.00318868, 0.0}};
   //std::array<double, 3> m_vertexThetaSigma{{0.218231, 0.200289, 1.0}};
-  std::array<double, 3> m_vertexPhiMean{{0.0308276, 0.0428512, 0}};
-std::array<double, 3> m_vertexPhiSigma{{0.614756, 0.403372, 1}};
-std::array<double, 3> m_vertexThetaMean{{0.000269806, 0.00231699, 0}};
-std::array<double, 3> m_vertexThetaSigma{{0.19255, 0.181783, 1}};
+//  std::array<double, 3> m_vertexPhiMean{{0.0308276, 0.0428512, 0}};
+//std::array<double, 3> m_vertexPhiSigma{{0.614756, 0.403372, 1}};
+//std::array<double, 3> m_vertexThetaMean{{0.000269806, 0.00231699, 0}};
+//std::array<double, 3> m_vertexThetaSigma{{0.19255, 0.181783, 1}};
+
+std::array<double, 3> m_vertexPhiMean{{0.00720456, 0.00108784, 0}};
+std::array<double, 3> m_vertexPhiSigma{{0.56235, 1.17511, 1}};
+std::array<double, 3> m_vertexThetaMean{{0.000410664, 0.00323673, 0}};
+std::array<double, 3> m_vertexThetaSigma{{0.209156, 0.193329, 1}};
   unsigned int m_maxBranchesPerLayer{8};
   unsigned int m_maxChains{256};
   unsigned int m_minSiliconClusters{0};
   unsigned int m_tpcAssociationClusterCut{20};
   double m_tpcAssociationPtCut{0.1};
+  double m_tpcAssociationPcaRCut{5.0};
   std::vector<unsigned int> m_matchLayers{2, 1, 0};
   std::vector<unsigned int> m_inttMatchLayers{3, 4, 5, 6};
   std::vector<unsigned int> m_siliconSearchLayers{6, 5, 4, 3, 2, 1, 0};
@@ -350,11 +367,19 @@ std::array<double, 3> m_vertexThetaSigma{{0.19255, 0.181783, 1}};
   std::map<std::string, TH3F*> m_hResidualSiVsTpc;
   std::map<std::string, TH1F*> m_hStandardResidual;
   std::map<std::string, TProfile*> m_hChainSignedResidualVsPt;
+  std::map<std::string, TH2F*> m_hSeedVertexCorrelations;
   TH2F* m_hInttCrossingVsTpcCrossing{nullptr};
   TH1F* m_hDeltaCrossing{nullptr};
   TH1F* m_hCrossingStatus{nullptr};
   TH1F* m_hChainDcaScore{nullptr};
   TH1F* m_hChainDeltaEta0{nullptr};
+  TH2F* m_hChainSignedDz0VsSiZ0{nullptr};
+  TH2F* m_hChainSignedDeta0VsSiZ0{nullptr};
+  TH2F* m_hChainSignedDz0VsSiZ0South{nullptr};
+  TH2F* m_hChainSignedDz0VsSiZ0North{nullptr};
+  TH2F* m_hChainSignedDeta0VsSiZ0South{nullptr};
+  TH2F* m_hChainSignedDeta0VsSiZ0North{nullptr};
+  TH2F* m_hChainSignedDphi0VsTpcPhi0{nullptr};
 };
 
 #endif
