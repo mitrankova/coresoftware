@@ -32,11 +32,13 @@ pkginclude_HEADERS = \
   Tpc_AssembledTrackContainer.h \
   Tpc_AssembledTrackContainerv1.h \
   Tpc_AssembledTrackReco.h \
+  TpcCrossingClusterCorrector.h \
   TpcCrossingDecision.h \
   TpcCrossingDecisionv1.h \
   TpcCrossingDecisionContainer.h \
   TpcCrossingDecisionContainerv1.h \
   TpcCrossingFinder.h \
+  TpcSiliconCrossingRefiner.h \
   Tpc_PolyTrack.h \
   Tpc_PolyTrackv1.h \
   Tpc_PolyTrackContainer.h \
@@ -106,9 +108,11 @@ libtpctrackreco_la_SOURCES = \
   Tpc_AssembledTrackv1.cc \
   Tpc_AssembledTrackContainerv1.cc \
   Tpc_AssembledTrackReco.cc \
+  TpcCrossingClusterCorrector.cc \
   TpcCrossingDecisionv1.cc \
   TpcCrossingDecisionContainerv1.cc \
   TpcCrossingFinder.cc \
+  TpcSiliconCrossingRefiner.cc \
   Tpc_PolyTrackv1.cc \
   Tpc_PolyTrackContainerv1.cc \
   Tpc_PolyTrackVertexv1.cc \
