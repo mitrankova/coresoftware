@@ -498,16 +498,7 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  std::map<unsigned int, int> crossing_by_source_id;
-  const unsigned int ndecisions = m_crossingDecisions ? m_crossingDecisions->size() : 0;
-  for (unsigned int idecision = 0; idecision < ndecisions; ++idecision)
-  {
-    const TpcCrossingDecision* decision = m_crossingDecisions->get_decision(idecision);
-    if (decision)
-    {
-      crossing_by_source_id[decision->get_assembled_track_id()] = decision->get_selected_crossing();
-    }
-  }
+  const unsigned int ndecisions = m_crossingDecisions ? m_crossingDecisions->size() : 0U;
 
   TDirectory* eventsTop = m_outfile->GetDirectory("events");
   if (!eventsTop)
@@ -579,6 +570,15 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
     }
 
     const unsigned int source_id = trk->get_source_assembled_track_id();
+    const TpcCrossingDecision* crossing_decision =
+        m_crossingDecisions ? m_crossingDecisions->get_decision(source_id) : nullptr;
+    if (m_crossingDecisions && !crossing_decision)
+    {
+      continue;
+    }
+    const int crossing = crossing_decision
+                             ? crossing_decision->get_selected_crossing()
+                             : static_cast<int>(source_id);
 
     std::vector<DisplayPoint> points;
     std::vector<DisplayPoint> tpc_points;
@@ -600,6 +600,19 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
         tpc_points.push_back(point);
       }
     }
+
+    // A Full_PolyTrack is a silicon--TPC association. Do not draw its silicon
+    // component unless at least one associated TPC cluster will also be visible.
+    const bool has_visible_tpc_point = std::any_of(
+        tpc_points.begin(), tpc_points.end(), [this](const DisplayPoint& point) {
+          return finite_point(point) && point.z >= m_zmin && point.z <= m_zmax &&
+                 std::fabs(point.x) <= m_xymax && std::fabs(point.y) <= m_xymax;
+        });
+    if (!has_visible_tpc_point)
+    {
+      continue;
+    }
+
     const unsigned int nstates = trk->size_silicon_states();
     for (unsigned int istate = 0; istate < nstates; ++istate)
     {
@@ -679,10 +692,6 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
 
     ++ntracks_selected;
 
-    const auto crossing_iter = crossing_by_source_id.find(source_id);
-    const int crossing = crossing_iter != crossing_by_source_id.end()
-                             ? crossing_iter->second
-                             : static_cast<int>(source_id);
     const int color = crossing_color(crossing);
     const int per_crossing_color = track_color(source_id);
     crossings_to_draw[crossing] = true;
