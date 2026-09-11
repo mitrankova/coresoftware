@@ -34,8 +34,8 @@ class TpcSiliconCrossingRefiner : public SubsysReco
   void setInputCrossingNodeName(const std::string& n) { m_inputCrossingNodeName = n; }
   void setOutputCrossingNodeName(const std::string& n) { m_outputCrossingNodeName = n; }
   void setCrossingPeriodNs(double v) { m_crossingPeriodNs = v; }
-  void setMaxDeltaCrossing(short v) { m_maxDeltaCrossing = v; }
   void setMaximumAbsDeltaZ(double v) { m_maximumAbsDeltaZ = v; }
+  void setCrossingFinderScoreWeight(double v) { m_crossingFinderScoreWeight = v; }
 
  private:
   int getNodes(PHCompositeNode*);
@@ -54,7 +54,7 @@ class TpcSiliconCrossingRefiner : public SubsysReco
   ActsGeometry* m_geometry{nullptr};
   double m_crossingPeriodNs{106.56};
   double m_maximumAbsDeltaZ{5.0};
-  short m_maxDeltaCrossing{10};
+  double m_crossingFinderScoreWeight{1.0};
 };
 
 #endif

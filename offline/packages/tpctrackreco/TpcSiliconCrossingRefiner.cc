@@ -96,31 +96,30 @@ const Tpc_PolyTrack* TpcSiliconCrossingRefiner::findTpcTrack(const unsigned int 
 
 bool TpcSiliconCrossingRefiner::fitSiliconZ0(const Full_PolyTrack& track, double& z0) const
 {
-  std::vector<Tpc_FittingTools::Point> points;
+  std::vector<Tpc_FittingTools::FitPoint> points;
   points.reserve(track.size_silicon_states());
   for (unsigned int i = 0; i < track.size_silicon_states(); ++i)
   {
     const double x = track.get_state_x(i);
     const double y = track.get_state_y(i);
     const double z = track.get_state_z(i);
-    if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z))
+    const double r = std::hypot(x, y);
+    if (std::isfinite(r) && std::isfinite(z))
     {
-      points.push_back({x, y, z});
+      points.emplace_back(r, z);
     }
   }
   if (points.size() < 2U)
   {
     return false;
   }
-  std::sort(points.begin(), points.end(), [](const auto& lhs, const auto& rhs) {
-    return std::hypot(lhs.x, lhs.y) < std::hypot(rhs.x, rhs.y);
-  });
-  Tpc_FittingTools::FitResult fit;
-  if (!Tpc_FittingTools::fit(points, fit) || !std::isfinite(fit.z0))
+
+  const Tpc_FittingTools::LineFit fit = Tpc_FittingTools::fitLine(points);
+  if (!fit.ok || !std::isfinite(fit.intercept))
   {
     return false;
   }
-  z0 = fit.z0;
+  z0 = fit.intercept;
   return true;
 }
 
@@ -171,76 +170,114 @@ int TpcSiliconCrossingRefiner::process_event(PHCompositeNode* topNode)
     }
 
     const double direction = side == 0U ? -1.0 : 1.0;
-    double best_abs_dz = std::numeric_limits<double>::max();
-    double second_abs_dz = std::numeric_limits<double>::max();
-    double best_delta_z = std::numeric_limits<double>::quiet_NaN();
-    short best_crossing = initial_crossing;
     auto* output = new TpcCrossingDecisionv1();
     output->set_assembled_track_id(full->get_source_assembled_track_id());
-    unsigned short ntested = 0U;
-    unsigned short ncompatible = 0U;
-    for (int delta = -static_cast<int>(m_maxDeltaCrossing);
-         delta <= static_cast<int>(m_maxDeltaCrossing); ++delta)
+
+    struct RankedCandidate
     {
-      const int value = static_cast<int>(initial_crossing) + delta;
-      if (value < std::numeric_limits<short>::min() || value > std::numeric_limits<short>::max())
+      TpcCrossingCandidate candidate;
+      double delta_z{0.0};
+      double abs_delta_z{0.0};
+      double score{0.0};
+    };
+    std::vector<RankedCandidate> plausible_candidates;
+    unsigned short ncompatible = 0U;
+    for (unsigned int icandidate = 0; icandidate < input->get_number_of_candidates(); ++icandidate)
+    {
+      const TpcCrossingCandidate* finder_candidate = input->get_candidate(icandidate);
+      if (!finder_candidate)
       {
         continue;
       }
-      const short crossing = static_cast<short>(value);
-      const double corrected_tpc_z0 = tpc_z0 + direction * static_cast<double>(delta) * crossing_z;
+
+      TpcCrossingCandidate candidate = *finder_candidate;
+      candidate.is_selected = false;
+      candidate.candidate_qa_bits &= ~IsSelected;
+      const int candidate_delta = static_cast<int>(candidate.crossing) - static_cast<int>(initial_crossing);
+      const double corrected_tpc_z0 = tpc_z0 + direction * static_cast<double>(candidate_delta) * crossing_z;
       const double delta_z = silicon_z0 - corrected_tpc_z0;
       const double abs_delta_z = std::fabs(delta_z);
 
-      TpcCrossingCandidate candidate;
-      candidate.crossing = crossing;
-      candidate.was_tested = true;
-      candidate.fit_valid = true;
-      candidate.tpc_valid = true;
       candidate.has_silicon_vertex = true;
       candidate.vertex_compatible = abs_delta_z <= m_maximumAbsDeltaZ;
-      ncompatible += candidate.vertex_compatible ? 1U : 0U;
       candidate.tpc_z_at_r0 = static_cast<float>(corrected_tpc_z0);
       candidate.closest_vertex_z = static_cast<float>(silicon_z0);
       candidate.closest_vertex_delta_z = static_cast<float>(delta_z);
       candidate.closest_vertex_abs_delta_z = static_cast<float>(abs_delta_z);
-      output->add_candidate(candidate);
-      ++ntested;
-
-      if (abs_delta_z < best_abs_dz)
+      candidate.candidate_qa_bits |= HasSiliconVertex;
+      if (candidate.vertex_compatible)
       {
-        second_abs_dz = best_abs_dz;
-        best_abs_dz = abs_delta_z;
-        best_delta_z = delta_z;
-        best_crossing = crossing;
+        candidate.candidate_qa_bits |= PassesVertexDz;
       }
-      else if (abs_delta_z < second_abs_dz)
+
+      if (candidate.was_tested && candidate.tpc_valid &&
+          candidate.confidence_tier != std::numeric_limits<unsigned char>::max() &&
+          std::isfinite(candidate.confidence_score))
       {
-        second_abs_dz = abs_delta_z;
+        ncompatible += candidate.vertex_compatible ? 1U : 0U;
+        plausible_candidates.push_back(
+            {candidate, delta_z, abs_delta_z,
+             abs_delta_z + m_crossingFinderScoreWeight * candidate.confidence_score});
       }
     }
 
-    if (!std::isfinite(best_abs_dz))
+    if (plausible_candidates.empty())
     {
       delete output;
       continue;
     }
-    output->set_selected_crossing(best_crossing);
+
+    std::sort(plausible_candidates.begin(), plausible_candidates.end(),
+              [](const RankedCandidate& lhs, const RankedCandidate& rhs) {
+                if (lhs.candidate.vertex_compatible != rhs.candidate.vertex_compatible)
+                {
+                  return lhs.candidate.vertex_compatible;
+                }
+                if (lhs.candidate.confidence_tier != rhs.candidate.confidence_tier)
+                {
+                  return lhs.candidate.confidence_tier < rhs.candidate.confidence_tier;
+                }
+                if (lhs.score != rhs.score)
+                {
+                  return lhs.score < rhs.score;
+                }
+                return lhs.candidate.crossing < rhs.candidate.crossing;
+              });
+
+    RankedCandidate& best = plausible_candidates.front();
+    best.candidate.is_selected = true;
+    best.candidate.candidate_qa_bits |= IsSelected;
+    best.candidate.first_failed_stage = static_cast<unsigned char>(TpcCrossingCandidateStage::Selected);
+    const double second_abs_dz = plausible_candidates.size() > 1U &&
+                                        plausible_candidates[1].candidate.vertex_compatible == best.candidate.vertex_compatible &&
+                                        plausible_candidates[1].candidate.confidence_tier == best.candidate.confidence_tier
+                                    ? plausible_candidates[1].abs_delta_z
+                                    : std::numeric_limits<double>::infinity();
+    for (const RankedCandidate& candidate : plausible_candidates)
+    {
+      output->add_candidate(candidate.candidate);
+    }
+
+    output->set_selected_crossing(best.candidate.crossing);
     output->set_tpc_z0(static_cast<float>(tpc_z0));
     output->set_silicon_vertex_z(static_cast<float>(silicon_z0));
-    output->set_delta_z(static_cast<float>(best_delta_z));
-    output->set_best_abs_delta_z(static_cast<float>(best_abs_dz));
+    output->set_delta_z(static_cast<float>(best.delta_z));
+    output->set_best_abs_delta_z(static_cast<float>(best.abs_delta_z));
     output->set_second_best_abs_delta_z(static_cast<float>(second_abs_dz));
-    output->set_selected_score(static_cast<float>(best_abs_dz));
+    output->set_selected_score(static_cast<float>(best.score));
     // Tpc_PolyClusterizer accepts tiers 0 and 1 by default. Use tier 2 for an
     // incompatible result so the corrector does not silently materialize it.
-    output->set_selected_tier(best_abs_dz <= m_maximumAbsDeltaZ ? 0U : 2U);
-    output->set_number_of_tested_crossings(ntested);
-    output->set_number_of_available_crossings(ntested);
-    output->set_number_of_allowed_crossings(ntested);
-    output->set_number_of_tpc_valid_crossings(ntested);
+    output->set_selected_tier(best.candidate.vertex_compatible
+                                  ? std::min<unsigned char>(best.candidate.confidence_tier, 1U)
+                                  : 2U);
+    output->set_number_of_tested_crossings(input->get_number_of_tested_crossings());
+    output->set_number_of_available_crossings(input->get_number_of_available_crossings());
+    output->set_number_of_allowed_crossings(input->get_number_of_allowed_crossings());
+    output->set_number_of_tpc_valid_crossings(
+        static_cast<unsigned short>(std::min<std::size_t>(
+            plausible_candidates.size(), std::numeric_limits<unsigned short>::max())));
     output->set_number_of_vertex_compatible_crossings(ncompatible);
-    output->set_status(best_abs_dz <= m_maximumAbsDeltaZ
+    output->set_status(best.candidate.vertex_compatible
                            ? TpcCrossingStatus::SelectedBySiliconTrack
                            : TpcCrossingStatus::SiliconTrackIncompatible);
     m_outputCrossings->add_decision(output);
