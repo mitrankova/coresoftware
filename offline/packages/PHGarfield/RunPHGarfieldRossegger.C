@@ -50,7 +50,7 @@ int RunPHGarfieldRossegger(
   rossegger->setSourceRadiusCm(use_frame_charge_model ? 21.78 : 22.8, use_frame_charge_model ? 76.28 : 75.43);
 
 
-  rossegger->setDensity(20.0,1.0,1.8);
+  rossegger->setDensity(20.0,1.0,1.23);
 
   rossegger->setSourceGrid(48, 216, 48);
   rossegger->setObservationGrid(96, 108, 48);///takes like 5 min but it is too precise
