@@ -78,6 +78,9 @@ int Tpc_PolyTrackHits::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("poly_cluster_x", &m_polyClusterX, "poly_cluster_x/D");
   m_tree->Branch("poly_cluster_y", &m_polyClusterY, "poly_cluster_y/D");
   m_tree->Branch("poly_cluster_z", &m_polyClusterZ, "poly_cluster_z/D");
+  m_tree->Branch("poly_cluster_rms_x", &m_polyClusterRmsX, "poly_cluster_rms_x/D");
+  m_tree->Branch("poly_cluster_rms_y", &m_polyClusterRmsY, "poly_cluster_rms_y/D");
+  m_tree->Branch("poly_cluster_rms_z", &m_polyClusterRmsZ, "poly_cluster_rms_z/D");
   m_tree->Branch("x", &m_x, "x/D");
   m_tree->Branch("y", &m_y, "y/D");
   m_tree->Branch("z", &m_z, "z/D");
@@ -153,6 +156,9 @@ void Tpc_PolyTrackHits::reset_tree_values()
   m_polyClusterX = std::numeric_limits<double>::quiet_NaN();
   m_polyClusterY = std::numeric_limits<double>::quiet_NaN();
   m_polyClusterZ = std::numeric_limits<double>::quiet_NaN();
+  m_polyClusterRmsX = std::numeric_limits<double>::quiet_NaN();
+  m_polyClusterRmsY = std::numeric_limits<double>::quiet_NaN();
+  m_polyClusterRmsZ = std::numeric_limits<double>::quiet_NaN();
   m_x = std::numeric_limits<double>::quiet_NaN();
   m_y = std::numeric_limits<double>::quiet_NaN();
   m_z = std::numeric_limits<double>::quiet_NaN();
@@ -286,6 +292,9 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
         m_polyClusterX = cluster->get_centroid_x();
         m_polyClusterY = cluster->get_centroid_y();
         m_polyClusterZ = cluster->get_centroid_z();
+        m_polyClusterRmsX = cluster->get_rms_x();
+        m_polyClusterRmsY = cluster->get_rms_y();
+        m_polyClusterRmsZ = cluster->get_rms_z();
         m_x = cluster->get_hit_x(ihit);
         m_y = cluster->get_hit_y(ihit);
         m_z = cluster->get_hit_z(ihit);

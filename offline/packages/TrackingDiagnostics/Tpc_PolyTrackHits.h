@@ -75,6 +75,9 @@ class Tpc_PolyTrackHits : public SubsysReco
   double m_polyClusterX{0.0};
   double m_polyClusterY{0.0};
   double m_polyClusterZ{0.0};
+  double m_polyClusterRmsX{0.0};
+  double m_polyClusterRmsY{0.0};
+  double m_polyClusterRmsZ{0.0};
   double m_x{0.0};
   double m_y{0.0};
   double m_z{0.0};
