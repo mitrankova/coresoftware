@@ -7,7 +7,6 @@
 #include "TpcCrossingDecisionv1.h"
 #include "Tpc_FittingTools.h"
 
-#include <cdbobjects/CDBTTree.h>
 #include <fun4all/Fun4AllReturnCodes.h>
 
 #include <phool/PHCompositeNode.h>
@@ -16,26 +15,15 @@
 #include <phool/PHObject.h>
 #include <phool/getClass.h>
 
-#include <ffamodules/CDBInterface.h>
-
 #include <globalvertex/SvtxVertex.h>
 #include <globalvertex/SvtxVertexMap.h>
 #include <trackbase/InttDefs.h>
 #include <trackbase/TpcDefs.h>
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrDefs.h>
-#include <trackbase/TrkrHit.h>
-#include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
 
-#include <phgarfield/PHGarfield.h>
-#include <TPolyLine3D.h>
-
-#include <g4detectors/PHG4TpcGeom.h>
-#include <g4detectors/PHG4TpcGeomContainer.h>
-
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -48,40 +36,11 @@ namespace
 {
   constexpr unsigned int FirstLayer = 7;
   constexpr unsigned int LastLayer = 54;
-  constexpr unsigned int NLayers = LastLayer - FirstLayer + 1;
-  constexpr unsigned int NSides = 2;
-  constexpr unsigned int NSectors = 12;
-  constexpr double PhiConsistencyTolerance = 1.0e-10;
   constexpr unsigned char InvalidConfidenceTier = std::numeric_limits<unsigned char>::max();
-
-  double wrap_phi(double phi)
-  {
-    while (phi > M_PI) { phi -= 2.0 * M_PI;
-}
-    while (phi <= -M_PI) { phi += 2.0 * M_PI;
-}
-    return phi;
-  }
-
-  double unwrap_phi_near(double phi, const double reference)
-  {
-    while (phi - reference > M_PI) { phi -= 2.0 * M_PI;
-}
-    while (phi - reference <= -M_PI) { phi += 2.0 * M_PI;
-}
-    return phi;
-  }
 
   double clamp_unit(const double value)
   {
     return std::max(0.0, std::min(1.0, value));
-  }
-
-  double phi_sample_fraction(const unsigned int sample)
-  {
-    if (TpcCrossingFinder::NPhiSamples <= 1U) { return 0.0;
-}
-    return static_cast<double>(sample) / static_cast<double>(TpcCrossingFinder::NPhiSamples - 1U);
   }
 
   float finite_float_or_nan(const double value)
@@ -97,9 +56,13 @@ TpcCrossingFinder::TpcCrossingFinder(const std::string& name)
 
 int TpcCrossingFinder::InitRun(PHCompositeNode* topNode)
 {
-  if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) { return Fun4AllReturnCodes::ABORTRUN;
+  if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)
+  {
+    return Fun4AllReturnCodes::ABORTRUN;
   }
-  if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) { return Fun4AllReturnCodes::ABORTRUN;
+  if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)
+  {
+    return Fun4AllReturnCodes::ABORTRUN;
   }
   if (m_triggeredMode)
   {
@@ -107,52 +70,19 @@ int TpcCrossingFinder::InitRun(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  // initalize ideal pad map
-  m_idealPadMap.reset( new IdealPadMap );
-  if (m_idealPadMap->load_from_cdb(Verbosity()) != 0 || !m_idealPadMap->is_loaded())
+  // Register this module's requested settings, but leave construction to the
+  // shared run-scoped service. Tpc_PolyClusterizer normally initializes it in
+  // its InitRun after all Finder settings have been merged.
+  m_driftLookup = TpcDriftPolylineLookup::getOrCreate(topNode, Verbosity());
+  if (!m_driftLookup)
   {
-    std::cerr << Name() << "::InitRun - failed to load IdealPadMap" << std::endl;
+    std::cerr << Name() << "::InitRun - failed to obtain " << TpcDriftPolylineLookup::NodeName << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
-
-  auto* layergeom = m_geomContainerTpc->GetLayerCellGeom(20);
-  if (layergeom)
+  if (!m_driftLookup->registerConfiguration(m_driftConfig, Name(), Verbosity()))
   {
-    const double rot_x = layergeom->get_rot_x();
-    const double rot_y = layergeom->get_rot_y();
-    const double rot_z = layergeom->get_rot_z();
-    const double place_x = layergeom->get_place_x();
-    const double place_y = layergeom->get_place_y();
-    const double place_z = layergeom->get_place_z();
-    if (use_survey_geometry)
-    {
-      m_tpcMove = {{place_x, place_y, place_z}};
-      m_tpcRotations = {{{{rot_x, rot_y, rot_z}}, {{0.0, 0.0, 0.0}}}};
-    }
-  }
-
-  const std::string electricFieldMap = CDBInterface::instance()->getUrl("Tpc_PolySeeding_EField");
-  const auto kefffile = CDBInterface::instance()->getUrl("Tpc_PolyClusterizer_kEff");
-
-  if (!kefffile.empty())
-  {
-    auto keffcdbtree = std::make_unique<CDBTTree>(kefffile);
-    keffcdbtree->LoadCalibrations();
-    m_kEffSide0 = keffcdbtree->GetSingleFloatValue("keffside0");
-    m_kEffSide1 = keffcdbtree->GetSingleFloatValue("keffside1");
- }
-
-  // initialize garfield
-  m_garfield.reset( new PHGarfield(Name() + "_PHGarfield", electricFieldMap, m_kEffSide0, m_kEffSide1));
-  configure_garfield(m_garfield.get());
-  if (m_garfield->InitRun(topNode) != Fun4AllReturnCodes::EVENT_OK)
-  {
-    std::cerr << Name() << "::InitRun - PHGarfield InitRun failed" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
-
-  if (!build_drift_lookup()) { return Fun4AllReturnCodes::ABORTRUN;
-}
 
   m_event = 0;
   return Fun4AllReturnCodes::EVENT_OK;
@@ -186,12 +116,6 @@ int TpcCrossingFinder::getNodes(PHCompositeNode* topNode)
     std::cout << Name() << "::getNodes - optional TRKR_CLUSTER node not found" << std::endl;
   }
 
-  m_geomContainerTpc = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
-  if (!m_geomContainerTpc)
-  {
-    std::cerr << Name() << "::getNodes - missing TPCGEOMCONTAINER" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
 
   m_vertexMap = findNode::getClass<SvtxVertexMap>(topNode, m_vertexMapNodeName);
   if (!m_vertexMap && Verbosity() > 0)
@@ -224,289 +148,26 @@ int TpcCrossingFinder::createNodes(PHCompositeNode* topNode)
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-void TpcCrossingFinder::configure_garfield(PHGarfield* garfield) const
-{
-  if (!garfield) { return;
-}
-
-  garfield->MoveTpc(m_tpcMove[0], m_tpcMove[1], m_tpcMove[2]);
-  for (const auto& rotation : m_tpcRotations)
-  {
-    garfield->RotateTpc(rotation[0], rotation[1], rotation[2]);
-  }
-  garfield->SetCMVoltageDefault(m_cmVoltageDefault);
-}
-
-unsigned int TpcCrossingFinder::drift_lookup_index(const unsigned int layer_index,
-                                                   const unsigned int side,
-                                                   const unsigned int sector,
-                                                   const unsigned int sample)
-{
-  return (((layer_index * NSides + side) * NSectors + sector) * NPhiSamples + sample);
-}
-
-bool TpcCrossingFinder::build_drift_lookup()
-{
-  if (!m_idealPadMap || !m_garfield) { return false;
-}
-  if (m_reverseDriftStepNs <= 0.0 || !std::isfinite(m_reverseDriftStepNs)) { return false;
-}
-
-  m_maxLookupTimeNs = std::numeric_limits<double>::max();
-  for (DriftPolyline& polyline : m_driftLookup)
-  {
-    polyline.phi = 0.0;
-    polyline.points.clear();
-  }
-
-  unsigned int nbuilt = 0;
-  for (unsigned int layer = FirstLayer; layer <= LastLayer; ++layer)
-  {
-    const unsigned int layer_index = layer - FirstLayer;
-    const double radius = m_idealPadMap->get_radius(layer);
-    const unsigned int pads_per_sector = m_idealPadMap->get_pads_per_sector_for_layer(layer);
-    if (!std::isfinite(radius) || pads_per_sector == 0U) { return false;
-}
-
-    for (unsigned int side = 0; side < NSides; ++side)
-    {
-      const double z0 = (side == 0U) ? m_startZSouth : m_startZNorth;
-      for (unsigned int sector = 0; sector < NSectors; ++sector)
-      {
-        for (unsigned int sample = 0; sample < NPhiSamples; ++sample)
-        {
-          const unsigned int local_phibin = static_cast<unsigned int>(std::llround(
-              phi_sample_fraction(sample) * static_cast<double>(pads_per_sector - 1U)));
-          const unsigned int global_pad = sector * pads_per_sector + local_phibin;
-          const double phi_local = m_idealPadMap->get_phi(side, sector, layer, local_phibin);
-          const double phi_global = m_idealPadMap->get_phi(side, layer, global_pad);
-          if (!std::isfinite(phi_local) || !std::isfinite(phi_global)) { return false;
-}
-          if (std::abs(wrap_phi(phi_global - phi_local)) > PhiConsistencyTolerance) { return false;
-}
-
-          const double x0 = radius * std::cos(phi_local);
-          const double y0 = radius * std::sin(phi_local);
-          TPolyLine3D* drift = m_garfield->ReverseDrift(x0, y0, z0, m_reverseDriftStepNs);
-          if (!drift || drift->GetN() <= 0)
-          {
-            delete drift;
-            return false;
-          }
-
-          const int npoints = drift->GetN();
-          const Float_t* xyz = drift->GetP();
-          if (!xyz || npoints <= 0)
-          {
-            delete drift;
-            return false;
-          }
-
-          DriftPolyline& polyline = m_driftLookup[drift_lookup_index(layer_index, side, sector, sample)];
-          polyline.phi = phi_local;
-          polyline.points.resize(static_cast<std::size_t>(npoints));
-          for (int ipoint = 0; ipoint < npoints; ++ipoint)
-          {
-            const int idx = 3 * ipoint;
-            DriftPoint& point = polyline.points[static_cast<std::size_t>(ipoint)];
-            const double output_r = std::hypot(static_cast<double>(xyz[idx]), static_cast<double>(xyz[idx + 1]));
-            const double output_phi = unwrap_phi_near(std::atan2(static_cast<double>(xyz[idx + 1]), static_cast<double>(xyz[idx])), phi_local);
-            point.delta_r = static_cast<float>(output_r - radius);
-            point.delta_phi = static_cast<float>(output_phi - phi_local);
-            point.z = xyz[idx + 2];
-          }
-          m_maxLookupTimeNs = std::min(m_maxLookupTimeNs, static_cast<double>(npoints - 1) * m_reverseDriftStepNs);
-          delete drift;
-          ++nbuilt;
-        }
-      }
-    }
-  }
-
-  if (Verbosity() > 0)
-  {
-    std::cout << Name() << "::build_drift_lookup - built " << nbuilt
-              << " drift polylines max_lookup_time_ns=" << m_maxLookupTimeNs << std::endl;
-  }
-  return nbuilt == NLayers * NSides * NSectors * NPhiSamples && std::isfinite(m_maxLookupTimeNs) && m_maxLookupTimeNs > 0.0;
-}
-
-bool TpcCrossingFinder::sample_drift_lookup(const unsigned int layer,
-                                            const unsigned int side,
-                                            const unsigned int pad,
-                                            const unsigned int tbin,
-                                            const short crossing,
-                                            double& x,
-                                            double& y,
-                                            double& z) const
-{
-  if (!m_idealPadMap) { return false;
-}
-  if (layer < FirstLayer || layer > LastLayer) { return false;
-}
-  if (side >= NSides) { return false;
-}
-  if (m_reverseDriftStepNs <= 0.0 || !std::isfinite(m_reverseDriftStepNs)) { return false;
-}
-
-  const unsigned int pads_per_sector = m_idealPadMap->get_pads_per_sector_for_layer(layer);
-  if (pads_per_sector == 0U) { return false;
-}
-  const unsigned int sector = pad / pads_per_sector;
-  if (sector >= NSectors) { return false;
-}
-
-  const double hit_radius = m_idealPadMap->get_radius(layer);
-  const double hit_phi = m_idealPadMap->get_phi(side, layer, pad);
-  if (!std::isfinite(hit_radius) || !std::isfinite(hit_phi)) { return false;
-}
-
-  const double target_time_ns = (static_cast<double>(tbin) - m_t0) * m_tpcAdcClock
-    - static_cast<double>(crossing) * m_crossingPeriodNs;
-  if (target_time_ns <= 0.0 || !std::isfinite(target_time_ns)) { return false;
-}
-
-  const unsigned int layer_index = layer - FirstLayer;
-  std::array<const DriftPolyline*, NPhiSamples> samples{};
-  std::array<double, NPhiSamples> sample_phi{};
-  for (unsigned int sample = 0; sample < NPhiSamples; ++sample)
-  {
-    samples[sample] = &m_driftLookup[drift_lookup_index(layer_index, side, sector, sample)];
-    if (samples[sample]->points.empty()) { return false;
-}
-    sample_phi[sample] = samples[sample]->phi;
-    if (sample > 0U) { sample_phi[sample] = unwrap_phi_near(sample_phi[sample], sample_phi[sample - 1U]);
-}
-  }
-
-  const double unwrapped_hit_phi = unwrap_phi_near(hit_phi, sample_phi[NPhiSamples / 2U]);
-  const bool increasing = sample_phi[NPhiSamples - 1U] >= sample_phi[0];
-
-  bool bracket_found = false;
-  unsigned int sample0 = 0;
-  unsigned int sample1 = 0;
-  double phi_fraction = 0.0;
-  if ((increasing && unwrapped_hit_phi <= sample_phi[0]) || (!increasing && unwrapped_hit_phi >= sample_phi[0]))
-  {
-    bracket_found = true;
-  }
-  else if ((increasing && unwrapped_hit_phi >= sample_phi[NPhiSamples - 1U]) ||
-           (!increasing && unwrapped_hit_phi <= sample_phi[NPhiSamples - 1U]))
-  {
-    sample0 = NPhiSamples - 1U;
-    sample1 = NPhiSamples - 1U;
-    bracket_found = true;
-  }
-  else
-  {
-    for (unsigned int sample = 0; sample + 1U < NPhiSamples; ++sample)
-    {
-      const bool in_interval = increasing ?
-        (unwrapped_hit_phi >= sample_phi[sample] && unwrapped_hit_phi <= sample_phi[sample + 1U]) :
-        (unwrapped_hit_phi <= sample_phi[sample] && unwrapped_hit_phi >= sample_phi[sample + 1U]);
-      if (!in_interval) { continue;
-}
-
-      sample0 = sample;
-      sample1 = sample + 1U;
-      const double denom = sample_phi[sample1] - sample_phi[sample0];
-      phi_fraction = (denom != 0.0) ? clamp_unit((unwrapped_hit_phi - sample_phi[sample0]) / denom) : 0.0;
-      bracket_found = true;
-      break;
-    }
-  }
-  if (!bracket_found) { return false;
-}
-
-  auto sample_time = [this, target_time_ns](const DriftPolyline& polyline,
-                                            double& delta_r,
-                                            double& delta_phi,
-                                            double& point_z) -> bool
-  {
-    const int npoints = static_cast<int>(polyline.points.size());
-    if (npoints <= 0) { return false;
-}
-    const double max_time_ns = static_cast<double>(npoints - 1) * m_reverseDriftStepNs;
-    if (target_time_ns > max_time_ns) { return false;
-}
-
-    const double fbin = target_time_ns / m_reverseDriftStepNs;
-    const int i0 = std::min(static_cast<int>(std::floor(fbin)), npoints - 1);
-    const int i1 = std::min(i0 + 1, npoints - 1);
-    const double frac = fbin - static_cast<double>(i0);
-
-    const DriftPoint& p0 = polyline.points[static_cast<std::size_t>(i0)];
-    const DriftPoint& p1 = polyline.points[static_cast<std::size_t>(i1)];
-    const double dphi0 = static_cast<double>(p0.delta_phi);
-    const double dphi1 = unwrap_phi_near(static_cast<double>(p1.delta_phi), dphi0);
-    delta_r = static_cast<double>(p0.delta_r) + frac * static_cast<double>(p1.delta_r - p0.delta_r);
-    delta_phi = dphi0 + frac * (dphi1 - dphi0);
-    point_z = static_cast<double>(p0.z) + frac * static_cast<double>(p1.z - p0.z);
-    return std::isfinite(delta_r) && std::isfinite(delta_phi) && std::isfinite(point_z);
-  };
-
-  double delta_r0 = 0.0;
-  double delta_phi0 = 0.0;
-  double z0 = 0.0;
-  const bool valid0 = sample_time(*samples[sample0], delta_r0, delta_phi0, z0);
-  double delta_r1 = 0.0;
-  double delta_phi1 = 0.0;
-  double z1 = 0.0;
-  const bool same_sample = sample0 == sample1;
-  const bool valid1 = same_sample ? valid0 : sample_time(*samples[sample1], delta_r1, delta_phi1, z1);
-  if (same_sample)
-  {
-    delta_r1 = delta_r0;
-    delta_phi1 = delta_phi0;
-    z1 = z0;
-  }
-  if (!valid0 && !valid1) { return false;
-}
-
-  double delta_r = 0.0;
-  double delta_phi = 0.0;
-  if (valid0 && valid1 && !same_sample)
-  {
-    delta_r = delta_r0 + phi_fraction * (delta_r1 - delta_r0);
-    const double unwrapped_delta_phi1 = unwrap_phi_near(delta_phi1, delta_phi0);
-    delta_phi = delta_phi0 + phi_fraction * (unwrapped_delta_phi1 - delta_phi0);
-    z = z0 + phi_fraction * (z1 - z0);
-  }
-  else if (valid0)
-  {
-    delta_r = delta_r0;
-    delta_phi = delta_phi0;
-    z = z0;
-  }
-  else
-  {
-    delta_r = delta_r1;
-    delta_phi = delta_phi1;
-    z = z1;
-  }
-
-  const double radius = hit_radius + delta_r;
-  const double output_phi = unwrapped_hit_phi + delta_phi;
-  x = radius * std::cos(output_phi);
-  y = radius * std::sin(output_phi);
-  return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
-}
-
 bool TpcCrossingFinder::make_xyz_point(TrkrDefs::hitsetkey hsk,
                                        TrkrDefs::hitkey hk,
                                        short crossing,
                                        Point& p) const
 {
+  if (!m_driftLookup)
+  {
+    return false;
+  }
+
   const unsigned int layer = TrkrDefs::getLayer(hsk);
   const unsigned int hit_side = TpcDefs::getSide(hsk);
   const unsigned int pad = TpcDefs::getPad(hk);
   const unsigned int tbin = TpcDefs::getTBin(hk);
 
-  double x = 0.0;
-  double y = 0.0;
-  double z = 0.0;
-  if (!sample_drift_lookup(layer, hit_side, pad, tbin, crossing, x, y, z)) { return false;
-}
+  TpcDriftPolylineLookup::Point drift_point;
+  if (!m_driftLookup->getPosition(layer, hit_side, pad, tbin, crossing, drift_point))
+  {
+    return false;
+  }
 
   p.hitsetkey = hsk;
   p.hitkey = hk;
@@ -514,9 +175,9 @@ bool TpcCrossingFinder::make_xyz_point(TrkrDefs::hitsetkey hsk,
   p.side = hit_side;
   p.pad = pad;
   p.tbin = tbin;
-  p.x = x;
-  p.y = y;
-  p.z = z;
+  p.x = drift_point.x;
+  p.y = drift_point.y;
+  p.z = drift_point.z;
   return true;
 }
 
@@ -740,8 +401,9 @@ bool TpcCrossingFinder::estimate_tpc_z0(std::vector<Point>& points, double& z0) 
 bool TpcCrossingFinder::point_in_tpc(const Point& p) const
 {
   const double r = std::hypot(p.x, p.y);
-  const double inner = m_idealPadMap ? m_idealPadMap->get_radius(FirstLayer) : 0.0;
-  const double outer = m_idealPadMap ? m_idealPadMap->get_radius(LastLayer) : 0.0;
+  const IdealPadMap* ideal_pad_map = m_driftLookup ? m_driftLookup->idealPadMap() : nullptr;
+  const double inner = ideal_pad_map ? ideal_pad_map->get_radius(FirstLayer) : 0.0;
+  const double outer = ideal_pad_map ? ideal_pad_map->get_radius(LastLayer) : 0.0;
   return std::isfinite(r) && std::isfinite(p.z) &&
     r >= inner - m_radialTolerance &&
     r <= outer + m_radialTolerance &&
@@ -780,13 +442,14 @@ TpcCrossingFinder::test_candidate(const Tpc_AssembledTrack* track,
   qa.passes_time_window = true;
   qa.was_tested = true;
   qa.rejection_status = static_cast<unsigned char>(TpcCrossingStatus::Unknown);
-  qa.max_lookup_time_ns = finite_float_or_nan(m_maxLookupTimeNs);
-  qa.min_tbin_time_crossing0_ns = finite_float_or_nan((static_cast<double>(TpcDefs::getTBin(min_hk)) - m_t0) * m_tpcAdcClock);
-  qa.max_tbin_time_crossing0_ns = finite_float_or_nan((static_cast<double>(TpcDefs::getTBin(max_hk)) - m_t0) * m_tpcAdcClock);
-  qa.candidate_min_time_ns = finite_float_or_nan(static_cast<double>(qa.min_tbin_time_crossing0_ns) - static_cast<double>(crossing) * m_crossingPeriodNs);
-  qa.candidate_max_time_ns = finite_float_or_nan(static_cast<double>(qa.max_tbin_time_crossing0_ns) - static_cast<double>(crossing) * m_crossingPeriodNs);
+  const double max_lookup_time_ns = m_driftLookup ? m_driftLookup->maxLookupTimeNs() : 0.0;
+  qa.max_lookup_time_ns = finite_float_or_nan(max_lookup_time_ns);
+  qa.min_tbin_time_crossing0_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(TpcDefs::getTBin(min_hk), 0));
+  qa.max_tbin_time_crossing0_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(TpcDefs::getTBin(max_hk), 0));
+  qa.candidate_min_time_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(TpcDefs::getTBin(min_hk), crossing));
+  qa.candidate_max_time_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(TpcDefs::getTBin(max_hk), crossing));
   qa.min_time_margin_ns = qa.candidate_min_time_ns;
-  qa.max_time_margin_ns = finite_float_or_nan(m_maxLookupTimeNs - static_cast<double>(qa.candidate_max_time_ns));
+  qa.max_time_margin_ns = finite_float_or_nan(max_lookup_time_ns - static_cast<double>(qa.candidate_max_time_ns));
   qa.candidate_qa_bits |= FromInttCrossing | PassedTimeWindow;
 
   auto fill_point_summary = [](const Point& point,
@@ -1041,6 +704,18 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
+  // Normally initialized by Tpc_PolyClusterizer::InitRun. This fallback keeps
+  // TpcCrossingFinder usable on its own and still builds the cache only once.
+  if (!m_driftLookup)
+  {
+    m_driftLookup = TpcDriftPolylineLookup::get(topNode);
+  }
+  if (!m_driftLookup || (!m_driftLookup->isInitialized() && !m_driftLookup->initialize(topNode, Verbosity())))
+  {
+    std::cerr << Name() << "::process_event - shared TPC drift lookup is unavailable" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
   std::set<short> available_crossings = get_available_crossings();
   const std::set<short> intt_crossings = get_intt_crossings();
   available_crossings.insert(intt_crossings.begin(), intt_crossings.end());
@@ -1125,12 +800,13 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
     std::vector<short> allowed_crossings;
     for (const short crossing : available_crossings)
     {
-      const double min_time0_ns = (static_cast<double>(min_tbin) - m_t0) * m_tpcAdcClock;
-      const double max_time0_ns = (static_cast<double>(max_tbin) - m_t0) * m_tpcAdcClock;
-      const double min_time_ns = min_time0_ns - static_cast<double>(crossing) * m_crossingPeriodNs;
-      const double max_time_ns = max_time0_ns - static_cast<double>(crossing) * m_crossingPeriodNs;
+      const double min_time0_ns = m_driftLookup->crossingToDriftTimeNs(min_tbin, 0);
+      const double max_time0_ns = m_driftLookup->crossingToDriftTimeNs(max_tbin, 0);
+      const double min_time_ns = m_driftLookup->crossingToDriftTimeNs(min_tbin, crossing);
+      const double max_time_ns = m_driftLookup->crossingToDriftTimeNs(max_tbin, crossing);
+      const double max_lookup_time_ns = m_driftLookup->maxLookupTimeNs();
       const bool passes_time_window = std::isfinite(min_time_ns) && std::isfinite(max_time_ns) &&
-        min_time_ns > 0.0 && max_time_ns <= m_maxLookupTimeNs;
+        min_time_ns > 0.0 && max_time_ns <= max_lookup_time_ns;
       if (passes_time_window)
       {
         allowed_crossings.push_back(crossing);
@@ -1146,9 +822,9 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
         qa.max_tbin_time_crossing0_ns = finite_float_or_nan(max_time0_ns);
         qa.candidate_min_time_ns = finite_float_or_nan(min_time_ns);
         qa.candidate_max_time_ns = finite_float_or_nan(max_time_ns);
-        qa.max_lookup_time_ns = finite_float_or_nan(m_maxLookupTimeNs);
+        qa.max_lookup_time_ns = finite_float_or_nan(max_lookup_time_ns);
         qa.min_time_margin_ns = finite_float_or_nan(min_time_ns);
-        qa.max_time_margin_ns = finite_float_or_nan(m_maxLookupTimeNs - max_time_ns);
+        qa.max_time_margin_ns = finite_float_or_nan(max_lookup_time_ns - max_time_ns);
         qa.min_time_layer = TrkrDefs::getLayer(min_hsk);
         qa.min_time_side = TpcDefs::getSide(min_hsk);
         qa.min_time_pad = TpcDefs::getPad(min_hk);

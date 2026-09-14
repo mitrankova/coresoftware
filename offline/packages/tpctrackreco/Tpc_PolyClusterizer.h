@@ -3,98 +3,72 @@
 #ifndef TPCTRACKRECO_TPCPOLYCLUSTERIZER_H
 #define TPCTRACKRECO_TPCPOLYCLUSTERIZER_H
 
+#include "TpcDriftPolylineLookup.h"
+
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
-#include <array>
-#include <memory>
 #include <string>
 #include <vector>
 
-class Tpc_AssembledTrackContainer;
 class IdealPadMap;
 class PHCompositeNode;
-class PHGarfield;
+class PHG4TpcGeomContainer;
+class Tpc_AssembledTrackContainer;
 class Tpc_PolyClusterContainer;
 class TpcCrossingDecisionContainer;
 class TrkrHitSetContainer;
-class PHG4CylinderGeomContainer;
-class PHG4TpcGeomContainer;
 
 class Tpc_PolyClusterizer : public SubsysReco
 {
  public:
   explicit Tpc_PolyClusterizer(const std::string& name = "Tpc_PolyClusterizer");
-  ~Tpc_PolyClusterizer() override;
+  ~Tpc_PolyClusterizer() override = default;
 
   int InitRun(PHCompositeNode*) override;
   int process_event(PHCompositeNode*) override;
-
-  static constexpr unsigned int NPhiSamples = 24;
 
   void setInputNodeName(const std::string& n) { m_inputNodeName = n; }
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setCrossingDecisionNodeName(const std::string& n) { m_crossingDecisionNodeName = n; }
   void setMaxAcceptedTier(unsigned char v) { m_maxAcceptedTier = v; }
-  void setT0(double v) { m_t0 = v; }
-  void setTpcAdcClock(double v) { m_tpcAdcClock = v; }
-  void setCrossingPeriodNs(double v) { m_crossingPeriodNs = v; }
-  void setReverseDriftStepNs(double v) { m_reverseDriftStepNs = v; }
-  void setKEffSide0(double v)
-  {
-    m_kEffSide0 = v;
-    m_kEffSide0Override = true;
-  }
 
-  void setKEffSide1(double v)
-  {
-    m_kEffSide1 = v;
-    m_kEffSide1Override = true;
-  }
-  void setField3DCoefficientFile(const std::string& n) {
-    m_field3DCoefficientFile = n;
-    m_field3DCoefficientFileOverride = true;
-  }
-  void setElectricFieldMap(const std::string& n)
-  {
-    m_electricFieldMap = n;
-    m_electricFieldMapOverride = true;
-  }
-  void setElectricFieldMap3DSide0(const std::string& n)
-  {
-    m_field3DSide0 = n;
-    m_field3DSide0Override = true;
-  }
-  void setElectricFieldMap3DSide1(const std::string& n)
-  {
-    m_field3DSide1 = n;
-    m_field3DSide1Override = true;
-  }
-  void setFrameElectricFieldMap3DSide0(const std::string& n)
-  {
-    m_framesSide0 = n;
-    m_framesSide0Override = true;
-  }
-  void setFrameElectricFieldMap3DSide1(const std::string& n)
-  {
-    m_framesSide1 = n;
-    m_framesSide1Override = true;
-  }
-  void setCMVoltageDefault(double v) { m_cmVoltageDefault = v; }
-  void setUseSurveyGeometry(bool v) { use_survey_geometry = v; }
-  void setMoveTpc(double x, double y, double z) { m_tpcMove = {{x, y, z}}; }
+  void setT0(double v) { m_driftConfig.t0 = v; m_driftConfig.t0Override = true; }
+  void setTpcAdcClock(double v) { m_driftConfig.tpcAdcClock = v; m_driftConfig.tpcAdcClockOverride = true; }
+  void setCrossingPeriodNs(double v) { m_driftConfig.crossingPeriodNs = v; m_driftConfig.crossingPeriodNsOverride = true; }
+  void setReverseDriftStepNs(double v) { m_driftConfig.reverseDriftStepNs = v; m_driftConfig.reverseDriftStepNsOverride = true; }
+  void setKEffSide0(double v) { m_driftConfig.kEffSide0 = v; m_driftConfig.kEffSide0Override = true; }
+  void setKEffSide1(double v) { m_driftConfig.kEffSide1 = v; m_driftConfig.kEffSide1Override = true; }
+  void setField3DCoefficientFile(const std::string& n) { m_driftConfig.field3DCoefficientFile = n; m_driftConfig.field3DCoefficientFileOverride = true; }
+  void setElectricFieldMap(const std::string& n) { m_driftConfig.electricFieldMap = n; m_driftConfig.electricFieldMapOverride = true; }
+  void setElectricFieldMap3DSide0(const std::string& n) { m_driftConfig.field3DSide0 = n; m_driftConfig.field3DSide0Override = true; }
+  void setElectricFieldMap3DSide1(const std::string& n) { m_driftConfig.field3DSide1 = n; m_driftConfig.field3DSide1Override = true; }
+  void setFrameElectricFieldMap3DSide0(const std::string& n) { m_driftConfig.framesSide0 = n; m_driftConfig.framesSide0Override = true; }
+  void setFrameElectricFieldMap3DSide1(const std::string& n) { m_driftConfig.framesSide1 = n; m_driftConfig.framesSide1Override = true; }
+  void setCMVoltageDefault(double v) { m_driftConfig.cmVoltageDefault = v; m_driftConfig.cmVoltageDefaultOverride = true; }
+  void setUseSurveyGeometry(bool v) { m_driftConfig.useSurveyGeometry = v; m_driftConfig.useSurveyGeometryOverride = true; }
+  void setMoveTpc(double x, double y, double z) { m_driftConfig.tpcMove = {{x, y, z}}; m_driftConfig.tpcMoveOverride = true; }
   void setRotateTpc(unsigned int index, double x, double y, double z)
   {
-    if (index < m_tpcRotations.size()) m_tpcRotations[index] = {{x, y, z}};
+    if (index < m_driftConfig.tpcRotations.size())
+    {
+      m_driftConfig.tpcRotations[index] = {{x, y, z}};
+      m_driftConfig.tpcRotationOverride[index] = true;
+    }
   }
   void setStartZ(double south_z, double north_z)
   {
-    m_startZSouth = south_z;
-    m_startZNorth = north_z;
+    m_driftConfig.startZSouth = south_z;
+    m_driftConfig.startZNorth = north_z;
+    m_driftConfig.startZOverride = true;
   }
-  void setFrameChargeScale(double v) { m_frameChargeScale = v; }
-  void setFieldCageVoltageOffsets(double ifcSouth, double ifcNorth, double ofcSouth, double ofcNorth) { m_fieldCageVoltageOffsets = {{ifcSouth, ifcNorth, ofcSouth, ofcNorth}}; }
-  void setUse2DElectricFieldMap(bool v) { m_use2DElectricFieldMap = v; }
+  void setFrameChargeScale(double v) { m_driftConfig.frameChargeScale = v; m_driftConfig.frameChargeScaleOverride = true; }
+  void setFieldCageVoltageOffsets(double ifcSouth, double ifcNorth, double ofcSouth, double ofcNorth)
+  {
+    m_driftConfig.fieldCageVoltageOffsets = {{ifcSouth, ifcNorth, ofcSouth, ofcNorth}};
+    m_driftConfig.fieldCageVoltageOffsetsOverride = true;
+  }
+  void setUse2DElectricFieldMap(bool v) { m_driftConfig.use2DElectricFieldMap = v; m_driftConfig.use2DElectricFieldMapOverride = true; }
 
  private:
   struct Point
@@ -131,56 +105,26 @@ class Tpc_PolyClusterizer : public SubsysReco
     double phase{0.0};
   };
 
-  struct DriftPoint
-  {
-    float delta_r{0.0F};
-    float delta_phi{0.0F};
-    float z{0.0F};
-  };
-
-  struct DriftPolyline
-  {
-    double phi{0.0};
-    std::vector<DriftPoint> points;
-  };
-
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
   bool make_xyz_point(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, short crossing, Point& p) const;
-  bool build_drift_lookup();
-  bool sample_drift_lookup(unsigned int layer,
-                           unsigned int side,
-                           unsigned int pad,
-                           unsigned int tbin,
-                           short crossing,
-                           double& x,
-                           double& y,
-                           double& z) const;
-  bool load_cdb_inputs();
   ClusterParameters make_cluster_parameters(const std::vector<Point>& points, const Centroid& centroid, int side) const;
   static Centroid make_centroid(const std::vector<Point>& points);
-  void configure_garfield(PHGarfield* garfield) const;
-  static unsigned int drift_lookup_index(unsigned int layer_index, unsigned int side, unsigned int sector, unsigned int sample);
+
   std::string m_inputNodeName;
   std::string m_outputNodeName;
   std::string m_crossingDecisionNodeName{"TPC_CROSSING_DECISIONS"};
-  std::string m_electricFieldMap;
-  std::string m_field3DCoefficientFile;
-  std::string m_field3DSide0;
-  std::string m_field3DSide1;
-  std::string m_framesSide0;
-  std::string m_framesSide1;
   unsigned char m_maxAcceptedTier{1};
+
   Tpc_AssembledTrackContainer* m_assembledTracks{nullptr};
   Tpc_PolyClusterContainer* m_clusters{nullptr};
-  TpcCrossingDecisionContainer* m_crossingDecisions {nullptr};
+  TpcCrossingDecisionContainer* m_crossingDecisions{nullptr};
   TrkrHitSetContainer* m_hits{nullptr};
-  IdealPadMap* m_idealPadMap{nullptr};
-
-  std::unique_ptr<PHGarfield> m_garfield{};
-
+  TpcDriftPolylineLookup* m_driftLookup{nullptr};
+  const IdealPadMap* m_idealPadMap{nullptr};
   PHG4TpcGeomContainer* m_geomContainerTpc{nullptr};
-  std::array<DriftPolyline, 48 * 2 * 12 * NPhiSamples> m_driftLookup;
+
+  TpcDriftPolylineLookup::Config m_driftConfig;
   unsigned int m_event{0};
   double m_t0{8};
   double m_tpcAdcClock{56.881262};

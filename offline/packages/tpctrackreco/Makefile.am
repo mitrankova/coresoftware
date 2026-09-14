@@ -52,6 +52,7 @@ pkginclude_HEADERS = \
   TpcPolyTrackSeedConverter.h \
   TpcPolyClusterTrkrClusterConverter.h \
   Tpc_FittingTools.h \
+  TpcDriftPolylineLookup.h \
   IdealPadMap.h
 
 
@@ -112,6 +113,7 @@ libtpctrackreco_la_SOURCES = \
   TpcTrackHelixFitter.cc \
   TpcTrackKalmanFitter.cc \
   Tpc_FittingTools.cc \
+  TpcDriftPolylineLookup.cc \
   IdealPadMap.cc
 
 libtpctrackreco_io_la_LIBADD = \
