@@ -16,6 +16,7 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib64
 
 pkginclude_HEADERS = \
+  BeamFrameTransform.h \
   Tpc_ModuleTrackReco.h \
   Tpc_ModuleTrack.h \
   Tpc_ModuleTrackv1.h \
