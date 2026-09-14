@@ -32,6 +32,8 @@ pkginclude_HEADERS = \
   TpcCrossingDecisionContainer.h \
   TpcCrossingDecisionContainerv1.h \
   TpcCrossingFinder.h \
+  TpcCrossingTrajectory.h \
+  TpcCrossingTrajectoryContainer.h \
   Tpc_PolyTrack.h \
   Tpc_PolyTrackv1.h \
   Tpc_PolyTrackContainer.h \
@@ -66,6 +68,8 @@ ROOTDICTS = \
   TpcCrossingDecisionv1_Dict.cc \
   TpcCrossingDecisionContainer_Dict.cc \
   TpcCrossingDecisionContainerv1_Dict.cc \
+  TpcCrossingTrajectory_Dict.cc \
+  TpcCrossingTrajectoryContainer_Dict.cc \
   Tpc_ModuleTrack_Dict.cc \
   Tpc_ModuleTrackContainer_Dict.cc \
   Tpc_ModuleTrackContainerv1_Dict.cc \
@@ -94,6 +98,8 @@ libtpctrackreco_io_la_SOURCES = \
   Tpc_AssembledTrackContainerv1.cc \
   TpcCrossingDecisionv1.cc \
   TpcCrossingDecisionContainerv1.cc \
+  TpcCrossingTrajectory.cc \
+  TpcCrossingTrajectoryContainer.cc \
   Tpc_PolyTrackv1.cc \
   Tpc_PolyTrackContainerv1.cc \
   Tpc_PolyTrackVertexv1.cc \
