@@ -1,6 +1,7 @@
 #ifndef TPCTRACKRECO_TPCDRIFTPOLYLINELOOKUP_H
 #define TPCTRACKRECO_TPCDRIFTPOLYLINELOOKUP_H
 
+#include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
 #include <array>
@@ -13,14 +14,15 @@
 class IdealPadMap;
 class PHCompositeNode;
 class PHGarfield;
+class TpcDriftPolylineLookupInit;
 
 /**
  * Run-scoped, non-persistent TPC reverse-drift lookup.
  *
  * The lookup is stored once on RUN/TPC_DRIFT_LOOKUP as a transient PHDataNode.
  * Its PHGarfield setup and sampling reproduce the pre-refactor
- * Tpc_PolyClusterizer implementation. Consumers register configuration during
- * InitRun; the cache is initialized once before use and is read-only afterward.
+ * Tpc_PolyClusterizer implementation. Configuration is supplied exactly once by
+ * TpcDriftPolylineLookupInit during InitRun; consumers are read-only afterward.
  */
 class TpcDriftPolylineLookup
 {
@@ -90,10 +92,6 @@ class TpcDriftPolylineLookup
   TpcDriftPolylineLookup& operator=(const TpcDriftPolylineLookup&) = delete;
 
   static TpcDriftPolylineLookup* get(PHCompositeNode* topNode);
-  static TpcDriftPolylineLookup* getOrCreate(PHCompositeNode* topNode, int verbosity = 0);
-
-  bool registerConfiguration(const Config& config, const std::string& source, int verbosity = 0);
-  bool initialize(PHCompositeNode* topNode, int verbosity = 0);
   bool isInitialized() const { return m_initialized; }
 
   bool getPosition(unsigned int layer,
@@ -138,6 +136,12 @@ class TpcDriftPolylineLookup
   const IdealPadMap* idealPadMap() const { return m_idealPadMap.get(); }
 
  private:
+  friend class TpcDriftPolylineLookupInit;
+
+  static TpcDriftPolylineLookup* getOrCreate(PHCompositeNode* topNode, int verbosity = 0);
+  bool configure(const Config& config, int verbosity = 0);
+  bool initialize(PHCompositeNode* topNode, int verbosity = 0);
+
   static constexpr unsigned int FirstLayer = 7;
   static constexpr unsigned int LastLayer = 54;
   static constexpr unsigned int NLayers = LastLayer - FirstLayer + 1;
@@ -193,7 +197,64 @@ class TpcDriftPolylineLookup
   std::array<double, 3> m_tpcMove{{0.0, 0.0, 0.0}};
   std::array<std::array<double, 3>, 2> m_tpcRotations{{{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}}};
   double m_maxLookupTimeNs{0.0};
+  bool m_configured{false};
   bool m_initialized{false};
+};
+
+/**
+ * Fun4All InitRun-only configurator for the shared TPC drift lookup.
+ *
+ * Register this subsystem before TpcCrossingFinder and Tpc_PolyClusterizer.
+ * All PHGarfield/lookup settings are made here exactly once.
+ */
+class TpcDriftPolylineLookupInit : public SubsysReco
+{
+ public:
+  explicit TpcDriftPolylineLookupInit(const std::string& name = "TpcDriftPolylineLookupInit");
+  ~TpcDriftPolylineLookupInit() override = default;
+
+  int InitRun(PHCompositeNode*) override;
+  int process_event(PHCompositeNode*) override;
+
+  void setT0(double v) { m_config.t0 = v; m_config.t0Override = true; }
+  void setTpcAdcClock(double v) { m_config.tpcAdcClock = v; m_config.tpcAdcClockOverride = true; }
+  void setCrossingPeriodNs(double v) { m_config.crossingPeriodNs = v; m_config.crossingPeriodNsOverride = true; }
+  void setReverseDriftStepNs(double v) { m_config.reverseDriftStepNs = v; m_config.reverseDriftStepNsOverride = true; }
+  void setKEffSide0(double v) { m_config.kEffSide0 = v; m_config.kEffSide0Override = true; }
+  void setKEffSide1(double v) { m_config.kEffSide1 = v; m_config.kEffSide1Override = true; }
+  void setField3DCoefficientFile(const std::string& n) { m_config.field3DCoefficientFile = n; m_config.field3DCoefficientFileOverride = true; }
+  void setElectricFieldMap(const std::string& n) { m_config.electricFieldMap = n; m_config.electricFieldMapOverride = true; }
+  void setElectricFieldMap3DSide0(const std::string& n) { m_config.field3DSide0 = n; m_config.field3DSide0Override = true; }
+  void setElectricFieldMap3DSide1(const std::string& n) { m_config.field3DSide1 = n; m_config.field3DSide1Override = true; }
+  void setFrameElectricFieldMap3DSide0(const std::string& n) { m_config.framesSide0 = n; m_config.framesSide0Override = true; }
+  void setFrameElectricFieldMap3DSide1(const std::string& n) { m_config.framesSide1 = n; m_config.framesSide1Override = true; }
+  void setCMVoltageDefault(double v) { m_config.cmVoltageDefault = v; m_config.cmVoltageDefaultOverride = true; }
+  void setUseSurveyGeometry(bool v) { m_config.useSurveyGeometry = v; m_config.useSurveyGeometryOverride = true; }
+  void setMoveTpc(double x, double y, double z) { m_config.tpcMove = {{x, y, z}}; m_config.tpcMoveOverride = true; }
+  void setRotateTpc(unsigned int index, double x, double y, double z)
+  {
+    if (index < m_config.tpcRotations.size())
+    {
+      m_config.tpcRotations[index] = {{x, y, z}};
+      m_config.tpcRotationOverride[index] = true;
+    }
+  }
+  void setStartZ(double south_z, double north_z)
+  {
+    m_config.startZSouth = south_z;
+    m_config.startZNorth = north_z;
+    m_config.startZOverride = true;
+  }
+  void setFrameChargeScale(double v) { m_config.frameChargeScale = v; m_config.frameChargeScaleOverride = true; }
+  void setFieldCageVoltageOffsets(double ifcSouth, double ifcNorth, double ofcSouth, double ofcNorth)
+  {
+    m_config.fieldCageVoltageOffsets = {{ifcSouth, ifcNorth, ofcSouth, ofcNorth}};
+    m_config.fieldCageVoltageOffsetsOverride = true;
+  }
+  void setUse2DElectricFieldMap(bool v) { m_config.use2DElectricFieldMap = v; m_config.use2DElectricFieldMapOverride = true; }
+
+ private:
+  TpcDriftPolylineLookup::Config m_config;
 };
 
 #endif  // TPCTRACKRECO_TPCDRIFTPOLYLINELOOKUP_H

@@ -73,19 +73,17 @@ int Tpc_PolyClusterizer::InitRun(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
-  m_driftLookup = TpcDriftPolylineLookup::getOrCreate(topNode, Verbosity());
+  m_driftLookup = TpcDriftPolylineLookup::get(topNode);
   if (!m_driftLookup)
   {
-    std::cerr << Name() << "::InitRun - failed to obtain " << TpcDriftPolylineLookup::NodeName << std::endl;
+    std::cerr << Name() << "::InitRun - missing RUN/" << TpcDriftPolylineLookup::NodeName
+              << "; register TpcDriftPolylineLookupInit before Tpc_PolyClusterizer" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
-  if (!m_driftLookup->registerConfiguration(m_driftConfig, Name(), Verbosity()))
+  if (!m_driftLookup->isInitialized())
   {
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-  if (!m_driftLookup->initialize(topNode, Verbosity()))
-  {
-    std::cerr << Name() << "::InitRun - failed to initialize shared TPC drift lookup" << std::endl;
+    std::cerr << Name() << "::InitRun - RUN/" << TpcDriftPolylineLookup::NodeName
+              << " is not initialized; TpcDriftPolylineLookupInit must run first" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 

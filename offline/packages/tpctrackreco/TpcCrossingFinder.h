@@ -36,46 +36,6 @@ class TpcCrossingFinder : public SubsysReco
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setVertexMapNodeName(const std::string& n) { m_vertexMapNodeName = n; }
 
-  void setT0(double v) { m_driftConfig.t0 = v; m_driftConfig.t0Override = true; }
-  void setTpcAdcClock(double v) { m_driftConfig.tpcAdcClock = v; m_driftConfig.tpcAdcClockOverride = true; }
-  void setCrossingPeriodNs(double v) { m_driftConfig.crossingPeriodNs = v; m_driftConfig.crossingPeriodNsOverride = true; }
-  void setReverseDriftStepNs(double v) { m_driftConfig.reverseDriftStepNs = v; m_driftConfig.reverseDriftStepNsOverride = true; }
-  void setKEffSide0(double v) { m_driftConfig.kEffSide0 = v; m_driftConfig.kEffSide0Override = true; }
-  void setKEffSide1(double v) { m_driftConfig.kEffSide1 = v; m_driftConfig.kEffSide1Override = true; }
-  void setCMVoltageDefault(double v) { m_driftConfig.cmVoltageDefault = v; m_driftConfig.cmVoltageDefaultOverride = true; }
-  void setUseSurveyGeometry(bool v) { m_driftConfig.useSurveyGeometry = v; m_driftConfig.useSurveyGeometryOverride = true; }
-  void setMoveTpc(double x, double y, double z) { m_driftConfig.tpcMove = {{x, y, z}}; m_driftConfig.tpcMoveOverride = true; }
-  void setRotateTpc(unsigned int index, double x, double y, double z)
-  {
-    if (index < m_driftConfig.tpcRotations.size())
-    {
-      m_driftConfig.tpcRotations[index] = {{x, y, z}};
-      m_driftConfig.tpcRotationOverride[index] = true;
-    }
-  }
-  void setStartZ(double south_z, double north_z)
-  {
-    m_driftConfig.startZSouth = south_z;
-    m_driftConfig.startZNorth = north_z;
-    m_driftConfig.startZOverride = true;
-  }
-
-  // Shared lookup configuration. These mirror Tpc_PolyClusterizer so either
-  // consumer can configure the one run-scoped cache before initialization.
-  void setField3DCoefficientFile(const std::string& n) { m_driftConfig.field3DCoefficientFile = n; m_driftConfig.field3DCoefficientFileOverride = true; }
-  void setElectricFieldMap(const std::string& n) { m_driftConfig.electricFieldMap = n; m_driftConfig.electricFieldMapOverride = true; }
-  void setElectricFieldMap3DSide0(const std::string& n) { m_driftConfig.field3DSide0 = n; m_driftConfig.field3DSide0Override = true; }
-  void setElectricFieldMap3DSide1(const std::string& n) { m_driftConfig.field3DSide1 = n; m_driftConfig.field3DSide1Override = true; }
-  void setFrameElectricFieldMap3DSide0(const std::string& n) { m_driftConfig.framesSide0 = n; m_driftConfig.framesSide0Override = true; }
-  void setFrameElectricFieldMap3DSide1(const std::string& n) { m_driftConfig.framesSide1 = n; m_driftConfig.framesSide1Override = true; }
-  void setFrameChargeScale(double v) { m_driftConfig.frameChargeScale = v; m_driftConfig.frameChargeScaleOverride = true; }
-  void setFieldCageVoltageOffsets(double ifcSouth, double ifcNorth, double ofcSouth, double ofcNorth)
-  {
-    m_driftConfig.fieldCageVoltageOffsets = {{ifcSouth, ifcNorth, ofcSouth, ofcNorth}};
-    m_driftConfig.fieldCageVoltageOffsetsOverride = true;
-  }
-  void setUse2DElectricFieldMap(bool v) { m_driftConfig.use2DElectricFieldMap = v; m_driftConfig.use2DElectricFieldMapOverride = true; }
-
   void setRequireSiliconVertex(bool v) { m_requireSiliconVertex = v; }
   void setResolveAmbiguousWithoutVertex(bool v) { m_resolveAmbiguousWithoutVertex = v; }
   void setPreferTriggeredCrossing(bool v) { m_preferTriggeredCrossing = v; }
@@ -174,7 +134,6 @@ class TpcCrossingFinder : public SubsysReco
   TrkrClusterContainer* m_clusterMap{nullptr};
   SvtxVertexMap* m_vertexMap{nullptr};
   TpcDriftPolylineLookup* m_driftLookup{nullptr};
-  TpcDriftPolylineLookup::Config m_driftConfig;
 
   unsigned int m_event{0};
   double m_tpcHalfLength{105.5};

@@ -78,34 +78,49 @@ namespace
     return static_cast<double>(sample) / static_cast<double>(TpcDriftPolylineLookup::NPhiSamples - 1U);
   }
 
-  template <class T>
-  bool merge_value(T& destination,
-                   bool& destinationOverride,
-                   const T& source,
-                   const bool sourceOverride,
-                   const char* label,
-                   const std::string& sourceName)
-  {
-    if (!sourceOverride)
-    {
-      return true;
-    }
-
-    if (destinationOverride && destination != source)
-    {
-      std::cerr << "TpcDriftPolylineLookup::registerConfiguration - conflicting explicit " << label
-                << " from " << sourceName << std::endl;
-      return false;
-    }
-
-    destination = source;
-    destinationOverride = true;
-    return true;
-  }
 }  // namespace
 
 TpcDriftPolylineLookup::TpcDriftPolylineLookup() = default;
 TpcDriftPolylineLookup::~TpcDriftPolylineLookup() = default;
+
+TpcDriftPolylineLookupInit::TpcDriftPolylineLookupInit(const std::string& name)
+  : SubsysReco(name)
+{
+}
+
+int TpcDriftPolylineLookupInit::InitRun(PHCompositeNode* topNode)
+{
+  auto* lookup = TpcDriftPolylineLookup::getOrCreate(topNode, Verbosity());
+  if (!lookup)
+  {
+    std::cerr << Name() << "::InitRun - failed to create " << TpcDriftPolylineLookup::NodeName << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  if (!lookup->configure(m_config, Verbosity()))
+  {
+    std::cerr << Name() << "::InitRun - failed to configure shared TPC drift lookup" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  if (!lookup->initialize(topNode, Verbosity()))
+  {
+    std::cerr << Name() << "::InitRun - failed to initialize shared TPC drift lookup" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  if (Verbosity() > 0)
+  {
+    std::cout << Name() << "::InitRun - initialized RUN/" << TpcDriftPolylineLookup::NodeName
+              << " once for this run" << std::endl;
+  }
+  return Fun4AllReturnCodes::EVENT_OK;
+}
+
+int TpcDriftPolylineLookupInit::process_event(PHCompositeNode*)
+{
+  return Fun4AllReturnCodes::EVENT_OK;
+}
 
 TpcDriftPolylineLookup* TpcDriftPolylineLookup::get(PHCompositeNode* topNode)
 {
@@ -153,65 +168,26 @@ TpcDriftPolylineLookup* TpcDriftPolylineLookup::getOrCreate(PHCompositeNode* top
   return lookup;
 }
 
-bool TpcDriftPolylineLookup::registerConfiguration(const Config& config,
-                                           const std::string& source,
-                                           const int verbosity)
+bool TpcDriftPolylineLookup::configure(const Config& config, const int verbosity)
 {
   if (m_initialized)
   {
-    std::cerr << "TpcDriftPolylineLookup::registerConfiguration - configuration from " << source
-              << " arrived after lookup initialization" << std::endl;
+    std::cerr << "TpcDriftPolylineLookup::configure - lookup is already initialized" << std::endl;
+    return false;
+  }
+  if (m_configured)
+  {
+    std::cerr << "TpcDriftPolylineLookup::configure - configuration was already supplied" << std::endl;
     return false;
   }
 
-  bool ok = true;
-  ok &= merge_value(m_config.t0, m_config.t0Override, config.t0, config.t0Override, "t0", source);
-  ok &= merge_value(m_config.tpcAdcClock, m_config.tpcAdcClockOverride, config.tpcAdcClock, config.tpcAdcClockOverride, "TPC ADC clock", source);
-  ok &= merge_value(m_config.crossingPeriodNs, m_config.crossingPeriodNsOverride, config.crossingPeriodNs, config.crossingPeriodNsOverride, "crossing period", source);
-  ok &= merge_value(m_config.reverseDriftStepNs, m_config.reverseDriftStepNsOverride, config.reverseDriftStepNs, config.reverseDriftStepNsOverride, "reverse-drift step", source);
-
-  if (config.startZOverride)
+  m_config = config;
+  m_configured = true;
+  if (verbosity > 1)
   {
-    if (m_config.startZOverride &&
-        (m_config.startZSouth != config.startZSouth || m_config.startZNorth != config.startZNorth))
-    {
-      std::cerr << "TpcDriftPolylineLookup::registerConfiguration - conflicting explicit start-z values from " << source << std::endl;
-      ok = false;
-    }
-    else
-    {
-      m_config.startZSouth = config.startZSouth;
-      m_config.startZNorth = config.startZNorth;
-      m_config.startZOverride = true;
-    }
+    std::cout << "TpcDriftPolylineLookup::configure - accepted single run configuration" << std::endl;
   }
-
-  ok &= merge_value(m_config.kEffSide0, m_config.kEffSide0Override, config.kEffSide0, config.kEffSide0Override, "kEff side 0", source);
-  ok &= merge_value(m_config.kEffSide1, m_config.kEffSide1Override, config.kEffSide1, config.kEffSide1Override, "kEff side 1", source);
-  ok &= merge_value(m_config.cmVoltageDefault, m_config.cmVoltageDefaultOverride, config.cmVoltageDefault, config.cmVoltageDefaultOverride, "CM voltage", source);
-  ok &= merge_value(m_config.frameChargeScale, m_config.frameChargeScaleOverride, config.frameChargeScale, config.frameChargeScaleOverride, "frame charge scale", source);
-  ok &= merge_value(m_config.useSurveyGeometry, m_config.useSurveyGeometryOverride, config.useSurveyGeometry, config.useSurveyGeometryOverride, "survey geometry flag", source);
-  ok &= merge_value(m_config.use2DElectricFieldMap, m_config.use2DElectricFieldMapOverride, config.use2DElectricFieldMap, config.use2DElectricFieldMapOverride, "2D field-map flag", source);
-  ok &= merge_value(m_config.tpcMove, m_config.tpcMoveOverride, config.tpcMove, config.tpcMoveOverride, "TPC translation", source);
-  ok &= merge_value(m_config.fieldCageVoltageOffsets, m_config.fieldCageVoltageOffsetsOverride, config.fieldCageVoltageOffsets, config.fieldCageVoltageOffsetsOverride, "field-cage voltage offsets", source);
-
-  for (unsigned int i = 0; i < m_config.tpcRotations.size(); ++i)
-  {
-    ok &= merge_value(m_config.tpcRotations[i], m_config.tpcRotationOverride[i], config.tpcRotations[i], config.tpcRotationOverride[i], "TPC rotation", source);
-  }
-
-  ok &= merge_value(m_config.electricFieldMap, m_config.electricFieldMapOverride, config.electricFieldMap, config.electricFieldMapOverride, "2D electric-field map", source);
-  ok &= merge_value(m_config.field3DCoefficientFile, m_config.field3DCoefficientFileOverride, config.field3DCoefficientFile, config.field3DCoefficientFileOverride, "kEff coefficient file", source);
-  ok &= merge_value(m_config.field3DSide0, m_config.field3DSide0Override, config.field3DSide0, config.field3DSide0Override, "3D electric-field map side 0", source);
-  ok &= merge_value(m_config.field3DSide1, m_config.field3DSide1Override, config.field3DSide1, config.field3DSide1Override, "3D electric-field map side 1", source);
-  ok &= merge_value(m_config.framesSide0, m_config.framesSide0Override, config.framesSide0, config.framesSide0Override, "frame electric-field map side 0", source);
-  ok &= merge_value(m_config.framesSide1, m_config.framesSide1Override, config.framesSide1, config.framesSide1Override, "frame electric-field map side 1", source);
-
-  if (verbosity > 1 && ok)
-  {
-    std::cout << "TpcDriftPolylineLookup::registerConfiguration - accepted configuration from " << source << std::endl;
-  }
-  return ok;
+  return true;
 }
 
 bool TpcDriftPolylineLookup::load_cdb_inputs(const int verbosity)
@@ -335,6 +311,11 @@ bool TpcDriftPolylineLookup::initialize(PHCompositeNode* topNode, const int verb
   if (m_initialized)
   {
     return true;
+  }
+  if (!m_configured)
+  {
+    std::cerr << "TpcDriftPolylineLookup::initialize - no configuration supplied; register TpcDriftPolylineLookupInit before consumers" << std::endl;
+    return false;
   }
   if (!topNode)
   {

@@ -70,17 +70,17 @@ int TpcCrossingFinder::InitRun(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  // Register this module's requested settings, but leave construction to the
-  // shared run-scoped service. Tpc_PolyClusterizer normally initializes it in
-  // its InitRun after all Finder settings have been merged.
-  m_driftLookup = TpcDriftPolylineLookup::getOrCreate(topNode, Verbosity());
+  m_driftLookup = TpcDriftPolylineLookup::get(topNode);
   if (!m_driftLookup)
   {
-    std::cerr << Name() << "::InitRun - failed to obtain " << TpcDriftPolylineLookup::NodeName << std::endl;
+    std::cerr << Name() << "::InitRun - missing RUN/" << TpcDriftPolylineLookup::NodeName
+              << "; register TpcDriftPolylineLookupInit before TpcCrossingFinder" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
-  if (!m_driftLookup->registerConfiguration(m_driftConfig, Name(), Verbosity()))
+  if (!m_driftLookup->isInitialized())
   {
+    std::cerr << Name() << "::InitRun - RUN/" << TpcDriftPolylineLookup::NodeName
+              << " is not initialized; TpcDriftPolylineLookupInit must run first" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
@@ -704,15 +704,9 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  // Normally initialized by Tpc_PolyClusterizer::InitRun. This fallback keeps
-  // TpcCrossingFinder usable on its own and still builds the cache only once.
-  if (!m_driftLookup)
+  if (!m_driftLookup || !m_driftLookup->isInitialized())
   {
-    m_driftLookup = TpcDriftPolylineLookup::get(topNode);
-  }
-  if (!m_driftLookup || (!m_driftLookup->isInitialized() && !m_driftLookup->initialize(topNode, Verbosity())))
-  {
-    std::cerr << Name() << "::process_event - shared TPC drift lookup is unavailable" << std::endl;
+    std::cerr << Name() << "::process_event - shared TPC drift lookup is unavailable or uninitialized" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
