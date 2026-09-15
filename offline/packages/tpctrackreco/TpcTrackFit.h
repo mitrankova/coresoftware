@@ -4,6 +4,7 @@
 #define TPCTRACKRECO_TPCTRACKFIT_H
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@ struct TpcTrackVec3
 
 struct TpcTrackPoint
 {
+  enum class Detector : std::uint8_t { Unknown, Tpc, Mvtx, Intt };
   int track_id{0};
   int shower_id{0};
   int layer{0};
@@ -25,6 +27,12 @@ struct TpcTrackPoint
   TpcTrackVec3 momentum;
   double t{0.0};
   double path{0.0};
+  Detector detector{Detector::Unknown};
+  std::uint64_t cluster_key{0};
+  unsigned int measurement_dimension{3};
+  bool has_measurement_model{false};
+  std::array<double, 9> measurement_projection{{1., 0., 0., 0., 1., 0., 0., 0., 1.}};
+  std::array<double, 9> measurement_covariance{};
 };
 
 struct TpcTrackHelix

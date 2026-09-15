@@ -585,6 +585,10 @@ namespace
                                         const double var_r,
                                         const double var_z)
   {
+    if (point.has_measurement_model)
+    {
+      return Eigen::Map<const MeasurementCov>(point.measurement_covariance.data());
+    }
     const double radius = std::hypot(point.position.x, point.position.y);
     const double cos_phi = (radius > 0.0) ? point.position.x / radius : 1.0;
     const double sin_phi = (radius > 0.0) ? point.position.y / radius : 0.0;
@@ -596,6 +600,23 @@ namespace
     cov(1, 0) = cov(0, 1);
     cov(2, 2) = var_z;
     return cov;
+  }
+
+  MeasurementMatrix measurement_projection(const TpcTrackPoint &point)
+  {
+    if (!point.has_measurement_model)
+    {
+      MeasurementMatrix projection = MeasurementMatrix::Zero();
+      projection(0, TpcTrackKalmanFitter::X) = 1.0;
+      projection(1, TpcTrackKalmanFitter::Y) = 1.0;
+      projection(2, TpcTrackKalmanFitter::Z) = 1.0;
+      return projection;
+    }
+    MeasurementMatrix projection = MeasurementMatrix::Zero();
+    for (unsigned int row = 0; row < 3; ++row)
+      for (unsigned int col = 0; col < 3; ++col)
+        projection(row, col) = point.measurement_projection[row * 3 + col];
+    return projection;
   }
 
   MeasurementCov measurement_local_rotation(const TpcTrackPoint &point)
@@ -795,11 +816,6 @@ bool TpcTrackKalmanFitter::fit(const std::vector<TpcTrackPoint> &input_points,
   const double var_r = square(sigma_r);
   const double var_z = square(sigma_z);
 
-  MeasurementMatrix hmat = MeasurementMatrix::Zero();
-  hmat(0, X) = 1.0;
-  hmat(1, Y) = 1.0;
-  hmat(2, Z) = 1.0;
-
   StateMatrix cov = StateMatrix::Zero();
   cov(X, X) = square(config.initial_sigma_pos_cm);
   cov(Y, Y) = square(config.initial_sigma_pos_cm);
@@ -867,8 +883,9 @@ bool TpcTrackKalmanFitter::fit(const std::vector<TpcTrackPoint> &input_points,
       pred_cov = 0.5 * (pred_cov + pred_cov.transpose()).eval();
     }
 
-    MeasurementVector measurement;
-    measurement << points[index].position.x, points[index].position.y, points[index].position.z;
+    const MeasurementMatrix hmat = measurement_projection(points[index]);
+    const Eigen::Vector3d global_measurement(points[index].position.x, points[index].position.y, points[index].position.z);
+    const MeasurementVector measurement = hmat.block<3, 3>(0, 0) * global_measurement;
     const MeasurementCov meas_cov = measurement_covariance(points[index], var_rphi, var_r, var_z);
     const MeasurementVector meas_residual = measurement - hmat * pred_state;
     const MeasurementCov innovation = hmat * pred_cov * hmat.transpose() + meas_cov;
@@ -933,7 +950,7 @@ bool TpcTrackKalmanFitter::fit(const std::vector<TpcTrackPoint> &input_points,
     result.measurement_used.push_back(1U);
     ++result.naccepted;
     chi2 += step_chi2;
-    ndof += 3;
+    ndof += static_cast<int>(points[index].measurement_dimension);
 
     states_predicted[index] = pred_state;
     covs_predicted[index] = pred_cov;

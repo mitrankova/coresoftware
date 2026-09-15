@@ -12,6 +12,8 @@ class Tpc_PolyTrackContainer;
 class Tpc_PolyClusterContainer;
 class TpcDriftPolylineLookup;
 class TrkrHitSetContainer;
+class TrkrClusterContainer;
+class ActsGeometry;
 class PHField;
 class TpcCrossingTrackFinalizer : public SubsysReco
 {
@@ -41,6 +43,8 @@ class TpcCrossingTrackFinalizer : public SubsysReco
   Tpc_PolyClusterContainer* m_clusters{nullptr};
   Tpc_PolyClusterContainer* m_correctedClusters{nullptr};
   TrkrHitSetContainer* m_hits{nullptr};
+  TrkrClusterContainer* m_trkrClusters{nullptr};
+  ActsGeometry* m_geometry{nullptr};
   TpcDriftPolylineLookup* m_lookup{nullptr};
   const PHField* m_field{nullptr};
   std::unique_ptr<FastFieldTrackFitter> m_fitter;

@@ -22,6 +22,11 @@
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
+#include <trackbase/TrkrCluster.h>
+#include <trackbase/TrkrClusterContainer.h>
+#include <trackbase/ActsGeometry.h>
+#include <Acts/Surfaces/Surface.hpp>
+#include <Acts/Definitions/Units.hpp>
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -36,9 +41,11 @@ int TpcCrossingTrackFinalizer::getNodes(PHCompositeNode* topNode)
   m_candidates = findNode::getClass<TpcSiliconMatchCandidateContainer>(topNode, m_candidateNodeName);
   m_clusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_clusterNodeName);
   m_hits = findNode::getClass<TrkrHitSetContainer>(topNode, "TRKR_HITSET");
+  m_trkrClusters = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
+  m_geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
   m_lookup = TpcDriftPolylineLookup::get(topNode);
   m_field = PHFieldUtility::GetFieldMapNode(nullptr, topNode, Verbosity());
-  if (!m_tracks || !m_trajectories || !m_candidates || !m_clusters || !m_hits || !m_lookup || !m_field)
+  if (!m_tracks || !m_trajectories || !m_candidates || !m_clusters || !m_hits || !m_trkrClusters || !m_geometry || !m_lookup || !m_field)
   {
     std::cerr << Name() << "::getNodes - missing full-track input node" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
@@ -80,6 +87,8 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
   std::map<TrkrDefs::cluskey, const Tpc_PolyCluster*> clustersByKey;
   for (unsigned int i = 0; i < m_clusters->size(); ++i) if (const auto* cluster = m_clusters->get_cluster(i)) clustersByKey[cluster->get_trkr_cluster_key()] = cluster;
   unsigned int outputId = 0;
+  unsigned int finalFits = 0;
+  double finalFitSeconds = 0.0;
   for (unsigned int i = 0; i < m_candidates->size(); ++i)
   {
     const auto* candidate = m_candidates->get(i);
@@ -126,8 +135,54 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
       corrected->set_rms_x(std::sqrt(std::max(0., sx2 / sw - x * x))); corrected->set_rms_y(std::sqrt(std::max(0., sy2 / sw - y * y))); corrected->set_rms_z(std::sqrt(std::max(0., sz2 / sw - z * z)));
       m_correctedClusters->add_cluster(corrected); fitClusters.push_back(corrected);
     }
+    std::vector<TpcTrackPoint> measurements;
+    measurements.reserve(fitClusters.size() + candidate->get_silicon_cluster_keys().size());
+    for (const auto* cluster : fitClusters)
+    {
+      TpcTrackPoint point;
+      point.track_id = static_cast<int>(parent->get_track_id());
+      point.layer = cluster->size_hits() ? static_cast<int>(TrkrDefs::getLayer(cluster->get_hit_index(0).first)) : 0;
+      point.position = {cluster->get_centroid_x(), cluster->get_centroid_y(), cluster->get_centroid_z()};
+      point.momentum = {parent->get_px(), parent->get_py(), parent->get_pz()};
+      point.detector = TpcTrackPoint::Detector::Tpc;
+      point.cluster_key = cluster->get_trkr_cluster_key();
+      measurements.push_back(point);
+    }
+    for (const auto key : candidate->get_silicon_cluster_keys())
+    {
+      auto* cluster = m_trkrClusters->findCluster(key);
+      const auto surface = cluster ? m_geometry->maps().getSurface(key, cluster) : nullptr;
+      if (!cluster || !surface) continue;
+      const auto global = m_geometry->getGlobalPosition(key, cluster);
+      const Acts::Vector2 local(cluster->getLocalX() * Acts::UnitConstants::cm,
+                                cluster->getLocalY() * Acts::UnitConstants::cm);
+      const auto& context = m_geometry->geometry().geoContext;
+      const Acts::Vector3 direction(1., 1., 1.);
+      const auto origin = surface->localToGlobal(context, local, direction);
+      const auto along0 = surface->localToGlobal(context, local + Acts::Vector2(Acts::UnitConstants::cm, 0.), direction) - origin;
+      const auto along1 = surface->localToGlobal(context, local + Acts::Vector2(0., Acts::UnitConstants::cm), direction) - origin;
+      const auto axis0 = along0.normalized();
+      const auto axis1 = along1.normalized();
+      const double sigma0 = std::max(1.e-6, static_cast<double>(cluster->getRPhiError()));
+      const double sigma1 = std::max(1.e-6, static_cast<double>(cluster->getZError()));
+      TpcTrackPoint point;
+      point.track_id = static_cast<int>(parent->get_track_id());
+      point.layer = static_cast<int>(TrkrDefs::getLayer(key));
+      point.position = {global.x(), global.y(), global.z()};
+      point.momentum = {parent->get_px(), parent->get_py(), parent->get_pz()};
+      point.detector = TrkrDefs::getTrkrId(key) == TrkrDefs::mvtxId ? TpcTrackPoint::Detector::Mvtx : TpcTrackPoint::Detector::Intt;
+      point.cluster_key = key;
+      point.measurement_dimension = 2;
+      point.has_measurement_model = true;
+      point.measurement_projection = {axis0.x(), axis0.y(), axis0.z(), axis1.x(), axis1.y(), axis1.z(), 0., 0., 0.};
+      point.measurement_covariance = {sigma0 * sigma0, 0., 0., 0., sigma1 * sigma1, 0., 0., 0., 1.};
+      measurements.push_back(point);
+    }
     FastFieldTrackFitter::Result finalFit;
-    const bool fitOk = fitClusters.size() == parent->size_cluster_keys() && m_fitter->fit(*parent, fitClusters, finalFit);
+    const bool allMeasurements = fitClusters.size() == parent->size_cluster_keys() &&
+                                 measurements.size() == fitClusters.size() + candidate->get_silicon_cluster_keys().size();
+    const bool fitOk = allMeasurements && m_fitter->fitMeasurements(*parent, measurements, finalFit);
+    if (fitOk) { ++finalFits; finalFitSeconds += finalFit.fitSeconds; }
 
     auto* full = new Full_PolyTrackv1;
     full->set_event(m_event);
@@ -152,6 +207,8 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
     for (const auto key : candidate->get_silicon_cluster_keys()) full->add_silicon_cluster_key(key);
     m_output->add_track(full);
   }
-  if (Verbosity() > 0) std::cout << Name() << " final_tracks=" << m_output->size() << " corrected_clusters=" << m_correctedClusters->size() << " seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count() << std::endl;
+  if (Verbosity() > 0) std::cout << Name() << " final_tracks=" << m_output->size() << " corrected_clusters=" << m_correctedClusters->size()
+                                 << " combined_fits=" << finalFits << " final_fit_ms=" << (finalFits ? 1.e3 * finalFitSeconds / finalFits : 0.)
+                                 << " seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count() << std::endl;
   return Fun4AllReturnCodes::EVENT_OK;
 }
