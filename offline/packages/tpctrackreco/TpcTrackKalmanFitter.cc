@@ -769,7 +769,8 @@ bool TpcTrackKalmanFitter::fit(const std::vector<TpcTrackPoint> &input_points,
                                const int charge,
                                const TpcKalmanConfig &config,
                                TpcKalmanResult &result,
-                               const double mass_gev)
+                               const double mass_gev,
+                               const std::array<double, StateDim> *initial_native_state)
 {
   result = TpcKalmanResult{};
   result.charge = charge;
@@ -795,7 +796,17 @@ bool TpcTrackKalmanFitter::fit(const std::vector<TpcTrackPoint> &input_points,
   }
 
   StateVector state;
-  if (!initial_state(points, result.seed, theta_values, config, state))
+  if (initial_native_state)
+  {
+    state = to_eigen(*initial_native_state);
+    state(Phi) = normalize_phi(state(Phi));
+    if (!state.allFinite())
+    {
+      result.message = "initial native state is non-finite";
+      return false;
+    }
+  }
+  else if (!initial_state(points, result.seed, theta_values, config, state))
   {
     result.message = "initial state failed";
     return false;

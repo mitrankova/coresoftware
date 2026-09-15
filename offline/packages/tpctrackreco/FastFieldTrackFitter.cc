@@ -46,8 +46,31 @@ bool FastFieldTrackFitter::fitMeasurements(const Tpc_PolyTrack& track,
                                             const std::vector<TpcTrackPoint>& input,
                                             Result& output) const
 {
+  return fitMeasurementsImpl(track, input, nullptr, output);
+}
+
+bool FastFieldTrackFitter::fitMeasurements(
+    const Tpc_PolyTrack& track,
+    const std::vector<TpcTrackPoint>& input,
+    const std::array<double, StateSize>& initialNativeState,
+    Result& output) const
+{
+  return fitMeasurementsImpl(track, input, &initialNativeState, output);
+}
+
+bool FastFieldTrackFitter::fitMeasurementsImpl(
+    const Tpc_PolyTrack& track,
+    const std::vector<TpcTrackPoint>& input,
+    const std::array<double, StateSize>* initialNativeState,
+    Result& output) const
+{
   output = Result{};
-  if (input.size() < 5 || !m_field) return false;
+  output.nMeasurements = input.size();
+  if (input.size() < 5 || !m_field)
+  {
+    output.fitMessage = input.size() < 5 ? "need at least five TPC points" : "missing magnetic field";
+    return false;
+  }
   auto points = input;
   TpcTrackHelixFitter::order_points(points, TpcTrackPointOrder::Radius);
   TpcKalmanConfig config;
@@ -57,15 +80,19 @@ bool FastFieldTrackFitter::fitMeasurements(const Tpc_PolyTrack& track,
   const auto fitBegin = std::chrono::steady_clock::now();
   TpcKalmanResult fit;
   const int charge = track.get_charge() < 0 ? -1 : 1;
-  if (!TpcTrackKalmanFitter::fit(points, charge, config, fit) || fit.states_smoothed.empty()) return false;
+  const bool fitOk = TpcTrackKalmanFitter::fit(points, charge, config, fit, 0.13957039, initialNativeState);
   output.fitSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - fitBegin).count();
+  output.fitSuccess = fit.success;
+  output.fitMessage = fit.message;
+  output.nAccepted = fit.naccepted;
+  output.chi2 = fit.chi2;
+  output.ndf = fit.ndof;
+  if (!fitOk || fit.states_smoothed.empty()) return false;
   output.nativeState = fit.states_smoothed.front();
   output.state = externalState(output.nativeState);
   output.covariance = fit.covs_smoothed.front();
   output.pathS = fit.path_s;
   output.propagationConfig = config;
-  output.chi2 = fit.chi2;
-  output.ndf = fit.ndof;
   output.valid = true;
   return true;
 }

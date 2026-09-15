@@ -4,6 +4,7 @@
 #include <trackbase/TrkrDefs.h>
 #include <array>
 #include <map>
+#include <string>
 #include <vector>
 class PHField;
 class Tpc_PolyCluster;
@@ -37,6 +38,10 @@ class FastFieldTrackFitter
     std::array<double, StateSize> informationEigenvalues{};
     double informationCondition{0.0};
     bool informationSolveOk{false};
+    bool fitSuccess{false};
+    std::string fitMessage;
+    std::size_t nMeasurements{0};
+    std::size_t nAccepted{0};
   };
   struct Update
   {
@@ -50,10 +55,14 @@ class FastFieldTrackFitter
   explicit FastFieldTrackFitter(const PHField* field);
   bool fit(const Tpc_PolyTrack&, const std::vector<const Tpc_PolyCluster*>&, Result&) const;
   bool fitMeasurements(const Tpc_PolyTrack&, const std::vector<TpcTrackPoint>&, Result&) const;
+  bool fitMeasurements(const Tpc_PolyTrack&, const std::vector<TpcTrackPoint>&,
+                       const std::array<double, StateSize>& initialNativeState, Result&) const;
   Update linearUpdate(const Result&, const std::map<TrkrDefs::cluskey, std::array<double, 3>>&) const;
   static std::array<double, StateSize> externalState(const std::array<double, StateSize>& native);
   static std::array<double, StateSize> nativeState(const std::array<double, StateSize>& external);
  private:
+  bool fitMeasurementsImpl(const Tpc_PolyTrack&, const std::vector<TpcTrackPoint>&,
+                           const std::array<double, StateSize>* initialNativeState, Result&) const;
   const PHField* m_field{nullptr};
 };
 #endif

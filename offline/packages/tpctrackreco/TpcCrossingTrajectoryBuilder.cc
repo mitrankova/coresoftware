@@ -32,6 +32,61 @@
 
 namespace
 {
+  enum class FullFitOracleStatus
+  {
+    Valid,
+    FitFailed,
+    NonFinite,
+    BadCovariance,
+    DiscontinuousSolution
+  };
+
+  const char* oracleStatusName(const FullFitOracleStatus status)
+  {
+    switch (status)
+    {
+    case FullFitOracleStatus::Valid: return "Valid";
+    case FullFitOracleStatus::FitFailed: return "FitFailed";
+    case FullFitOracleStatus::NonFinite: return "NonFinite";
+    case FullFitOracleStatus::BadCovariance: return "BadCovariance";
+    case FullFitOracleStatus::DiscontinuousSolution: return "DiscontinuousSolution";
+    }
+    return "Unknown";
+  }
+
+  FullFitOracleStatus classifyOracle(const FastFieldTrackFitter::Result& reference,
+                                     const FastFieldTrackFitter::Result& candidate,
+                                     double& continuityMaxPull)
+  {
+    continuityMaxPull = 0.;
+    if (!candidate.fitSuccess || !candidate.valid) return FullFitOracleStatus::FitFailed;
+    if (!std::isfinite(candidate.chi2)) return FullFitOracleStatus::NonFinite;
+    for (const double value : candidate.nativeState)
+      if (!std::isfinite(value)) return FullFitOracleStatus::NonFinite;
+    for (const double value : candidate.covariance)
+      if (!std::isfinite(value)) return FullFitOracleStatus::NonFinite;
+    for (unsigned int index = 0; index < FastFieldTrackFitter::StateSize; ++index)
+      if (!(candidate.covariance[7 * index] > 0.)) return FullFitOracleStatus::BadCovariance;
+
+    // This is only a QA continuity diagnostic. A 50-sigma jump in any of the
+    // angular/curvature parameters is reported, never clipped or rejected by
+    // reconstruction. It combines both fit covariances rather than imposing a
+    // lone absolute QOverPt cut.
+    const std::array<unsigned int, 3> continuityIndices{{TpcTrackKalmanFitter::Phi,
+                                                         TpcTrackKalmanFitter::QOverPt,
+                                                         TpcTrackKalmanFitter::TanLambda}};
+    for (const unsigned int index : continuityIndices)
+    {
+      double delta = candidate.nativeState[index] - reference.nativeState[index];
+      if (index == TpcTrackKalmanFitter::Phi) delta = std::remainder(delta, 2. * M_PI);
+      const double variance = reference.covariance[7 * index] + candidate.covariance[7 * index];
+      if (!(variance > 0.) || !std::isfinite(variance)) return FullFitOracleStatus::BadCovariance;
+      continuityMaxPull = std::max(continuityMaxPull, std::abs(delta) / std::sqrt(variance));
+    }
+    return continuityMaxPull > 50. ? FullFitOracleStatus::DiscontinuousSolution
+                                   : FullFitOracleStatus::Valid;
+  }
+
   double relativeDifference(const double lhs, const double rhs)
   {
     constexpr double floor = 1.e-12;
@@ -187,6 +242,10 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
   for (unsigned int i = 0; i < m_clusters->size(); ++i) if (const auto* c = m_clusters->get_cluster(i)) byKey[c->get_trkr_cluster_key()] = c;
   unsigned int referenceFits = 0, deltaBuilds = 0;
   unsigned int longitudinalJacobianValidations = 0;
+  unsigned int fullValidationAttempted = 0, fullValidationValid = 0;
+  unsigned int fullValidationFailed = 0, fullValidationNonFinite = 0;
+  unsigned int fullValidationBadCovariance = 0, fullValidationDiscontinuous = 0;
+  unsigned int nearValidationAttempted = 0, nearValidationValid = 0;
   double referenceFitSeconds = 0.0, responseSeconds = 0.0, crossingSeconds = 0.0;
   for (unsigned int i = 0; i < m_tracks->size(); ++i)
   {
@@ -291,13 +350,46 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
           point.cluster_key = cluster->get_trkr_cluster_key();
           candidatePoints.push_back(point);
         }
+        ++fullValidationAttempted;
+        const int crossingOffset = static_cast<int>(crossingCandidate->crossing) -
+                                   static_cast<int>(decision->get_reference_crossing());
+        const bool nearReference = std::abs(crossingOffset) <= 3;
+        if (nearReference) ++nearValidationAttempted;
         FastFieldTrackFitter::Result candidateFit;
-        if (m_fitter->fitMeasurements(*track, candidatePoints, candidateFit))
+        m_fitter->fitMeasurements(*track, candidatePoints, referenceFit.nativeState, candidateFit);
+        double continuityMaxPull = 0.;
+        const auto oracleStatus = classifyOracle(referenceFit, candidateFit, continuityMaxPull);
+        switch (oracleStatus)
+        {
+        case FullFitOracleStatus::Valid:
+          ++fullValidationValid;
+          if (nearReference) ++nearValidationValid;
+          break;
+        case FullFitOracleStatus::FitFailed: ++fullValidationFailed; break;
+        case FullFitOracleStatus::NonFinite: ++fullValidationNonFinite; break;
+        case FullFitOracleStatus::BadCovariance: ++fullValidationBadCovariance; break;
+        case FullFitOracleStatus::DiscontinuousSolution: ++fullValidationDiscontinuous; break;
+        }
+        std::cout << Name() << " validation parent_track_id=" << track->get_track_id()
+                  << " reference_crossing=" << decision->get_reference_crossing()
+                  << " candidate_crossing=" << crossingCandidate->crossing
+                  << " crossing_offset=" << crossingOffset
+                  << " near_reference=" << nearReference
+                  << " oracle_status=" << oracleStatusName(oracleStatus)
+                  << " full_fit_success=" << candidateFit.fitSuccess
+                  << " full_chi2=" << candidateFit.chi2
+                  << " full_ndf=" << candidateFit.ndf
+                  << " full_chi2_ndf=" << (candidateFit.ndf > 0 ? candidateFit.chi2 / candidateFit.ndf : -1.)
+                  << " n_measurements=" << candidateFit.nMeasurements
+                  << " n_accepted=" << candidateFit.nAccepted
+                  << " continuity_max_pull=" << continuityMaxPull;
+        if (!candidateFit.fitSuccess)
+        {
+          std::cout << " fit_message=\"" << candidateFit.fitMessage << "\"" << std::endl;
+        }
+        else
         {
           static const std::array<const char*, 6> nativeNames{{"X", "Y", "Z", "Phi", "QOverPt", "TanLambda"}};
-          std::cout << Name() << " validation parent_track_id=" << track->get_track_id()
-                    << " reference_crossing=" << decision->get_reference_crossing()
-                    << " candidate_crossing=" << crossingCandidate->crossing;
           for (unsigned int k = 0; k < TpcCrossingTrajectory::StateSize; ++k)
           {
             double fullDelta = candidateFit.nativeState[k] - referenceFit.nativeState[k];
@@ -333,6 +425,16 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
             }
           std::cout << " QOverPt_response_norm=" << std::sqrt(qOverPtResponse2)
                     << " TanLambda_response_norm=" << std::sqrt(tanLambdaResponse2)
+                    << " reference_QOverPt=" << referenceFit.nativeState[TpcTrackKalmanFitter::QOverPt]
+                    << " candidate_QOverPt=" << candidateFit.nativeState[TpcTrackKalmanFitter::QOverPt]
+                    << " reference_QOverPt_variance=" << referenceFit.covariance[7 * TpcTrackKalmanFitter::QOverPt]
+                    << " candidate_QOverPt_variance=" << candidateFit.covariance[7 * TpcTrackKalmanFitter::QOverPt]
+                    << " reference_Phi=" << referenceFit.nativeState[TpcTrackKalmanFitter::Phi]
+                    << " candidate_Phi=" << candidateFit.nativeState[TpcTrackKalmanFitter::Phi]
+                    << " reference_TanLambda=" << referenceFit.nativeState[TpcTrackKalmanFitter::TanLambda]
+                    << " candidate_TanLambda=" << candidateFit.nativeState[TpcTrackKalmanFitter::TanLambda]
+                    << " reference_TanLambda_variance=" << referenceFit.covariance[7 * TpcTrackKalmanFitter::TanLambda]
+                    << " candidate_TanLambda_variance=" << candidateFit.covariance[7 * TpcTrackKalmanFitter::TanLambda]
                     << " linear_chi2=" << update.chi2 << std::endl;
           if (crossingCandidate->crossing == decision->get_reference_crossing())
           {
@@ -344,21 +446,23 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
                       << " ok=" << identityOk << std::endl;
             assert(identityOk);
           }
-          auto linearNative = update.state;
-          auto linearLayer = linearNative;
-          auto fullLayer = candidateFit.nativeState;
-          for (int layer = static_cast<int>(m_siliconRadii.size()) - 1; layer >= 0; --layer)
+          if (oracleStatus == FullFitOracleStatus::Valid)
           {
-            const double target = m_siliconRadii[layer];
-            for (unsigned int step = 0; step < 1600 && std::hypot(linearLayer[0], linearLayer[1]) > target + 0.08; ++step)
-              linearLayer = TpcTrackKalmanFitter::propagate_state(linearLayer, -0.25, referenceFit.propagationConfig);
-            for (unsigned int step = 0; step < 1600 && std::hypot(fullLayer[0], fullLayer[1]) > target + 0.08; ++step)
-              fullLayer = TpcTrackKalmanFitter::propagate_state(fullLayer, -0.25, candidateFit.propagationConfig);
-            const double linearPhi = std::atan2(linearLayer[1], linearLayer[0]);
-            const double fullPhi = std::atan2(fullLayer[1], fullLayer[0]);
-            std::cout << Name() << " validation crossing=" << crossingCandidate->crossing << " si_layer=" << layer
-                      << " delta_rphi_linear_minus_full=" << target * std::remainder(linearPhi - fullPhi, 2. * M_PI)
-                      << " delta_z_linear_minus_full=" << linearLayer[2] - fullLayer[2] << std::endl;
+            auto linearLayer = update.state;
+            auto fullLayer = candidateFit.nativeState;
+            for (int layer = static_cast<int>(m_siliconRadii.size()) - 1; layer >= 0; --layer)
+            {
+              const double target = m_siliconRadii[layer];
+              for (unsigned int step = 0; step < 1600 && std::hypot(linearLayer[0], linearLayer[1]) > target + 0.08; ++step)
+                linearLayer = TpcTrackKalmanFitter::propagate_state(linearLayer, -0.25, referenceFit.propagationConfig);
+              for (unsigned int step = 0; step < 1600 && std::hypot(fullLayer[0], fullLayer[1]) > target + 0.08; ++step)
+                fullLayer = TpcTrackKalmanFitter::propagate_state(fullLayer, -0.25, candidateFit.propagationConfig);
+              const double linearPhi = std::atan2(linearLayer[1], linearLayer[0]);
+              const double fullPhi = std::atan2(fullLayer[1], fullLayer[0]);
+              std::cout << Name() << " validation crossing=" << crossingCandidate->crossing << " si_layer=" << layer
+                        << " delta_rphi_linear_minus_full=" << target * std::remainder(linearPhi - fullPhi, 2. * M_PI)
+                        << " delta_z_linear_minus_full=" << linearLayer[2] - fullLayer[2] << std::endl;
+            }
           }
         }
       }
@@ -372,6 +476,17 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
                   << " delta_tan_lambda=" << update.delta[5] << " linear_chi2=" << update.chi2 << std::endl;
       }
     }
+  }
+  if (m_validationFraction > 0.)
+  {
+    std::cout << Name() << " full_validation_attempted=" << fullValidationAttempted
+              << " full_validation_valid=" << fullValidationValid
+              << " full_validation_failed=" << fullValidationFailed
+              << " full_validation_nonfinite=" << fullValidationNonFinite
+              << " full_validation_bad_covariance=" << fullValidationBadCovariance
+              << " full_validation_discontinuous=" << fullValidationDiscontinuous
+              << " near_validation_attempted=" << nearValidationAttempted
+              << " near_validation_valid=" << nearValidationValid << std::endl;
   }
   if (Verbosity() > 0)
   {

@@ -27,7 +27,8 @@ class TpcTrackKalmanFitter
                   int charge,
                   const TpcKalmanConfig &config,
                   TpcKalmanResult &result,
-                  double mass_gev = 0.13957039);
+                  double mass_gev = 0.13957039,
+                  const std::array<double, StateDim> *initial_native_state = nullptr);
 
   static TpcTrackVec3 state_position(const std::array<double, StateDim> &state);
   static TpcTrackVec3 state_momentum(const std::array<double, StateDim> &state);
