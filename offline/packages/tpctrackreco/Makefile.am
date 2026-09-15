@@ -17,6 +17,7 @@ AM_LDFLAGS = \
 
 pkginclude_HEADERS = \
   BeamFrameTransform.h \
+  FastFieldTrackFitter.h \
   Full_PolyTrack.h \
   Full_PolyTrackv1.h \
   Full_PolyTrackContainer.h \
@@ -129,6 +130,7 @@ libtpctrackreco_io_la_SOURCES = \
   $(ROOTDICTS)
 
 libtpctrackreco_la_SOURCES = \
+  FastFieldTrackFitter.cc \
   Tpc_ModuleTrackReco.cc \
   Tpc_AssembledTrackReco.cc \
   TpcCrossingFinder.cc \

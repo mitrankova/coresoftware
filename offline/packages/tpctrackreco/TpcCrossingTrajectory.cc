@@ -13,10 +13,12 @@ void TpcCrossingTrajectory::identify(std::ostream& os) const
 void TpcCrossingTrajectory::Reset()
 {
   m_parentTrackId = 0;
+  m_sourceAssembledTrackId = 0;
   m_crossing = 0;
   m_referenceCrossing = 0;
   m_state.fill(0.F);
   m_delta.fill(0.F);
+  m_covariance.fill(0.F);
   m_linearChi2 = nan();
   m_layerStates.fill(LayerState{});
   m_nLayerStates = 0;
