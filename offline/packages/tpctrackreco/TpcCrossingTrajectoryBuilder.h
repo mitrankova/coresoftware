@@ -25,6 +25,10 @@ class TpcCrossingTrajectoryBuilder : public SubsysReco
   void setDecisionNodeName(const std::string& value) { m_decisionNodeName = value; }
   void setOutputNodeName(const std::string& value) { m_outputNodeName = value; }
   void setValidationFraction(double value) { m_validationFraction = value; }
+  void setValidateLongitudinalJacobian(bool value) { m_validateLongitudinalJacobian = value; }
+  void setLongitudinalJacobianValidationTracks(unsigned int value) { m_longitudinalJacobianValidationTracks = value; }
+  void setLongitudinalJacobianEpsilonZ(double value) { m_longitudinalJacobianEpsilonZ = value; }
+  void setLongitudinalJacobianEpsilonTanLambda(double value) { m_longitudinalJacobianEpsilonTanLambda = value; }
  private:
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
@@ -44,5 +48,9 @@ class TpcCrossingTrajectoryBuilder : public SubsysReco
   std::unique_ptr<FastFieldTrackFitter> m_fitter;
   std::array<float, 7> m_siliconRadii{{2.5F, 3.5F, 4.5F, 7.2F, 8.0F, 9.0F, 10.0F}};
   double m_validationFraction{0.0};
+  bool m_validateLongitudinalJacobian{false};
+  unsigned int m_longitudinalJacobianValidationTracks{5};
+  double m_longitudinalJacobianEpsilonZ{1.e-3};
+  double m_longitudinalJacobianEpsilonTanLambda{1.e-5};
 };
 #endif

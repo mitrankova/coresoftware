@@ -108,7 +108,13 @@ bool FastFieldTrackFitter::fit(const Tpc_PolyTrack& track,
     const double path = i < output.pathS.size() ? output.pathS[i] - output.pathS.front() : 0.0;
     const auto predicted = TpcTrackKalmanFitter::propagate_state(output.nativeState, path, output.propagationConfig);
     response.prediction = {predicted[0], predicted[1], predicted[2]};
-    const auto fullJacobian = TpcTrackKalmanFitter::propagation_jacobian(output.nativeState, path, output.propagationConfig);
+    // The response must differentiate the same full-field propagation used for
+    // the nominal prediction. The Kalman fitter may use its local-uniform-Bz
+    // Jacobian approximation internally, but that is not the derivative of
+    // propagate_state in a nonuniform field.
+    auto responseConfig = output.propagationConfig;
+    responseConfig.rkn_fast_field_jacobian = false;
+    const auto fullJacobian = TpcTrackKalmanFitter::propagation_jacobian(output.nativeState, path, responseConfig);
     for (unsigned int row = 0; row < 3; ++row) for (unsigned int col = 0; col < 6; ++col) response.jacobian[row * 6 + col] = fullJacobian[row * 6 + col];
     const double radius = std::hypot(points[i].position.x, points[i].position.y);
     const double c = radius > 0. ? points[i].position.x / radius : 1.;

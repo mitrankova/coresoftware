@@ -27,7 +27,103 @@
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <set>
 #include <vector>
+
+namespace
+{
+  double relativeDifference(const double lhs, const double rhs)
+  {
+    constexpr double floor = 1.e-12;
+    return std::abs(lhs - rhs) / std::max({std::abs(lhs), std::abs(rhs), floor});
+  }
+
+  void validateLongitudinalJacobian(
+      const unsigned int parentTrackId,
+      const short int referenceCrossing,
+      const FastFieldTrackFitter::Result& fit,
+      const std::map<TrkrDefs::cluskey, const Tpc_PolyCluster*>& clusters,
+      const double epsilonZ,
+      const double epsilonTanLambda)
+  {
+    if (!(epsilonZ > 0.) || !(epsilonTanLambda > 0.) || fit.measurements.empty()) return;
+
+    auto zPlus = fit.nativeState;
+    auto zMinus = fit.nativeState;
+    auto tanLPlus = fit.nativeState;
+    auto tanLMinus = fit.nativeState;
+    zPlus[TpcTrackKalmanFitter::Z] += epsilonZ;
+    zMinus[TpcTrackKalmanFitter::Z] -= epsilonZ;
+    tanLPlus[TpcTrackKalmanFitter::TanLambda] += epsilonTanLambda;
+    tanLMinus[TpcTrackKalmanFitter::TanLambda] -= epsilonTanLambda;
+
+    const std::size_t count = fit.measurements.size();
+    const std::set<std::size_t> printed{{0, count / 4, count / 2, (3 * count) / 4, count - 1}};
+    double maxAbsZ = 0., maxRelZ = 0., maxAbsTanL = 0., maxRelTanL = 0.;
+    bool finite = true;
+    for (std::size_t i = 0; i < count; ++i)
+    {
+      const double path = i < fit.pathS.size() ? fit.pathS[i] - fit.pathS.front() : 0.;
+      const auto predictedZPlus = TpcTrackKalmanFitter::propagate_state(zPlus, path, fit.propagationConfig);
+      const auto predictedZMinus = TpcTrackKalmanFitter::propagate_state(zMinus, path, fit.propagationConfig);
+      const auto predictedTanLPlus = TpcTrackKalmanFitter::propagate_state(tanLPlus, path, fit.propagationConfig);
+      const auto predictedTanLMinus = TpcTrackKalmanFitter::propagate_state(tanLMinus, path, fit.propagationConfig);
+      std::array<double, 3> fdZ{};
+      std::array<double, 3> fdTanL{};
+      for (unsigned int row = 0; row < 3; ++row)
+      {
+        fdZ[row] = (predictedZPlus[row] - predictedZMinus[row]) / (2. * epsilonZ);
+        fdTanL[row] = (predictedTanLPlus[row] - predictedTanLMinus[row]) / (2. * epsilonTanLambda);
+        const double jacZ = fit.measurements[i].jacobian[6 * row + TpcTrackKalmanFitter::Z];
+        const double jacTanL = fit.measurements[i].jacobian[6 * row + TpcTrackKalmanFitter::TanLambda];
+        finite = finite && std::isfinite(fdZ[row]) && std::isfinite(fdTanL[row]) &&
+                 std::isfinite(jacZ) && std::isfinite(jacTanL);
+        maxAbsZ = std::max(maxAbsZ, std::abs(jacZ - fdZ[row]));
+        maxRelZ = std::max(maxRelZ, relativeDifference(jacZ, fdZ[row]));
+        maxAbsTanL = std::max(maxAbsTanL, std::abs(jacTanL - fdTanL[row]));
+        maxRelTanL = std::max(maxRelTanL, relativeDifference(jacTanL, fdTanL[row]));
+      }
+      if (printed.count(i) != 0)
+      {
+        const auto cluster = clusters.find(fit.measurements[i].key);
+        const int layer = cluster != clusters.end() && cluster->second->size_hits()
+                              ? static_cast<int>(TrkrDefs::getLayer(cluster->second->get_hit_index(0).first))
+                              : -1;
+        const auto& position = fit.measurements[i].reference;
+        std::cout << "LongitudinalJacobian parent_track_id=" << parentTrackId
+                  << " reference_crossing=" << referenceCrossing
+                  << " measurement_index=" << i << " layer=" << layer
+                  << " radius=" << std::hypot(position[0], position[1])
+                  << " xyz=" << position[0] << "," << position[1] << "," << position[2];
+        static const std::array<const char*, 3> axes{{"x", "y", "z"}};
+        for (unsigned int row = 0; row < 3; ++row)
+        {
+          const double jac = fit.measurements[i].jacobian[6 * row + TpcTrackKalmanFitter::Z];
+          std::cout << " J_Z_" << axes[row] << "=" << jac
+                    << " FD_Z_" << axes[row] << "=" << fdZ[row]
+                    << " diff_Z_" << axes[row] << "=" << jac - fdZ[row];
+        }
+        for (unsigned int row = 0; row < 3; ++row)
+        {
+          const double jac = fit.measurements[i].jacobian[6 * row + TpcTrackKalmanFitter::TanLambda];
+          std::cout << " J_TanL_" << axes[row] << "=" << jac
+                    << " FD_TanL_" << axes[row] << "=" << fdTanL[row]
+                    << " diff_TanL_" << axes[row] << "=" << jac - fdTanL[row];
+        }
+        std::cout << std::endl;
+      }
+    }
+    std::cout << "LongitudinalJacobianSummary parent_track_id=" << parentTrackId
+              << " reference_crossing=" << referenceCrossing
+              << " epsilon_Z_cm=" << epsilonZ
+              << " epsilon_TanLambda=" << epsilonTanLambda
+              << " max_abs_diff_Z_column=" << maxAbsZ
+              << " max_rel_diff_Z_column=" << maxRelZ
+              << " max_abs_diff_TanLambda_column=" << maxAbsTanL
+              << " max_rel_diff_TanLambda_column=" << maxRelTanL
+              << " finite=" << finite << std::endl;
+  }
+}
 
 TpcCrossingTrajectoryBuilder::TpcCrossingTrajectoryBuilder(const std::string& name) : SubsysReco(name) {}
 int TpcCrossingTrajectoryBuilder::getNodes(PHCompositeNode* topNode)
@@ -90,6 +186,7 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
   std::map<TrkrDefs::cluskey, const Tpc_PolyCluster*> byKey;
   for (unsigned int i = 0; i < m_clusters->size(); ++i) if (const auto* c = m_clusters->get_cluster(i)) byKey[c->get_trkr_cluster_key()] = c;
   unsigned int referenceFits = 0, deltaBuilds = 0;
+  unsigned int longitudinalJacobianValidations = 0;
   double referenceFitSeconds = 0.0, responseSeconds = 0.0, crossingSeconds = 0.0;
   for (unsigned int i = 0; i < m_tracks->size(); ++i)
   {
@@ -104,6 +201,14 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
     ++referenceFits;
     referenceFitSeconds += referenceFit.fitSeconds;
     responseSeconds += referenceFit.responseSeconds;
+    if (m_validateLongitudinalJacobian &&
+        longitudinalJacobianValidations < m_longitudinalJacobianValidationTracks)
+    {
+      validateLongitudinalJacobian(track->get_track_id(), decision->get_reference_crossing(),
+                                   referenceFit, byKey, m_longitudinalJacobianEpsilonZ,
+                                   m_longitudinalJacobianEpsilonTanLambda);
+      ++longitudinalJacobianValidations;
+    }
     for (unsigned int ic = 0; ic < decision->get_number_of_candidates(); ++ic)
     {
       const auto* crossingCandidate = decision->get_candidate(ic);
@@ -190,7 +295,8 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
         if (m_fitter->fitMeasurements(*track, candidatePoints, candidateFit))
         {
           static const std::array<const char*, 6> nativeNames{{"X", "Y", "Z", "Phi", "QOverPt", "TanLambda"}};
-          std::cout << Name() << " validation reference_crossing=" << decision->get_reference_crossing()
+          std::cout << Name() << " validation parent_track_id=" << track->get_track_id()
+                    << " reference_crossing=" << decision->get_reference_crossing()
                     << " candidate_crossing=" << crossingCandidate->crossing;
           for (unsigned int k = 0; k < TpcCrossingTrajectory::StateSize; ++k)
           {
