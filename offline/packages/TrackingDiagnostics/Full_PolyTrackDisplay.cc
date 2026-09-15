@@ -4,8 +4,10 @@
 #include <tpctrackreco/Full_PolyTrackContainer.h>
 #include <tpctrackreco/Tpc_PolyCluster.h>
 #include <tpctrackreco/Tpc_PolyClusterContainer.h>
+#include <tpctrackreco/TpcTrackKalmanFitter.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
+#include <phfield/PHFieldUtility.h>
 #include <phool/PHCompositeNode.h>
 #include <phool/getClass.h>
 
@@ -38,8 +40,18 @@ namespace
     double y{0.0};
     double z{0.0};
     unsigned int layer{0};
+    TrkrDefs::cluskey key{TrkrDefs::CLUSKEYMAX};
+    TrkrDefs::TrkrId detector{TrkrDefs::tpcId};
     bool silicon{false};
   };
+
+  const char* detectorName(const TrkrDefs::TrkrId detector)
+  {
+    if (detector == TrkrDefs::mvtxId) return "MVTX";
+    if (detector == TrkrDefs::inttId) return "INTT";
+    if (detector == TrkrDefs::tpcId) return "TPC";
+    return "UNKNOWN";
+  }
 
   int crossingColor(const int crossing)
   {
@@ -74,74 +86,64 @@ namespace
     return output;
   }
 
-  bool xyAtZ(const Full_PolyTrack& track, const double z, const double field,
-             const bool straight, const double direction, double& x, double& y)
+  TPolyLine3D* fittedTrajectory(const Full_PolyTrack& track,
+                                const std::vector<Point>& measurements,
+                                const PHField* field,
+                                const bool straight,
+                                const double fallbackField,
+                                const double zmin,
+                                const double zmax,
+                                const double xymax,
+                                const int color,
+                                unsigned int& attempted,
+                                unsigned int& failed,
+                                unsigned int& samples)
   {
-    const double x0 = track.get_x();
-    const double y0 = track.get_y();
-    const double z0 = track.get_z();
     const double px = track.get_px();
     const double py = track.get_py();
     const double pz = track.get_pz();
-    const double charge = track.get_charge();
-    if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(z0) ||
-        !std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz) ||
-        std::abs(pz) < 1.e-12)
-    {
-      return false;
-    }
-    const double dz = z - z0;
-    if (straight || !std::isfinite(charge) || std::abs(charge * field) < 1.e-12)
-    {
-      x = x0 + direction * px * dz / pz;
-      y = y0 + direction * py * dz / pz;
-      return std::isfinite(x) && std::isfinite(y);
-    }
     const double pt = std::hypot(px, py);
-    if (pt <= 0.0) return false;
-    const double signedRadius = pt / (0.003 * charge * field);
-    const double radius = std::abs(signedRadius);
-    const double sign = signedRadius > 0.0 ? 1.0 : -1.0;
-    const double xc = x0 + sign * radius * py / pt;
-    const double yc = y0 - sign * radius * px / pt;
-    const double phi0 = std::atan2(y0 - yc, x0 - xc);
-    const double arc = direction * dz * pt / pz;
-    const double phi = phi0 - sign * arc / radius;
-    x = xc + radius * std::cos(phi);
-    y = yc + radius * std::sin(phi);
-    return std::isfinite(x) && std::isfinite(y);
-  }
-
-  double residual2(const Full_PolyTrack& track, const std::vector<Point>& points,
-                   const double field, const bool straight, const double direction)
-  {
-    double sum = 0.0;
-    unsigned int count = 0;
-    for (const auto& point : points)
+    if (!(pt > 0.) || measurements.empty()) return nullptr;
+    std::array<double, TpcTrackKalmanFitter::StateDim> state{{
+        track.get_x(), track.get_y(), track.get_z(), std::atan2(py, px),
+        straight ? 0. : track.get_charge() / pt, pz / pt}};
+    for (const double value : state) if (!std::isfinite(value)) return nullptr;
+    TpcKalmanConfig config;
+    config.magnetic_field = straight ? nullptr : field;
+    config.analytic_uniform_propagation = straight;
+    config.bfield_t = straight ? 0. : fallbackField;
+    const auto propagate = [&](const std::array<double, TpcTrackKalmanFitter::StateDim>& input,
+                               const double ds)
     {
-      double x = 0.0, y = 0.0;
-      if (!xyAtZ(track, point.z, field, straight, direction, x, y)) continue;
-      const double dx = x - point.x;
-      const double dy = y - point.y;
-      sum += dx * dx + dy * dy;
-      ++count;
-    }
-    return count ? sum / count : std::numeric_limits<double>::max();
-  }
-
-  TPolyLine3D* fitLine(const Full_PolyTrack& track, const double zmin, const double zmax,
-                       const double xymax, const double field, const bool straight,
-                       const double direction, const int color)
-  {
+      ++attempted;
+      return TpcTrackKalmanFitter::propagate_state(input, ds, config);
+    };
+    const auto plus = propagate(state, 0.25);
+    const auto minus = propagate(state, -0.25);
+    const double radius0 = std::hypot(state[TpcTrackKalmanFitter::X], state[TpcTrackKalmanFitter::Y]);
+    const double radiusPlus = std::hypot(plus[TpcTrackKalmanFitter::X], plus[TpcTrackKalmanFitter::Y]);
+    const double radiusMinus = std::hypot(minus[TpcTrackKalmanFitter::X], minus[TpcTrackKalmanFitter::Y]);
+    if (!std::isfinite(radiusPlus) || !std::isfinite(radiusMinus)) { ++failed; return nullptr; }
+    const double step = radiusPlus >= radiusMinus ? 0.25 : -0.25;
+    double maximumRadius = 0.;
+    for (const auto& point : measurements) maximumRadius = std::max(maximumRadius, std::hypot(point.x, point.y));
     std::vector<Point> points;
-    for (unsigned int i = 0; i <= 100; ++i)
+    if (visible({state[0], state[1], state[2]}, zmin, zmax, xymax))
+      points.push_back({state[0], state[1], state[2]});
+    double previousRadius = radius0;
+    for (unsigned int i = 0; i < 2000 && previousRadius <= maximumRadius + 0.25; ++i)
     {
-      Point point;
-      point.z = zmin + (zmax - zmin) * static_cast<double>(i) / 100.0;
-      if (xyAtZ(track, point.z, field, straight, direction, point.x, point.y) &&
-          std::abs(point.x) <= xymax && std::abs(point.y) <= xymax) points.push_back(point);
+      const auto next = propagate(state, step);
+      const double radius = std::hypot(next[TpcTrackKalmanFitter::X], next[TpcTrackKalmanFitter::Y]);
+      if (!std::isfinite(radius) || !std::isfinite(next[TpcTrackKalmanFitter::Z])) { ++failed; break; }
+      if (radius + 1.e-4 < previousRadius) { ++failed; break; }
+      state = next;
+      previousRadius = radius;
+      Point point{state[0], state[1], state[2]};
+      if (visible(point, zmin, zmax, xymax)) points.push_back(point);
     }
     if (points.size() < 2) return nullptr;
+    samples += points.size();
     auto* line = new TPolyLine3D(points.size());
     for (unsigned int i = 0; i < points.size(); ++i) line->SetPoint(i, points[i].z, points[i].x, points[i].y);
     line->SetLineColor(color);
@@ -180,10 +182,13 @@ bool Full_PolyTrackDisplay::getNodes(PHCompositeNode* topNode)
   m_tpcClusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_tpcClusterNodeName);
   m_trkrClusters = findNode::getClass<TrkrClusterContainer>(topNode, m_trkrClusterNodeName);
   m_actsGeometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
+  m_field = PHFieldUtility::GetFieldMapNode(nullptr, topNode, Verbosity());
   if (!m_fullTracks) std::cerr << Name() << " - missing " << m_fullTrackNodeName << std::endl;
   if (!m_tpcClusters) std::cerr << Name() << " - missing " << m_tpcClusterNodeName << std::endl;
   if (!m_trkrClusters || !m_actsGeometry) std::cerr << Name() << " - silicon cluster position input missing" << std::endl;
-  return m_fullTracks && m_tpcClusters && m_trkrClusters && m_actsGeometry;
+  if (!m_field && !m_useStraightLineTracks) std::cerr << Name() << " - magnetic field input missing" << std::endl;
+  return m_fullTracks && m_tpcClusters && m_trkrClusters && m_actsGeometry &&
+         (m_field || m_useStraightLineTracks);
 }
 
 int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
@@ -203,6 +208,10 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
   std::vector<TPolyMarker3D*> allMarkers;
   std::vector<TPolyLine3D*> allLines;
   unsigned int selected = 0;
+  unsigned int propagationAttempted = 0;
+  unsigned int propagationFailed = 0;
+  unsigned int trajectorySamples = 0;
+  bool dumpedTrack = false;
   for (unsigned int i = 0; i < m_fullTracks->size(); ++i)
   {
     const auto* track = m_fullTracks->get_track(i);
@@ -214,29 +223,99 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
       const auto found = tpcByKey.find(key);
       if (found == tpcByKey.end()) continue;
       const auto* cluster = found->second;
-      points.push_back({cluster->get_centroid_x(), cluster->get_centroid_y(), cluster->get_centroid_z(), TrkrDefs::getLayer(key), false});
+      points.push_back({cluster->get_centroid_x(), cluster->get_centroid_y(), cluster->get_centroid_z(),
+                        TrkrDefs::getLayer(key), key, TrkrDefs::tpcId, false});
     }
     for (const auto key : track->get_silicon_cluster_keys())
     {
       auto* cluster = m_trkrClusters->findCluster(key);
       if (!cluster) continue;
       const auto global = m_actsGeometry->getGlobalPosition(key, cluster);
-      points.push_back({global.x(), global.y(), global.z(), TrkrDefs::getLayer(key), true});
+      points.push_back({global.x(), global.y(), global.z(), TrkrDefs::getLayer(key), key,
+                        static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(key)), true});
+    }
+    if (Verbosity() >= 10 && !dumpedTrack)
+    {
+      std::cout << Name() << " display_track parent=" << track->get_parent_tpc_track_id()
+                << " order=stored_before_sort" << std::endl;
+      for (unsigned int index = 0; index < points.size(); ++index)
+      {
+        const auto& point = points[index];
+        std::cout << "  idx=" << index << " det=" << detectorName(point.detector)
+                  << " layer=" << point.layer << " cluster_key=" << point.key
+                  << " x=" << point.x << " y=" << point.y << " z=" << point.z
+                  << " r=" << std::hypot(point.x, point.y)
+                  << " phi=" << std::atan2(point.y, point.x) << std::endl;
+      }
+    }
+    std::sort(points.begin(), points.end(), [](const Point& lhs, const Point& rhs)
+    {
+      return std::hypot(lhs.x, lhs.y) > std::hypot(rhs.x, rhs.y);
+    });
+    if (Verbosity() >= 10 && !dumpedTrack)
+    {
+      std::cout << Name() << " display_track parent=" << track->get_parent_tpc_track_id()
+                << " order=radius_outer_to_inner" << std::endl;
+      for (unsigned int index = 0; index < points.size(); ++index)
+      {
+        const auto& point = points[index];
+        std::cout << "  idx=" << index << " det=" << detectorName(point.detector)
+                  << " layer=" << point.layer << " cluster_key=" << point.key
+                  << " x=" << point.x << " y=" << point.y << " z=" << point.z
+                  << " r=" << std::hypot(point.x, point.y)
+                  << " phi=" << std::atan2(point.y, point.x) << std::endl;
+      }
     }
     const int crossing = track->get_crossing();
     const int color = crossingColor(crossing);
     const int individualColor = trackColor(i);
-    for (const auto& point : points)
+    if (m_drawMeasurements) for (const auto& point : points)
     {
       if (!visible(point, m_zmin, m_zmax, m_xymax)) continue;
       allMarkers.push_back(marker(point, color));
       markersByCrossing[crossing].push_back(marker(point, individualColor));
     }
     const bool straight = m_useStraightLineTracks || std::abs(track->get_charge() * m_magneticFieldTesla) < 1.e-12;
-    const double direction = residual2(*track, points, m_magneticFieldTesla, straight, 1.0) <=
-                                     residual2(*track, points, m_magneticFieldTesla, straight, -1.0) ? 1.0 : -1.0;
-    if (auto* line = fitLine(*track, m_zmin, m_zmax, m_xymax, m_magneticFieldTesla, straight, direction, color)) allLines.push_back(line);
-    if (auto* line = fitLine(*track, m_zmin, m_zmax, m_xymax, m_magneticFieldTesla, straight, direction, individualColor)) linesByCrossing[crossing].push_back(line);
+    const unsigned int attemptsBefore = propagationAttempted;
+    const unsigned int failuresBefore = propagationFailed;
+    const unsigned int samplesBefore = trajectorySamples;
+    if (m_drawFittedTrajectory)
+    {
+      if (auto* line = fittedTrajectory(*track, points, m_field, straight, m_magneticFieldTesla,
+                                        m_zmin, m_zmax, m_xymax, color,
+                                        propagationAttempted, propagationFailed, trajectorySamples))
+      {
+        allLines.push_back(line);
+        auto* individualLine = dynamic_cast<TPolyLine3D*>(line->Clone());
+        if (individualLine)
+        {
+          individualLine->SetLineColor(individualColor);
+          linesByCrossing[crossing].push_back(individualLine);
+        }
+      }
+    }
+    if (Verbosity() >= 10 && !dumpedTrack)
+    {
+      unsigned int nTpc = 0, nIntt = 0, nMvtx = 0;
+      double minRadius = std::numeric_limits<double>::max(), maxRadius = 0.;
+      for (const auto& point : points)
+      {
+        if (point.detector == TrkrDefs::tpcId) ++nTpc;
+        else if (point.detector == TrkrDefs::inttId) ++nIntt;
+        else if (point.detector == TrkrDefs::mvtxId) ++nMvtx;
+        const double radius = std::hypot(point.x, point.y);
+        minRadius = std::min(minRadius, radius);
+        maxRadius = std::max(maxRadius, radius);
+      }
+      std::cout << Name() << " display_track_summary parent=" << track->get_parent_tpc_track_id()
+                << " tpc_markers=" << nTpc << " intt_markers=" << nIntt
+                << " mvtx_markers=" << nMvtx
+                << " fitted_trajectory_samples=" << (trajectorySamples - samplesBefore)
+                << " min_radius=" << minRadius << " max_radius=" << maxRadius
+                << " propagation_attempted=" << (propagationAttempted - attemptsBefore)
+                << " propagation_failed=" << (propagationFailed - failuresBefore) << std::endl;
+      dumpedTrack = true;
+    }
     ++selected;
   }
 
@@ -262,7 +341,10 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
     draw(std::format("evt{:06}_full_polytracks_crossing_{}", m_event, entry.first),
          std::format("event {} FULL_POLYTRACKS crossing {}", m_event, entry.first), entry.second, linesByCrossing[entry.first]);
   }
-  std::cout << Name() << " - saved event " << m_event << " selected_tracks=" << selected << std::endl;
+  std::cout << Name() << " - saved event " << m_event << " selected_tracks=" << selected
+            << " display_propagation_attempted=" << propagationAttempted
+            << " display_propagation_failed=" << propagationFailed
+            << " fitted_trajectory_samples=" << trajectorySamples << std::endl;
   ++m_eventsSaved;
   return Fun4AllReturnCodes::EVENT_OK;
 }

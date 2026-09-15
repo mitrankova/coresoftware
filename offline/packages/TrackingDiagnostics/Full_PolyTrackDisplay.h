@@ -8,6 +8,7 @@
 class ActsGeometry;
 class Full_PolyTrackContainer;
 class PHCompositeNode;
+class PHField;
 class TFile;
 class Tpc_PolyClusterContainer;
 class TrkrClusterContainer;
@@ -35,6 +36,8 @@ class Full_PolyTrackDisplay : public SubsysReco
   void setMinTrackPt(double value) { m_minTrackPt = value; }
   void setMinMvtxHits(unsigned int value) { m_minMvtxHits = value; }
   void setMinInttHits(unsigned int value) { m_minInttHits = value; }
+  void setDrawMeasurements(bool value) { m_drawMeasurements = value; }
+  void setDrawFittedTrajectory(bool value) { m_drawFittedTrajectory = value; }
 
  private:
   bool getNodes(PHCompositeNode*);
@@ -54,12 +57,15 @@ class Full_PolyTrackDisplay : public SubsysReco
   double m_magneticFieldTesla{1.4};
   double m_minTrackPt{0.1};
   bool m_useStraightLineTracks{false};
+  bool m_drawMeasurements{true};
+  bool m_drawFittedTrajectory{true};
 
   TFile* m_outfile{nullptr};
   Full_PolyTrackContainer* m_fullTracks{nullptr};
   Tpc_PolyClusterContainer* m_tpcClusters{nullptr};
   TrkrClusterContainer* m_trkrClusters{nullptr};
   ActsGeometry* m_actsGeometry{nullptr};
+  const PHField* m_field{nullptr};
 };
 
 #endif

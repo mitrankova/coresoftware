@@ -61,6 +61,7 @@ libTrackingDiagnostics_la_LIBADD = \
   -lintt_io \
   -lmicromegas_io \
   -lSubsysReco \
+  -ltpc \
   -ltpc_io \
   -ltrack_io \
   -ltrackeralign \
