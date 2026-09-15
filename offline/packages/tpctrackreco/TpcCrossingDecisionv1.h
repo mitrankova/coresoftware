@@ -24,6 +24,9 @@ class TpcCrossingDecisionv1 : public TpcCrossingDecision
   short get_selected_crossing() const override { return m_selected_crossing; }
   void set_selected_crossing(short v) override { m_selected_crossing = v; }
 
+  short get_reference_crossing() const override { return m_reference_crossing; }
+  void set_reference_crossing(short v) override { m_reference_crossing = v; }
+
   unsigned int get_silicon_vertex_id() const override { return m_silicon_vertex_id; }
   void set_silicon_vertex_id(unsigned int v) override { m_silicon_vertex_id = v; }
 
@@ -77,6 +80,7 @@ class TpcCrossingDecisionv1 : public TpcCrossingDecision
 
   unsigned int m_assembled_track_id {0};
   short m_selected_crossing {std::numeric_limits<short>::max()};
+  short m_reference_crossing {std::numeric_limits<short>::max()};
   unsigned int m_silicon_vertex_id {std::numeric_limits<unsigned int>::max()};
   float m_tpc_z0 {nan()};
   float m_silicon_vertex_z {nan()};
@@ -93,7 +97,7 @@ class TpcCrossingDecisionv1 : public TpcCrossingDecision
   std::vector<TpcCrossingCandidate> m_candidates;
   unsigned char m_status {static_cast<unsigned char>(TpcCrossingStatus::Unknown)};
 
-  ClassDefOverride(TpcCrossingDecisionv1, 3)
+  ClassDefOverride(TpcCrossingDecisionv1, 4)
 };
 
 #endif  // TPCTRACKRECO_TPCCROSSINGDECISIONV1_H

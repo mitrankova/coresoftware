@@ -337,13 +337,12 @@ int Tpc_PolyClusterizer::process_event(PHCompositeNode* topNode)
           ++nmissing_decision;
           continue;
         }
-        const unsigned char selected_tier = crossing_decision->get_selected_tier();
-        if (selected_tier > m_maxAcceptedTier)
+        const short reference_crossing = crossing_decision->get_reference_crossing();
+        if (reference_crossing == std::numeric_limits<short>::max())
         {
           ++nskipped_tier;
           continue;
         }
-        const short selected_crossing = crossing_decision->get_selected_crossing();
 
         std::map<TrkrDefs::hitsetkey, std::vector<Point>> points_by_hitset;
         for (unsigned int ih = 0; ih < assembled->size_hit_indices(); ++ih)
@@ -355,7 +354,7 @@ int Tpc_PolyClusterizer::process_event(PHCompositeNode* topNode)
           }
 
           Point p;
-          if (make_xyz_point(hi.first, hi.second, selected_crossing, p))
+          if (make_xyz_point(hi.first, hi.second, reference_crossing, p))
           {
             points_by_hitset[p.hitsetkey].push_back(p);
           }

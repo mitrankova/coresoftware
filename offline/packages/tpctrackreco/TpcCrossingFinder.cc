@@ -691,11 +691,20 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
 
       TpcCrossingDecisionv1* decision = new TpcCrossingDecisionv1();
       decision->set_assembled_track_id(assembled->get_track_id());
+      decision->set_reference_crossing(m_triggeredCrossing);
       decision->set_selected_crossing(m_triggeredCrossing);
       decision->set_selected_tier(0U);
       decision->set_number_of_available_crossings(1U);
       decision->set_number_of_tpc_valid_crossings(1U);
-      decision->set_status(TpcCrossingStatus::SelectedByContainment);
+      TpcCrossingCandidate candidate;
+      candidate.crossing = m_triggeredCrossing;
+      candidate.is_available_from_intt = true;
+      candidate.passes_time_window = true;
+      candidate.tpc_valid = true;
+      candidate.is_selected = true;
+      candidate.candidate_qa_bits = FromInttCrossing | PassedTimeWindow | IsSelected;
+      decision->add_candidate(candidate);
+      decision->set_status(TpcCrossingStatus::TriggeredKnown);
 
       m_decisions->add_decision(decision);
     }
@@ -839,6 +848,40 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
       add_decision_with_candidates();
       continue;
     }
+
+    // In continuous readout this module deliberately stops at the cheap
+    // drift-time containment test.  The silicon resolver is the only module
+    // allowed to turn one of these hypotheses into selected_crossing.
+    const auto reference = std::min_element(
+        allowed_crossings.begin(), allowed_crossings.end(),
+        [](const short lhs, const short rhs)
+        {
+          const int lhsAbs = std::abs(static_cast<int>(lhs));
+          const int rhsAbs = std::abs(static_cast<int>(rhs));
+          return lhsAbs != rhsAbs ? lhsAbs < rhsAbs : lhs < rhs;
+        });
+    decision->set_reference_crossing(*reference);
+    decision->set_number_of_tpc_valid_crossings(
+        static_cast<unsigned short>(std::min<std::size_t>(allowed_crossings.size(), std::numeric_limits<unsigned short>::max())));
+    for (const short crossing : allowed_crossings)
+    {
+      TpcCrossingCandidate qa;
+      qa.crossing = crossing;
+      qa.is_available_from_intt = intt_crossings.contains(crossing);
+      qa.passes_time_window = true;
+      qa.was_tested = false;
+      qa.tpc_valid = true;
+      qa.min_tbin_time_crossing0_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(min_tbin, 0));
+      qa.max_tbin_time_crossing0_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(max_tbin, 0));
+      qa.candidate_min_time_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(min_tbin, crossing));
+      qa.candidate_max_time_ns = finite_float_or_nan(m_driftLookup->crossingToDriftTimeNs(max_tbin, crossing));
+      qa.max_lookup_time_ns = finite_float_or_nan(m_driftLookup->maxLookupTimeNs());
+      qa.candidate_qa_bits = PassedTimeWindow | (qa.is_available_from_intt ? FromInttCrossing : 0U);
+      candidate_qa_records.push_back(qa);
+    }
+    decision->set_status(TpcCrossingStatus::CandidatesPrepared);
+    add_decision_with_candidates();
+    continue;
 
     std::vector<Candidate> valid_candidates;
     unsigned char last_rejection = static_cast<unsigned char>(TpcCrossingStatus::NoValidCrossing);

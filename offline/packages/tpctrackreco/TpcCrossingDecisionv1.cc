@@ -13,6 +13,7 @@ void TpcCrossingDecisionv1::identify(std::ostream& os) const
   os << "TpcCrossingDecisionv1:"
      << " assembled_track_id=" << m_assembled_track_id
      << " selected_crossing=" << m_selected_crossing
+     << " reference_crossing=" << m_reference_crossing
      << " status=" << static_cast<unsigned int>(m_status)
      << " selected_tier=" << static_cast<unsigned int>(m_selected_tier)
      << " selected_score=" << m_selected_score
@@ -32,6 +33,7 @@ void TpcCrossingDecisionv1::Reset()
 {
   m_assembled_track_id = 0;
   m_selected_crossing = std::numeric_limits<short>::max();
+  m_reference_crossing = std::numeric_limits<short>::max();
   m_silicon_vertex_id = std::numeric_limits<unsigned int>::max();
   m_tpc_z0 = nan();
   m_silicon_vertex_z = nan();

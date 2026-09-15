@@ -26,7 +26,12 @@ enum class TpcCrossingStatus : unsigned char
   NoValidCrossing = 12,
   SelectedByVertexAmbiguous = 13,
   SelectedByVertexLoose = 14,
-  SelectedByContainmentAmbiguous = 15
+  SelectedByContainmentAmbiguous = 15,
+  CandidatesPrepared = 16,
+  ResolvedBySilicon = 17,
+  SiliconAmbiguous = 18,
+  NoSiliconMatch = 19,
+  TriggeredKnown = 20
 };
 
 enum class TpcCrossingCandidateStage : unsigned char
@@ -190,6 +195,9 @@ class TpcCrossingDecision : public PHObject
 
   virtual short get_selected_crossing() const { return 0; }
   virtual void set_selected_crossing(short) {}
+
+  virtual short get_reference_crossing() const { return 0; }
+  virtual void set_reference_crossing(short) {}
 
   virtual unsigned int get_silicon_vertex_id() const { return 0; }
   virtual void set_silicon_vertex_id(unsigned int) {}
