@@ -18,6 +18,8 @@ class TpcSiliconMatchCandidate : public PHObject
 
   unsigned int get_parent_track_id() const { return m_parentTrackId; }
   void set_parent_track_id(unsigned int value) { m_parentTrackId = value; }
+  unsigned int get_source_assembled_track_id() const { return m_sourceAssembledTrackId; }
+  void set_source_assembled_track_id(unsigned int value) { m_sourceAssembledTrackId = value; }
   short get_crossing() const { return m_crossing; }
   void set_crossing(short value) { m_crossing = value; }
   float get_score() const { return m_score; }
@@ -37,6 +39,7 @@ class TpcSiliconMatchCandidate : public PHObject
 
  private:
   unsigned int m_parentTrackId{0};
+  unsigned int m_sourceAssembledTrackId{0};
   short m_crossing{0};
   float m_score{std::numeric_limits<float>::quiet_NaN()};
   float m_maxAbsDz{std::numeric_limits<float>::quiet_NaN()};
@@ -45,7 +48,7 @@ class TpcSiliconMatchCandidate : public PHObject
   unsigned int m_nIntt{0};
   bool m_selected{false};
   std::vector<TrkrDefs::cluskey> m_siliconKeys;
-  ClassDefOverride(TpcSiliconMatchCandidate, 1)
+  ClassDefOverride(TpcSiliconMatchCandidate, 2)
 };
 
 #endif

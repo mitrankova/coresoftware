@@ -1,7 +1,9 @@
 #ifndef TPCTRACKRECO_TPCSILICONCROSSINGMATCHER_H
 #define TPCTRACKRECO_TPCSILICONCROSSINGMATCHER_H
 
+#include "BeamFrameTransform.h"
 #include <fun4all/SubsysReco.h>
+#include <array>
 #include <string>
 
 class ActsGeometry;
@@ -23,6 +25,10 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   void setMaxDPhi(float value) { m_maxDPhi = value; }
   void setMinMvtx(unsigned int value) { m_minMvtx = value; }
   void setMinIntt(unsigned int value) { m_minIntt = value; }
+  void setTpcBeamLine(double x0, double dxdz, double y0, double dydz) { m_beamFrame.setTpcBeamLine({x0, dxdz, y0, dydz}); }
+  void setMvtxBeamLine(double x0, double dxdz, double y0, double dydz) { m_beamFrame.setMvtxBeamLine({x0, dxdz, y0, dydz}); }
+  void setInttBeamLine(double x0, double dxdz, double y0, double dydz) { m_beamFrame.setInttBeamLine({x0, dxdz, y0, dydz}); }
+  void setDynamicPhiMean(unsigned int layer, double offset, double slope) { if (layer < 7) { m_phiOffset[layer] = offset; m_phiSlope[layer] = slope; } }
  private:
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
@@ -33,6 +39,9 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   float m_maxDPhi{0.03F};
   unsigned int m_minMvtx{2};
   unsigned int m_minIntt{1};
+  BeamFrameTransform m_beamFrame;
+  std::array<double, 7> m_phiOffset{};
+  std::array<double, 7> m_phiSlope{{1., 1., 1., 1., 1., 1., 1.}};
   TpcCrossingTrajectoryContainer* m_trajectories{nullptr};
   TrkrClusterContainer* m_clusters{nullptr};
   ActsGeometry* m_geometry{nullptr};

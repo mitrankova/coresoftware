@@ -14,6 +14,7 @@ void TpcSiliconMatchCandidate::identify(std::ostream& os) const
 void TpcSiliconMatchCandidate::Reset()
 {
   m_parentTrackId = 0;
+  m_sourceAssembledTrackId = 0;
   m_crossing = 0;
   m_score = m_maxAbsDz = m_maxAbsDdphi = std::numeric_limits<float>::quiet_NaN();
   m_nMvtx = m_nIntt = 0;
