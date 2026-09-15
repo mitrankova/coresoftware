@@ -28,7 +28,8 @@ class TpcCrossingTrajectoryBuilder : public SubsysReco
  private:
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
-  bool addSiliconStates(TpcCrossingTrajectory&, const FastFieldTrackFitter::Result&) const;
+  bool addSiliconStates(TpcCrossingTrajectory&, const FastFieldTrackFitter::Result&,
+                        const std::array<double, FastFieldTrackFitter::StateSize>&) const;
   std::string m_trackNodeName{"TPC_POLYTRACKS"};
   std::string m_clusterNodeName{"TPC_POLYCLUSTERS"};
   std::string m_decisionNodeName{"TPC_CROSSING_DECISIONS"};

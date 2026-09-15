@@ -6,9 +6,11 @@
 #include <Eigen/Core>
 #include <Eigen/Cholesky>
 #include <Eigen/LU>
+#include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -18,6 +20,7 @@ namespace
   using Matrix3 = Eigen::Matrix<double, 3, 3, Eigen::RowMajor>;
   using Vector6 = Eigen::Matrix<double, 6, 1>;
   using Vector3 = Eigen::Matrix<double, 3, 1>;
+  double wrap_phi(const double value) { return std::remainder(value, 2.0 * M_PI); }
 }
 
 FastFieldTrackFitter::FastFieldTrackFitter(const PHField* field) : m_field(field) {}
@@ -29,6 +32,14 @@ std::array<double, FastFieldTrackFitter::StateSize> FastFieldTrackFitter::extern
   const double tanLambda = native[TpcTrackKalmanFitter::TanLambda];
   return {native[0], native[1], native[2], native[3], std::atan2(1.0, tanLambda),
           qOverPt / std::sqrt(1.0 + tanLambda * tanLambda)};
+}
+
+std::array<double, FastFieldTrackFitter::StateSize> FastFieldTrackFitter::nativeState(
+    const std::array<double, StateSize>& external)
+{
+  const double theta = external[4];
+  return {external[0], external[1], external[2], wrap_phi(external[3]),
+          external[5] / std::sin(theta), 1.0 / std::tan(theta)};
 }
 
 bool FastFieldTrackFitter::fitMeasurements(const Tpc_PolyTrack& track,
@@ -112,6 +123,15 @@ bool FastFieldTrackFitter::fit(const Tpc_PolyTrack& track,
     output.measurements.push_back(response);
   }
   Matrix6 normal = Matrix6::Zero();
+  const std::array<double, 6> priorSigma{{output.propagationConfig.initial_sigma_pos_cm,
+      output.propagationConfig.initial_sigma_pos_cm, output.propagationConfig.initial_sigma_pos_cm,
+      output.propagationConfig.initial_sigma_phi, output.propagationConfig.initial_sigma_qop_t,
+      output.propagationConfig.initial_sigma_tanl}};
+  for (unsigned int i = 0; i < 6; ++i)
+  {
+    if (!(priorSigma[i] > 0.0) || !std::isfinite(priorSigma[i])) { output.valid = false; return false; }
+    normal(i, i) = 1.0 / (priorSigma[i] * priorSigma[i]);
+  }
   for (const auto& response : output.measurements)
   {
     const Eigen::Map<const Matrix36> jacobian(response.jacobian.data());
@@ -123,6 +143,14 @@ bool FastFieldTrackFitter::fit(const Tpc_PolyTrack& track,
   {
     output.valid = false;
     return false;
+  }
+  output.informationSolveOk = true;
+  const Eigen::SelfAdjointEigenSolver<Matrix6> eigenSolver(normal);
+  if (eigenSolver.info() == Eigen::Success)
+  {
+    for (unsigned int i = 0; i < 6; ++i) output.informationEigenvalues[i] = eigenSolver.eigenvalues()(i);
+    const double smallest = eigenSolver.eigenvalues().minCoeff();
+    output.informationCondition = smallest > 0.0 ? eigenSolver.eigenvalues().maxCoeff() / smallest : std::numeric_limits<double>::infinity();
   }
   for (auto& response : output.measurements)
   {
@@ -143,6 +171,7 @@ FastFieldTrackFitter::Update FastFieldTrackFitter::linearUpdate(
   Update output;
   if (!reference.valid || reference.measurements.empty()) return output;
   Vector6 nativeDelta = Vector6::Zero();
+  Vector6 rhs = Vector6::Zero();
   for (const auto& response : reference.measurements)
   {
     const auto found = displaced.find(response.key);
@@ -152,12 +181,19 @@ FastFieldTrackFitter::Update FastFieldTrackFitter::linearUpdate(
                                    found->second[1] - response.reference[1],
                                    found->second[2] - response.reference[2]);
     nativeDelta.noalias() += gain * deltaMeasurement;
+    const Eigen::Map<const Matrix36> jacobian(response.jacobian.data());
+    const Eigen::Map<const Matrix3> weight(response.weight.data());
+    rhs.noalias() += jacobian.transpose() * weight * deltaMeasurement;
+    output.maxMeasurementDelta = std::max(output.maxMeasurementDelta, deltaMeasurement.cwiseAbs().maxCoeff());
   }
   if (!nativeDelta.allFinite()) return output;
   std::array<double, StateSize> updatedNative = reference.nativeState;
   for (unsigned int i = 0; i < StateSize; ++i) updatedNative[i] += nativeDelta(i);
-  const auto updated = externalState(updatedNative);
-  for (unsigned int i = 0; i < StateSize; ++i) output.delta[i] = updated[i] - reference.state[i];
+  updatedNative[TpcTrackKalmanFitter::Phi] = wrap_phi(updatedNative[TpcTrackKalmanFitter::Phi]);
+  for (unsigned int i = 0; i < StateSize; ++i) output.delta[i] = nativeDelta(i);
+  output.delta[TpcTrackKalmanFitter::Phi] = wrap_phi(updatedNative[TpcTrackKalmanFitter::Phi] - reference.nativeState[TpcTrackKalmanFitter::Phi]);
+  output.state = updatedNative;
+  output.rhsNorm = rhs.norm();
   for (const auto& response : reference.measurements)
   {
     const auto& measurement = displaced.at(response.key);

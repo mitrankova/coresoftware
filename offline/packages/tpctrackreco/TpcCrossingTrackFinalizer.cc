@@ -198,7 +198,9 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
     full->set_max_abs_ddphi(candidate->get_max_abs_ddphi());
     full->set_fit_status(fitOk ? 1 : 0);
     full->set_chi2(fitOk ? finalFit.chi2 : parent->get_chi2()); full->set_ndf(fitOk ? finalFit.ndf : parent->get_ndf());
-    const auto& state = fitOk ? finalFit.state : std::array<double, 6>{{trajectory->get_state(0), trajectory->get_state(1), trajectory->get_state(2), trajectory->get_state(3), trajectory->get_state(4), trajectory->get_state(5)}};
+    const auto fallbackNative = std::array<double, 6>{{trajectory->get_state(0), trajectory->get_state(1), trajectory->get_state(2), trajectory->get_state(3), trajectory->get_state(4), trajectory->get_state(5)}};
+    const auto fallbackState = FastFieldTrackFitter::externalState(fallbackNative);
+    const auto& state = fitOk ? finalFit.state : fallbackState;
     full->set_x(state[0]); full->set_y(state[1]); full->set_z(state[2]);
     const double momentum = std::abs(state[5]) > 1.e-12 ? std::abs(1. / state[5]) : std::hypot(std::hypot(parent->get_px(), parent->get_py()), parent->get_pz());
     const double pt = momentum * std::sin(state[4]); full->set_px(pt * std::cos(state[3])); full->set_py(pt * std::sin(state[3])); full->set_pz(momentum * std::cos(state[4])); full->set_charge(state[5] < 0. ? -1. : 1.);

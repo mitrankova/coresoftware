@@ -20,6 +20,7 @@
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -57,15 +58,10 @@ int TpcCrossingTrajectoryBuilder::InitRun(PHCompositeNode* topNode)
   m_fitter = std::make_unique<FastFieldTrackFitter>(m_field);
   return createNodes(topNode);
 }
-bool TpcCrossingTrajectoryBuilder::addSiliconStates(TpcCrossingTrajectory& trajectory, const FastFieldTrackFitter::Result& fit) const
+bool TpcCrossingTrajectoryBuilder::addSiliconStates(TpcCrossingTrajectory& trajectory, const FastFieldTrackFitter::Result& fit,
+    const std::array<double, FastFieldTrackFitter::StateSize>& candidateState) const
 {
-  const double theta = trajectory.get_state(TpcCrossingTrajectory::Theta);
-  const double sinTheta = std::sin(theta);
-  if (std::abs(sinTheta) < 1.e-9) return false;
-  std::array<double, TpcTrackKalmanFitter::StateDim> state{{
-      trajectory.get_state(TpcCrossingTrajectory::X), trajectory.get_state(TpcCrossingTrajectory::Y),
-      trajectory.get_state(TpcCrossingTrajectory::Z), trajectory.get_state(TpcCrossingTrajectory::Phi),
-      trajectory.get_state(TpcCrossingTrajectory::QOverP) / sinTheta, 1.0 / std::tan(theta)}};
+  auto state = candidateState;
   for (int layer = static_cast<int>(m_siliconRadii.size()) - 1; layer >= 0; --layer)
   {
     const double target = m_siliconRadii[layer];
@@ -133,10 +129,10 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
       trajectory->set_source_assembled_track_id(track->get_source_assembled_track_id());
       trajectory->set_crossing(crossingCandidate->crossing);
       trajectory->set_reference_crossing(decision->get_reference_crossing());
-      for (unsigned int k = 0; k < TpcCrossingTrajectory::StateSize; ++k) { trajectory->set_delta(k, update.delta[k]); trajectory->set_state(k, referenceFit.state[k] + update.delta[k]); }
+      for (unsigned int k = 0; k < TpcCrossingTrajectory::StateSize; ++k) { trajectory->set_delta(k, update.delta[k]); trajectory->set_state(k, update.state[k]); }
       for (unsigned int row = 0; row < TpcCrossingTrajectory::StateSize; ++row) for (unsigned int col = 0; col < TpcCrossingTrajectory::StateSize; ++col) trajectory->set_covariance(row, col, referenceFit.covariance[row * TpcCrossingTrajectory::StateSize + col]);
       trajectory->set_linear_chi2(update.chi2);
-      addSiliconStates(*trajectory, referenceFit);
+      addSiliconStates(*trajectory, referenceFit, update.state);
       const unsigned int validationHash = 2654435761U * (track->get_track_id() + 1U) + static_cast<unsigned int>(crossingCandidate->crossing);
       const bool validate = m_validationFraction > 0.0 &&
                             static_cast<double>(validationHash % 1000000U) / 1000000.0 < std::min(1.0, m_validationFraction);
@@ -159,19 +155,56 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
         FastFieldTrackFitter::Result candidateFit;
         if (m_fitter->fitMeasurements(*track, candidatePoints, candidateFit))
         {
-          std::cout << Name() << " validation crossing=" << crossingCandidate->crossing;
+          static const std::array<const char*, 6> nativeNames{{"X", "Y", "Z", "Phi", "QOverPt", "TanLambda"}};
+          std::cout << Name() << " validation reference_crossing=" << decision->get_reference_crossing()
+                    << " candidate_crossing=" << crossingCandidate->crossing;
           for (unsigned int k = 0; k < TpcCrossingTrajectory::StateSize; ++k)
-            std::cout << " delta" << k << "_linear=" << update.delta[k]
-                      << " delta" << k << "_full=" << candidateFit.state[k] - referenceFit.state[k];
-          std::cout << std::endl;
-          auto linearNative = referenceFit.nativeState;
-          const double linearTheta = trajectory->get_state(TpcCrossingTrajectory::Theta);
-          linearNative[TpcTrackKalmanFitter::X] = trajectory->get_state(TpcCrossingTrajectory::X);
-          linearNative[TpcTrackKalmanFitter::Y] = trajectory->get_state(TpcCrossingTrajectory::Y);
-          linearNative[TpcTrackKalmanFitter::Z] = trajectory->get_state(TpcCrossingTrajectory::Z);
-          linearNative[TpcTrackKalmanFitter::Phi] = trajectory->get_state(TpcCrossingTrajectory::Phi);
-          linearNative[TpcTrackKalmanFitter::QOverPt] = trajectory->get_state(TpcCrossingTrajectory::QOverP) / std::sin(linearTheta);
-          linearNative[TpcTrackKalmanFitter::TanLambda] = 1.0 / std::tan(linearTheta);
+          {
+            double fullDelta = candidateFit.nativeState[k] - referenceFit.nativeState[k];
+            if (k == TpcTrackKalmanFitter::Phi) fullDelta = std::remainder(fullDelta, 2. * M_PI);
+            std::cout << " delta" << nativeNames[k] << "_linear=" << update.delta[k]
+                      << " delta" << nativeNames[k] << "_full=" << fullDelta;
+          }
+          const auto linearExternal = FastFieldTrackFitter::externalState(update.state);
+          const auto roundTripNative = FastFieldTrackFitter::nativeState(linearExternal);
+          double roundTripError = 0.0;
+          for (unsigned int k = 0; k < TpcCrossingTrajectory::StateSize; ++k)
+          {
+            const double difference = k == TpcTrackKalmanFitter::Phi
+                ? std::remainder(roundTripNative[k] - update.state[k], 2. * M_PI)
+                : roundTripNative[k] - update.state[k];
+            roundTripError = std::max(roundTripError, std::abs(difference));
+          }
+          assert(roundTripError < 1.e-10);
+          std::cout << " deltaTheta_linear=" << linearExternal[4] - referenceFit.state[4]
+                    << " deltaTheta_full=" << candidateFit.state[4] - referenceFit.state[4]
+                    << " delta(q/p)_linear=" << linearExternal[5] - referenceFit.state[5]
+                    << " delta(q/p)_full=" << candidateFit.state[5] - referenceFit.state[5]
+                    << " A_condition=" << referenceFit.informationCondition
+                    << " LDLT_ok=" << referenceFit.informationSolveOk
+                    << " A_eigenvalues=";
+          for (const auto value : referenceFit.informationEigenvalues) std::cout << value << ",";
+          double qOverPtResponse2 = 0.0, tanLambdaResponse2 = 0.0;
+          for (const auto& response : referenceFit.measurements)
+            for (unsigned int column = 0; column < 3; ++column)
+            {
+              qOverPtResponse2 += response.response[3 * TpcTrackKalmanFitter::QOverPt + column] * response.response[3 * TpcTrackKalmanFitter::QOverPt + column];
+              tanLambdaResponse2 += response.response[3 * TpcTrackKalmanFitter::TanLambda + column] * response.response[3 * TpcTrackKalmanFitter::TanLambda + column];
+            }
+          std::cout << " QOverPt_response_norm=" << std::sqrt(qOverPtResponse2)
+                    << " TanLambda_response_norm=" << std::sqrt(tanLambdaResponse2)
+                    << " linear_chi2=" << update.chi2 << std::endl;
+          if (crossingCandidate->crossing == decision->get_reference_crossing())
+          {
+            const double maxStateDelta = *std::max_element(update.delta.begin(), update.delta.end(),
+                [](double lhs, double rhs) { return std::abs(lhs) < std::abs(rhs); });
+            const bool identityOk = update.maxMeasurementDelta < 1.e-9 && update.rhsNorm < 1.e-7 && std::abs(maxStateDelta) < 1.e-9;
+            std::cout << Name() << " reference_identity max_delta_m=" << update.maxMeasurementDelta
+                      << " rhs_norm=" << update.rhsNorm << " max_delta_state=" << std::abs(maxStateDelta)
+                      << " ok=" << identityOk << std::endl;
+            assert(identityOk);
+          }
+          auto linearNative = update.state;
           auto linearLayer = linearNative;
           auto fullLayer = candidateFit.nativeState;
           for (int layer = static_cast<int>(m_siliconRadii.size()) - 1; layer >= 0; --layer)
@@ -195,8 +228,8 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
       {
         std::cout << Name() << " crossing=" << crossingCandidate->crossing
                   << " delta_d0=" << update.delta[0] << " delta_z0=" << update.delta[2]
-                  << " delta_phi=" << update.delta[3] << " delta_theta=" << update.delta[4]
-                  << " delta_q_over_p=" << update.delta[5] << " linear_chi2=" << update.chi2 << std::endl;
+                  << " delta_phi=" << update.delta[3] << " delta_q_over_pt=" << update.delta[4]
+                  << " delta_tan_lambda=" << update.delta[5] << " linear_chi2=" << update.chi2 << std::endl;
       }
     }
   }

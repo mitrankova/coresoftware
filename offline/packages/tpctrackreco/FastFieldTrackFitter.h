@@ -34,19 +34,26 @@ class FastFieldTrackFitter
     int ndf{-1};
     double fitSeconds{0.0};
     double responseSeconds{0.0};
+    std::array<double, StateSize> informationEigenvalues{};
+    double informationCondition{0.0};
+    bool informationSolveOk{false};
   };
   struct Update
   {
     bool valid{false};
-    std::array<double, StateSize> delta{};
+    std::array<double, StateSize> delta{};  // native: x,y,z,phi,q/pt,tan(lambda)
+    std::array<double, StateSize> state{};
+    double rhsNorm{0.0};
+    double maxMeasurementDelta{0.0};
     double chi2{0.0};
   };
   explicit FastFieldTrackFitter(const PHField* field);
   bool fit(const Tpc_PolyTrack&, const std::vector<const Tpc_PolyCluster*>&, Result&) const;
   bool fitMeasurements(const Tpc_PolyTrack&, const std::vector<TpcTrackPoint>&, Result&) const;
   Update linearUpdate(const Result&, const std::map<TrkrDefs::cluskey, std::array<double, 3>>&) const;
- private:
   static std::array<double, StateSize> externalState(const std::array<double, StateSize>& native);
+  static std::array<double, StateSize> nativeState(const std::array<double, StateSize>& external);
+ private:
   const PHField* m_field{nullptr};
 };
 #endif

@@ -11,7 +11,7 @@
 class TpcCrossingTrajectory : public PHObject
 {
  public:
-  enum StateIndex : unsigned int { X = 0, Y, Z, Phi, Theta, QOverP, StateSize };
+  enum StateIndex : unsigned int { X = 0, Y, Z, Phi, QOverPt, TanLambda, StateSize };
   struct LayerState
   {
     unsigned int layer{0};
@@ -60,7 +60,7 @@ class TpcCrossingTrajectory : public PHObject
   std::array<LayerState, 7> m_layerStates{};
   unsigned int m_nLayerStates{0};
 
-  ClassDefOverride(TpcCrossingTrajectory, 2)
+  ClassDefOverride(TpcCrossingTrajectory, 3)
 };
 
 #endif

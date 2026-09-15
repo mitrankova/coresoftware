@@ -28,5 +28,5 @@ int TpcCrossingTrajectory::isValid() const
 {
   return std::isfinite(m_state[X]) && std::isfinite(m_state[Y]) &&
          std::isfinite(m_state[Z]) && std::isfinite(m_state[Phi]) &&
-         std::isfinite(m_state[Theta]) && std::isfinite(m_state[QOverP]);
+         std::isfinite(m_state[QOverPt]) && std::isfinite(m_state[TanLambda]);
 }
