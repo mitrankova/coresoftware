@@ -3,6 +3,7 @@
 #include "Full_PolyTrackv1.h"
 #include "TpcCrossingTrajectory.h"
 #include "TpcCrossingTrajectoryContainer.h"
+#include "TpcCrossingClusterPosition.h"
 #include "TpcSiliconMatchCandidate.h"
 #include "TpcSiliconMatchCandidateContainer.h"
 #include "Tpc_PolyTrack.h"
@@ -119,20 +120,27 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
       corrected->set_source_assembled_track_id(reference->get_source_assembled_track_id());
       corrected->set_trkr_cluster_key(reference->get_trkr_cluster_key()); corrected->set_side(reference->get_side());
       corrected->set_adc(reference->get_adc()); corrected->set_phi_width(reference->get_phi_width()); corrected->set_time_width(reference->get_time_width()); corrected->set_phase(reference->get_phase());
-      double sw = 0., sx = 0., sy = 0., sz = 0., sx2 = 0., sy2 = 0., sz2 = 0.;
-      for (const auto& hitIndex : reference->get_hit_indices())
+      std::array<double, 3> position{};
+      std::vector<TpcCrossingClusterPosition::HitPosition> hitPositions;
+      if (!TpcCrossingClusterPosition::get(*reference, *m_lookup, candidate->get_crossing(),
+                                           trajectory->get_reference_crossing(), position, &hitPositions) ||
+          hitPositions.size() != reference->size_hits())
       {
-        auto* hitset = m_hits->findHitSet(hitIndex.first); auto* hit = hitset ? hitset->getHit(hitIndex.second) : nullptr;
-        TpcDriftPolylineLookup::Point point;
-        if (!hit || !m_lookup->getPosition(hitIndex.first, hitIndex.second, candidate->get_crossing(), point)) continue;
-        const double weight = hit->getAdc(); sw += weight; sx += weight * point.x; sy += weight * point.y; sz += weight * point.z;
-        sx2 += weight * point.x * point.x; sy2 += weight * point.y * point.y; sz2 += weight * point.z * point.z;
-        corrected->add_hit(hitIndex.first, hitIndex.second, point.x, point.y, point.z);
+        delete corrected;
+        continue;
       }
-      if (sw <= 0. || corrected->size_hits() != reference->size_hits()) { delete corrected; continue; }
-      const double x = sx / sw, y = sy / sw, z = sz / sw;
-      corrected->set_centroid_x(x); corrected->set_centroid_y(y); corrected->set_centroid_z(z);
-      corrected->set_rms_x(std::sqrt(std::max(0., sx2 / sw - x * x))); corrected->set_rms_y(std::sqrt(std::max(0., sy2 / sw - y * y))); corrected->set_rms_z(std::sqrt(std::max(0., sz2 / sw - z * z)));
+      double sx2 = 0.0, sy2 = 0.0, sz2 = 0.0;
+      for (const auto& hitPosition : hitPositions)
+      {
+        corrected->add_hit(hitPosition.hitsetkey, hitPosition.hitkey,
+                           hitPosition.candidate[0], hitPosition.candidate[1], hitPosition.candidate[2]);
+        sx2 += (hitPosition.candidate[0] - position[0]) * (hitPosition.candidate[0] - position[0]);
+        sy2 += (hitPosition.candidate[1] - position[1]) * (hitPosition.candidate[1] - position[1]);
+        sz2 += (hitPosition.candidate[2] - position[2]) * (hitPosition.candidate[2] - position[2]);
+      }
+      const double inverseCount = 1.0 / static_cast<double>(hitPositions.size());
+      corrected->set_centroid_x(position[0]); corrected->set_centroid_y(position[1]); corrected->set_centroid_z(position[2]);
+      corrected->set_rms_x(std::sqrt(sx2 * inverseCount)); corrected->set_rms_y(std::sqrt(sy2 * inverseCount)); corrected->set_rms_z(std::sqrt(sz2 * inverseCount));
       m_correctedClusters->add_cluster(corrected); fitClusters.push_back(corrected);
     }
     std::vector<TpcTrackPoint> measurements;

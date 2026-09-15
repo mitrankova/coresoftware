@@ -37,6 +37,7 @@ pkginclude_HEADERS = \
   TpcCrossingDecisionContainer.h \
   TpcCrossingDecisionContainerv1.h \
   TpcCrossingFinder.h \
+  TpcCrossingClusterPosition.h \
   TpcCrossingTrajectory.h \
   TpcCrossingTrajectoryContainer.h \
   TpcCrossingTrajectoryBuilder.h \
@@ -131,6 +132,7 @@ libtpctrackreco_io_la_SOURCES = \
 
 libtpctrackreco_la_SOURCES = \
   FastFieldTrackFitter.cc \
+  TpcCrossingClusterPosition.cc \
   Tpc_ModuleTrackReco.cc \
   Tpc_AssembledTrackReco.cc \
   TpcCrossingFinder.cc \

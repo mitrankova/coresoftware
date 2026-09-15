@@ -1,6 +1,7 @@
 #include "TpcCrossingTrajectoryBuilder.h"
 #include "TpcCrossingDecision.h"
 #include "TpcCrossingDecisionContainer.h"
+#include "TpcCrossingClusterPosition.h"
 #include "TpcCrossingTrajectory.h"
 #include "TpcCrossingTrajectoryContainer.h"
 #include "TpcDriftPolylineLookup.h"
@@ -19,6 +20,7 @@
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
+#include <trackbase/TpcDefs.h>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -108,20 +110,52 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
       if (!crossingCandidate || !crossingCandidate->tpc_valid) continue;
       const auto crossingBegin = std::chrono::steady_clock::now();
       std::map<TrkrDefs::cluskey, std::array<double, 3>> displaced;
+      bool positionsOk = true;
       for (const auto* cluster : clusters)
       {
-        double weightSum = 0.0, x = 0.0, y = 0.0, z = 0.0;
-        for (const auto& hitIndex : cluster->get_hit_indices())
+        std::array<double, 3> position{};
+        if (!TpcCrossingClusterPosition::get(*cluster, *m_lookup, crossingCandidate->crossing,
+                                             decision->get_reference_crossing(), position))
         {
-          auto* hitset = m_hits->findHitSet(hitIndex.first); auto* hit = hitset ? hitset->getHit(hitIndex.second) : nullptr;
-          TpcDriftPolylineLookup::Point point;
-          if (!hit || !m_lookup->getPosition(hitIndex.first, hitIndex.second, crossingCandidate->crossing, point)) continue;
-          const double weight = hit->getAdc(); weightSum += weight; x += weight * point.x; y += weight * point.y; z += weight * point.z;
+          positionsOk = false;
+          break;
         }
-        if (weightSum <= 0.0) continue;
-        displaced[cluster->get_trkr_cluster_key()] = {x / weightSum, y / weightSum, z / weightSum};
+        displaced[cluster->get_trkr_cluster_key()] = position;
+
+        const double dx = position[0] - cluster->get_centroid_x();
+        const double dy = position[1] - cluster->get_centroid_y();
+        const double dz = position[2] - cluster->get_centroid_z();
+        const double magnitude = std::sqrt(dx * dx + dy * dy + dz * dz);
+        static bool dumpedIdentityFailure = false;
+        if (!dumpedIdentityFailure && Verbosity() >= 10 &&
+            crossingCandidate->crossing == decision->get_reference_crossing() && magnitude > 1.e-7)
+        {
+          dumpedIdentityFailure = true;
+          const auto first = cluster->get_hit_index(0);
+          std::vector<TpcCrossingClusterPosition::HitPosition> hitPositions;
+          TpcCrossingClusterPosition::get(*cluster, *m_lookup, crossingCandidate->crossing,
+                                          decision->get_reference_crossing(), position, &hitPositions);
+          std::cout << Name() << " identity_failure parent_track_id=" << track->get_track_id()
+                    << " cluster_id=" << cluster->get_cluster_id()
+                    << " layer=" << TrkrDefs::getLayer(first.first) << " side=" << cluster->get_side()
+                    << " raw_hits=" << cluster->size_hits()
+                    << " reference_xyz=" << cluster->get_centroid_x() << "," << cluster->get_centroid_y() << "," << cluster->get_centroid_z()
+                    << " candidate_xyz=" << position[0] << "," << position[1] << "," << position[2]
+                    << " delta_xyz=" << dx << "," << dy << "," << dz << " delta_magnitude=" << magnitude << std::endl;
+          for (const auto& hitPosition : hitPositions)
+          {
+            auto* hitset = m_hits->findHitSet(hitPosition.hitsetkey);
+            auto* hit = hitset ? hitset->getHit(hitPosition.hitkey) : nullptr;
+            std::cout << "  hitsetkey=" << hitPosition.hitsetkey << " hitkey=" << hitPosition.hitkey
+                      << " pad=" << TpcDefs::getPad(hitPosition.hitkey) << " tbin=" << TpcDefs::getTBin(hitPosition.hitkey)
+                      << " adc=" << (hit ? hit->getAdc() : 0.0)
+                      << " p_ref=" << hitPosition.reference[0] << "," << hitPosition.reference[1] << "," << hitPosition.reference[2]
+                      << " p_candidate=" << hitPosition.candidate[0] << "," << hitPosition.candidate[1] << "," << hitPosition.candidate[2]
+                      << " delta_hit=" << hitPosition.delta[0] << "," << hitPosition.delta[1] << "," << hitPosition.delta[2] << std::endl;
+          }
+        }
       }
-      if (displaced.size() != clusters.size()) continue;
+      if (!positionsOk || displaced.size() != clusters.size()) continue;
       const auto update = m_fitter->linearUpdate(referenceFit, displaced);
       if (!update.valid) continue;
       auto* trajectory = new TpcCrossingTrajectory;
