@@ -1,35 +1,52 @@
 #ifndef TPCTRACKRECO_FASTFIELDTRACKFITTER_H
 #define TPCTRACKRECO_FASTFIELDTRACKFITTER_H
-
 #include "TpcTrackFit.h"
+#include <trackbase/TrkrDefs.h>
 #include <array>
+#include <map>
 #include <vector>
-
 class PHField;
 class Tpc_PolyCluster;
 class Tpc_PolyTrack;
-
 class FastFieldTrackFitter
 {
  public:
   static constexpr unsigned int StateSize = 6;
+  struct MeasurementResponse
+  {
+    TrkrDefs::cluskey key{TrkrDefs::CLUSKEYMAX};
+    std::array<double, 3> reference{};
+    std::array<double, 3> prediction{};
+    std::array<double, 18> jacobian{}; // d(x,y,z)_i / dX_reference, row-major 3x6
+    std::array<double, 9> weight{};    // measurement inverse covariance, 3x3
+    std::array<double, 18> response{}; // A^-1 J_i^T W_i, row-major 6x3
+  };
   struct Result
   {
     bool valid{false};
-    std::array<double, StateSize> state{}; // x,y,z,phi,theta,q/p
+    std::array<double, StateSize> state{};       // x,y,z,phi,theta,q/p
+    std::array<double, StateSize> nativeState{}; // x,y,z,phi,q/pt,tan(lambda)
     std::array<double, StateSize * StateSize> covariance{};
+    std::vector<MeasurementResponse> measurements;
+    std::vector<double> pathS;
     TpcKalmanConfig propagationConfig;
     double chi2{0.0};
     int ndf{-1};
+    double fitSeconds{0.0};
+    double responseSeconds{0.0};
   };
-
+  struct Update
+  {
+    bool valid{false};
+    std::array<double, StateSize> delta{};
+    double chi2{0.0};
+  };
   explicit FastFieldTrackFitter(const PHField* field);
   bool fit(const Tpc_PolyTrack&, const std::vector<const Tpc_PolyCluster*>&, Result&) const;
-  std::array<double, StateSize> linearUpdate(
-      const Result&, const std::vector<std::array<double, 3>>& reference,
-      const std::vector<std::array<double, 3>>& displaced) const;
-
+  bool fitMeasurements(const Tpc_PolyTrack&, const std::vector<TpcTrackPoint>&, Result&) const;
+  Update linearUpdate(const Result&, const std::map<TrkrDefs::cluskey, std::array<double, 3>>&) const;
  private:
+  static std::array<double, StateSize> externalState(const std::array<double, StateSize>& native);
   const PHField* m_field{nullptr};
 };
 #endif

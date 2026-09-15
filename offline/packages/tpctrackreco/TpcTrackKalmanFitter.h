@@ -38,6 +38,11 @@ class TpcTrackKalmanFitter
                                                       double ds_cm,
                                                       const TpcKalmanConfig &config,
                                                       double mass_gev = 0.13957039);
+  static std::array<double, StateDim * StateDim> propagation_jacobian(
+      const std::array<double, StateDim> &state,
+      double ds_cm,
+      const TpcKalmanConfig &config,
+      double mass_gev = 0.13957039);
   static std::pair<double, double> dca_to_vertex(const TpcKalmanResult &fit,
                                                  const TpcTrackVec3 &vertex,
                                                  const TpcKalmanConfig *config = nullptr);

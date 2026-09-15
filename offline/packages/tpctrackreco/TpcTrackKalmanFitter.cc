@@ -1100,6 +1100,16 @@ std::array<double, TpcTrackKalmanFitter::StateDim> TpcTrackKalmanFitter::propaga
   return to_array(propagate_rkn4(input, ds_cm, config, mass_gev));
 }
 
+std::array<double, TpcTrackKalmanFitter::StateDim * TpcTrackKalmanFitter::StateDim>
+TpcTrackKalmanFitter::propagation_jacobian(
+    const std::array<double, StateDim> &state,
+    const double ds_cm,
+    const TpcKalmanConfig &config,
+    const double mass_gev)
+{
+  return to_array(transport_jacobian(to_eigen(state), ds_cm, config, mass_gev, nullptr));
+}
+
 std::pair<double, double> TpcTrackKalmanFitter::dca_to_vertex(const TpcKalmanResult &fit,
                                                               const TpcTrackVec3 &vertex,
                                                               const TpcKalmanConfig *input_config)
