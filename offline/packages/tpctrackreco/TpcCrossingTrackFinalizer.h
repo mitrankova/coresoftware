@@ -27,6 +27,8 @@ class TpcCrossingTrackFinalizer : public SubsysReco
   void setOutputNodeName(const std::string& value) { m_outputNodeName = value; }
   void setClusterNodeName(const std::string& value) { m_clusterNodeName = value; }
   void setCorrectedClusterNodeName(const std::string& value) { m_correctedClusterNodeName = value; }
+  void setMaxFinalFitQaTracks(unsigned int value) { m_maxFinalFitQaTracks = value; }
+  void setFinalFitContinuityMaxPull(double value) { m_finalFitContinuityMaxPull = value; }
  private:
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
@@ -49,5 +51,7 @@ class TpcCrossingTrackFinalizer : public SubsysReco
   const PHField* m_field{nullptr};
   std::unique_ptr<FastFieldTrackFitter> m_fitter;
   unsigned int m_event{0};
+  unsigned int m_maxFinalFitQaTracks{10};
+  double m_finalFitContinuityMaxPull{50.};
 };
 #endif

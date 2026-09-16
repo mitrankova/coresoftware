@@ -8,6 +8,16 @@
 #include <limits>
 #include <vector>
 
+enum class FullPolyTrackFitStatus : int
+{
+  Unknown = 0,
+  FinalFitAccepted = 1,
+  FinalFitFailedFallback = 2,
+  FinalFitNonFiniteFallback = 3,
+  FinalFitBadCovarianceFallback = 4,
+  FinalFitDiscontinuousFallback = 5
+};
+
 class Full_PolyTrack : public PHObject
 {
  public:

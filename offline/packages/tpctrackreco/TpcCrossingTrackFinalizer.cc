@@ -13,6 +13,7 @@
 #include "Tpc_PolyClusterContainer.h"
 #include "Tpc_PolyClusterContainerv1.h"
 #include "TpcDriftPolylineLookup.h"
+#include "TpcTrackKalmanFitter.h"
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phfield/PHFieldUtility.h>
 #include <phool/PHCompositeNode.h>
@@ -28,11 +29,77 @@
 #include <trackbase/ActsGeometry.h>
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/Definitions/Units.hpp>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <vector>
+
+namespace
+{
+  using NativeState = std::array<double, FastFieldTrackFitter::StateSize>;
+  using NativeCovariance = std::array<double, FastFieldTrackFitter::StateSize *
+                                               FastFieldTrackFitter::StateSize>;
+
+  const char* finalFitStatusName(const FullPolyTrackFitStatus status)
+  {
+    switch (status)
+    {
+    case FullPolyTrackFitStatus::FinalFitAccepted: return "FinalFitAccepted";
+    case FullPolyTrackFitStatus::FinalFitFailedFallback: return "FinalFitFailedFallback";
+    case FullPolyTrackFitStatus::FinalFitNonFiniteFallback: return "FinalFitNonFiniteFallback";
+    case FullPolyTrackFitStatus::FinalFitBadCovarianceFallback: return "FinalFitBadCovarianceFallback";
+    case FullPolyTrackFitStatus::FinalFitDiscontinuousFallback: return "FinalFitDiscontinuousFallback";
+    case FullPolyTrackFitStatus::Unknown: return "Unknown";
+    }
+    return "Unknown";
+  }
+
+  FullPolyTrackFitStatus validateFinalFit(
+      const bool fitCalled,
+      const NativeState& fastNative,
+      const NativeCovariance& fastCovariance,
+      const FastFieldTrackFitter::Result& finalFit,
+      const double maximumContinuityPull,
+      double& continuityMaxPull)
+  {
+    continuityMaxPull = std::numeric_limits<double>::quiet_NaN();
+    if (!fitCalled || !finalFit.fitSuccess || !finalFit.valid || finalFit.nAccepted == 0)
+      return FullPolyTrackFitStatus::FinalFitFailedFallback;
+    if (!std::isfinite(finalFit.chi2))
+      return FullPolyTrackFitStatus::FinalFitNonFiniteFallback;
+    for (const double value : finalFit.nativeState)
+      if (!std::isfinite(value)) return FullPolyTrackFitStatus::FinalFitNonFiniteFallback;
+    for (const double value : finalFit.covariance)
+      if (!std::isfinite(value)) return FullPolyTrackFitStatus::FinalFitNonFiniteFallback;
+
+    for (unsigned int index = 0; index < FastFieldTrackFitter::StateSize; ++index)
+      if (!(finalFit.covariance[7 * index] > 0.))
+        return FullPolyTrackFitStatus::FinalFitBadCovarianceFallback;
+
+    continuityMaxPull = 0.;
+    const std::array<unsigned int, 3> continuityIndices{{
+        TpcTrackKalmanFitter::Phi,
+        TpcTrackKalmanFitter::QOverPt,
+        TpcTrackKalmanFitter::TanLambda}};
+    constexpr double twoPi = 6.28318530717958647692;
+    for (const unsigned int index : continuityIndices)
+    {
+      double delta = finalFit.nativeState[index] - fastNative[index];
+      if (index == TpcTrackKalmanFitter::Phi) delta = std::remainder(delta, twoPi);
+      const double variance = fastCovariance[7 * index] + finalFit.covariance[7 * index];
+      if (!(variance > 0.) || !std::isfinite(variance))
+        return FullPolyTrackFitStatus::FinalFitBadCovarianceFallback;
+      continuityMaxPull = std::max(continuityMaxPull, std::abs(delta) / std::sqrt(variance));
+    }
+    return continuityMaxPull > maximumContinuityPull
+        ? FullPolyTrackFitStatus::FinalFitDiscontinuousFallback
+        : FullPolyTrackFitStatus::FinalFitAccepted;
+  }
+}
 
 TpcCrossingTrackFinalizer::TpcCrossingTrackFinalizer(const std::string& name) : SubsysReco(name) {}
 int TpcCrossingTrackFinalizer::getNodes(PHCompositeNode* topNode)
@@ -88,7 +155,22 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
   std::map<TrkrDefs::cluskey, const Tpc_PolyCluster*> clustersByKey;
   for (unsigned int i = 0; i < m_clusters->size(); ++i) if (const auto* cluster = m_clusters->get_cluster(i)) clustersByKey[cluster->get_trkr_cluster_key()] = cluster;
   unsigned int outputId = 0;
-  unsigned int finalFits = 0;
+  unsigned int selectedEqualReference = 0;
+  unsigned int selectedNonreference = 0;
+  unsigned int selectedOffsetAbs1 = 0;
+  unsigned int selectedOffsetAbs2 = 0;
+  unsigned int selectedOffsetAbs3 = 0;
+  unsigned int selectedOffsetAbsGt3 = 0;
+  unsigned int combinedFitAttempted = 0;
+  unsigned int combinedFitCalls = 0;
+  unsigned int combinedFitAccepted = 0;
+  unsigned int combinedFitFailed = 0;
+  unsigned int combinedFitNonfinite = 0;
+  unsigned int combinedFitBadCovariance = 0;
+  unsigned int combinedFitDiscontinuous = 0;
+  unsigned int combinedFitFastFallback = 0;
+  unsigned int finalFitQaPrinted = 0;
+  std::map<int, unsigned int> crossingOffsets;
   double finalFitSeconds = 0.0;
   for (unsigned int i = 0; i < m_candidates->size(); ++i)
   {
@@ -108,6 +190,22 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
       if (value && value->get_parent_track_id() == candidate->get_parent_track_id() && value->get_crossing() == candidate->get_crossing()) { trajectory = value; break; }
     }
     if (!trajectory) continue;
+
+    const short referenceCrossing = trajectory->get_reference_crossing();
+    const short selectedCrossing = trajectory->get_crossing();
+    const int crossingOffset = static_cast<int>(selectedCrossing) -
+                               static_cast<int>(referenceCrossing);
+    ++crossingOffsets[crossingOffset];
+    if (crossingOffset == 0) ++selectedEqualReference;
+    else ++selectedNonreference;
+    switch (std::abs(crossingOffset))
+    {
+    case 0: break;
+    case 1: ++selectedOffsetAbs1; break;
+    case 2: ++selectedOffsetAbs2; break;
+    case 3: ++selectedOffsetAbs3; break;
+    default: ++selectedOffsetAbsGt3; break;
+    }
 
     std::vector<const Tpc_PolyCluster*> fitClusters;
     for (const auto key : parent->get_cluster_keys())
@@ -186,11 +284,92 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
       point.measurement_covariance = {sigma0 * sigma0, 0., 0., 0., sigma1 * sigma1, 0., 0., 0., 1.};
       measurements.push_back(point);
     }
+    const NativeState fastNative{{
+        trajectory->get_state(TpcCrossingTrajectory::X),
+        trajectory->get_state(TpcCrossingTrajectory::Y),
+        trajectory->get_state(TpcCrossingTrajectory::Z),
+        trajectory->get_state(TpcCrossingTrajectory::Phi),
+        trajectory->get_state(TpcCrossingTrajectory::QOverPt),
+        trajectory->get_state(TpcCrossingTrajectory::TanLambda)}};
+    NativeCovariance fastCovariance{};
+    for (unsigned int row = 0; row < FastFieldTrackFitter::StateSize; ++row)
+      for (unsigned int column = 0; column < FastFieldTrackFitter::StateSize; ++column)
+        fastCovariance[FastFieldTrackFitter::StateSize * row + column] =
+            trajectory->get_covariance(row, column);
+
     FastFieldTrackFitter::Result finalFit;
     const bool allMeasurements = fitClusters.size() == parent->size_cluster_keys() &&
                                  measurements.size() == fitClusters.size() + candidate->get_silicon_cluster_keys().size();
-    const bool fitOk = allMeasurements && m_fitter->fitMeasurements(*parent, measurements, finalFit);
-    if (fitOk) { ++finalFits; finalFitSeconds += finalFit.fitSeconds; }
+    ++combinedFitAttempted;
+    bool fitReturned = false;
+    if (allMeasurements)
+    {
+      ++combinedFitCalls;
+      fitReturned = m_fitter->fitMeasurements(*parent, measurements, fastNative, finalFit);
+      finalFitSeconds += finalFit.fitSeconds;
+    }
+    double continuityMaxPull = std::numeric_limits<double>::quiet_NaN();
+    const auto finalFitStatus = validateFinalFit(
+        fitReturned, fastNative, fastCovariance, finalFit,
+        m_finalFitContinuityMaxPull, continuityMaxPull);
+    const bool finalFitAccepted =
+        finalFitStatus == FullPolyTrackFitStatus::FinalFitAccepted;
+    switch (finalFitStatus)
+    {
+    case FullPolyTrackFitStatus::FinalFitAccepted: ++combinedFitAccepted; break;
+    case FullPolyTrackFitStatus::FinalFitFailedFallback: ++combinedFitFailed; break;
+    case FullPolyTrackFitStatus::FinalFitNonFiniteFallback: ++combinedFitNonfinite; break;
+    case FullPolyTrackFitStatus::FinalFitBadCovarianceFallback: ++combinedFitBadCovariance; break;
+    case FullPolyTrackFitStatus::FinalFitDiscontinuousFallback: ++combinedFitDiscontinuous; break;
+    case FullPolyTrackFitStatus::Unknown: ++combinedFitFailed; break;
+    }
+    if (!finalFitAccepted) ++combinedFitFastFallback;
+
+    std::array<double, FastFieldTrackFitter::StateSize> finalMinusFast{};
+    finalMinusFast.fill(std::numeric_limits<double>::quiet_NaN());
+    if (fitReturned)
+    {
+      for (unsigned int index = 0; index < finalMinusFast.size(); ++index)
+      {
+        if (!std::isfinite(finalFit.nativeState[index])) continue;
+        finalMinusFast[index] = finalFit.nativeState[index] - fastNative[index];
+      }
+      if (std::isfinite(finalMinusFast[TpcTrackKalmanFitter::Phi]))
+        finalMinusFast[TpcTrackKalmanFitter::Phi] =
+            std::remainder(finalMinusFast[TpcTrackKalmanFitter::Phi],
+                           6.28318530717958647692);
+    }
+
+    const bool printFinalFitQa = Verbosity() >= 10 ||
+        (Verbosity() >= 5 &&
+         (finalFitQaPrinted < m_maxFinalFitQaTracks || !finalFitAccepted));
+    if (printFinalFitQa)
+    {
+      ++finalFitQaPrinted;
+      std::cout << Name() << " crossing_selection"
+                << " parent=" << parent->get_track_id()
+                << " source_assembled=" << parent->get_source_assembled_track_id()
+                << " reference=" << referenceCrossing
+                << " selected=" << selectedCrossing
+                << " offset=" << crossingOffset << std::endl;
+      std::cout << Name() << " final_fit_qa"
+                << " parent_track_id=" << parent->get_track_id()
+                << " reference_crossing=" << referenceCrossing
+                << " selected_crossing=" << selectedCrossing
+                << " crossing_offset=" << crossingOffset
+                << " final_fit_status=" << finalFitStatusName(finalFitStatus)
+                << " final_fit_success=" << finalFit.fitSuccess
+                << " chi2=" << finalFit.chi2
+                << " ndf=" << finalFit.ndf
+                << " nAccepted=" << finalFit.nAccepted
+                << " deltaX_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::X]
+                << " deltaY_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::Y]
+                << " deltaZ_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::Z]
+                << " deltaPhi_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::Phi]
+                << " deltaQOverPt_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::QOverPt]
+                << " deltaTanLambda_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::TanLambda]
+                << " continuity_max_pull=" << continuityMaxPull << std::endl;
+    }
 
     auto* full = new Full_PolyTrackv1;
     full->set_event(m_event);
@@ -204,27 +383,63 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
     full->set_score(candidate->get_score());
     full->set_max_abs_dz(candidate->get_max_abs_dz());
     full->set_max_abs_ddphi(candidate->get_max_abs_ddphi());
-    full->set_fit_status(fitOk ? 1 : 0);
-    full->set_chi2(fitOk ? finalFit.chi2 : parent->get_chi2()); full->set_ndf(fitOk ? finalFit.ndf : parent->get_ndf());
-    const auto fallbackNative = std::array<double, 6>{{trajectory->get_state(0), trajectory->get_state(1), trajectory->get_state(2), trajectory->get_state(3), trajectory->get_state(4), trajectory->get_state(5)}};
-    const auto& finalNative = fitOk ? finalFit.nativeState : fallbackNative;
+    full->set_fit_status(static_cast<int>(finalFitStatus));
+    full->set_chi2(finalFitAccepted ? finalFit.chi2 : parent->get_chi2());
+    full->set_ndf(finalFitAccepted ? finalFit.ndf : parent->get_ndf());
+    const auto& finalNative = finalFitAccepted ? finalFit.nativeState : fastNative;
     for (unsigned int index = 0; index < finalNative.size(); ++index)
     {
       full->set_final_native_state(index, finalNative[index]);
-      full->set_fast_native_state(index, fallbackNative[index]);
+      full->set_fast_native_state(index, fastNative[index]);
     }
-    const auto fallbackState = FastFieldTrackFitter::externalState(fallbackNative);
-    const auto& state = fitOk ? finalFit.state : fallbackState;
+    const auto fastExternal = FastFieldTrackFitter::externalState(fastNative);
+    const auto& state = finalFitAccepted ? finalFit.state : fastExternal;
     full->set_x(state[0]); full->set_y(state[1]); full->set_z(state[2]);
-    const double momentum = std::abs(state[5]) > 1.e-12 ? std::abs(1. / state[5]) : std::hypot(std::hypot(parent->get_px(), parent->get_py()), parent->get_pz());
-    const double pt = momentum * std::sin(state[4]); full->set_px(pt * std::cos(state[3])); full->set_py(pt * std::sin(state[3])); full->set_pz(momentum * std::cos(state[4])); full->set_charge(state[5] < 0. ? -1. : 1.);
-    for (unsigned int row = 0; row < 6; ++row) for (unsigned int col = 0; col < 6; ++col) full->set_cov(row, col, fitOk ? finalFit.covariance[row * 6 + col] : parent->get_cov(row, col));
+    const double momentum = std::abs(state[5]) > 1.e-12
+        ? std::abs(1. / state[5])
+        : std::hypot(std::hypot(parent->get_px(), parent->get_py()), parent->get_pz());
+    const double pt = momentum * std::sin(state[4]);
+    full->set_px(pt * std::cos(state[3]));
+    full->set_py(pt * std::sin(state[3]));
+    full->set_pz(momentum * std::cos(state[4]));
+    full->set_charge(state[5] < 0. ? -1. : 1.);
+    for (unsigned int row = 0; row < FastFieldTrackFitter::StateSize; ++row)
+      for (unsigned int column = 0; column < FastFieldTrackFitter::StateSize; ++column)
+        full->set_cov(row, column, finalFitAccepted
+            ? finalFit.covariance[FastFieldTrackFitter::StateSize * row + column]
+            : fastCovariance[FastFieldTrackFitter::StateSize * row + column]);
     for (const auto key : parent->get_cluster_keys()) full->add_tpc_cluster_key(key);
     for (const auto key : candidate->get_silicon_cluster_keys()) full->add_silicon_cluster_key(key);
     m_output->add_track(full);
   }
-  if (Verbosity() > 0) std::cout << Name() << " final_tracks=" << m_output->size() << " corrected_clusters=" << m_correctedClusters->size()
-                                 << " combined_fits=" << finalFits << " final_fit_ms=" << (finalFits ? 1.e3 * finalFitSeconds / finalFits : 0.)
-                                 << " seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count() << std::endl;
+  if (Verbosity() > 0)
+  {
+    std::cout << Name()
+              << " final_tracks=" << m_output->size()
+              << " selected_equal_reference=" << selectedEqualReference
+              << " selected_nonreference=" << selectedNonreference
+              << " selected_offset_abs_1=" << selectedOffsetAbs1
+              << " selected_offset_abs_2=" << selectedOffsetAbs2
+              << " selected_offset_abs_3=" << selectedOffsetAbs3
+              << " selected_offset_abs_gt3=" << selectedOffsetAbsGt3
+              << " combined_fit_attempted=" << combinedFitAttempted
+              << " combined_fit_accepted=" << combinedFitAccepted
+              << " combined_fit_failed=" << combinedFitFailed
+              << " combined_fit_nonfinite=" << combinedFitNonfinite
+              << " combined_fit_bad_covariance=" << combinedFitBadCovariance
+              << " combined_fit_discontinuous=" << combinedFitDiscontinuous
+              << " combined_fit_fast_fallback=" << combinedFitFastFallback
+              << " corrected_clusters=" << m_correctedClusters->size()
+              << " final_fit_ms=" << (combinedFitCalls
+                  ? 1.e3 * finalFitSeconds / combinedFitCalls : 0.)
+              << " seconds="
+              << std::chrono::duration<double>(
+                     std::chrono::steady_clock::now() - begin).count()
+              << std::endl;
+    std::cout << Name() << " crossing_offsets";
+    for (const auto& [offset, count] : crossingOffsets)
+      std::cout << " " << offset << ":" << count;
+    std::cout << std::endl;
+  }
   return Fun4AllReturnCodes::EVENT_OK;
 }
