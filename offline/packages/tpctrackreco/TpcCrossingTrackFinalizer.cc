@@ -207,6 +207,12 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
     full->set_fit_status(fitOk ? 1 : 0);
     full->set_chi2(fitOk ? finalFit.chi2 : parent->get_chi2()); full->set_ndf(fitOk ? finalFit.ndf : parent->get_ndf());
     const auto fallbackNative = std::array<double, 6>{{trajectory->get_state(0), trajectory->get_state(1), trajectory->get_state(2), trajectory->get_state(3), trajectory->get_state(4), trajectory->get_state(5)}};
+    const auto& finalNative = fitOk ? finalFit.nativeState : fallbackNative;
+    for (unsigned int index = 0; index < finalNative.size(); ++index)
+    {
+      full->set_final_native_state(index, finalNative[index]);
+      full->set_fast_native_state(index, fallbackNative[index]);
+    }
     const auto fallbackState = FastFieldTrackFitter::externalState(fallbackNative);
     const auto& state = fitOk ? finalFit.state : fallbackState;
     full->set_x(state[0]); full->set_y(state[1]); full->set_z(state[2]);

@@ -43,6 +43,12 @@ class Full_PolyTrackv1 : public Full_PolyTrack
 
   double get_cov(unsigned int i, unsigned int j) const override;
   void set_cov(unsigned int i, unsigned int j, double value) override;
+  bool has_final_native_state() const override;
+  double get_final_native_state(unsigned int i) const override;
+  bool has_fast_native_state() const override;
+  double get_fast_native_state(unsigned int i) const override;
+  void set_final_native_state(unsigned int i, double value) override;
+  void set_fast_native_state(unsigned int i, double value) override;
   unsigned int size_tpc_cluster_keys() const override { return m_tpcKeys.size(); }
   TrkrDefs::cluskey get_tpc_cluster_key(unsigned int i) const override { return i < m_tpcKeys.size() ? m_tpcKeys[i] : TrkrDefs::CLUSKEYMAX; }
   const std::vector<TrkrDefs::cluskey>& get_tpc_cluster_keys() const override { return m_tpcKeys; }
@@ -64,9 +70,11 @@ class Full_PolyTrackv1 : public Full_PolyTrack
   double m_chi2{nan()}, m_ndf{nan()};
   double m_x{nan()}, m_y{nan()}, m_z{nan()}, m_px{nan()}, m_py{nan()}, m_pz{nan()}, m_charge{nan()};
   std::array<double, 36> m_cov{};
+  std::array<double, 6> m_finalNativeState{};
+  std::array<double, 6> m_fastNativeState{};
   std::vector<TrkrDefs::cluskey> m_tpcKeys;
   std::vector<TrkrDefs::cluskey> m_siliconKeys;
-  ClassDefOverride(Full_PolyTrackv1, 1)
+  ClassDefOverride(Full_PolyTrackv1, 2)
 };
 
 #endif

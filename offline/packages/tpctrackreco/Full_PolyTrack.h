@@ -37,6 +37,10 @@ class Full_PolyTrack : public PHObject
   virtual double get_pz() const { return nan(); }
   virtual double get_charge() const { return nan(); }
   virtual double get_cov(unsigned int, unsigned int) const { return nan(); }
+  virtual bool has_final_native_state() const { return false; }
+  virtual double get_final_native_state(unsigned int) const { return nan(); }
+  virtual bool has_fast_native_state() const { return false; }
+  virtual double get_fast_native_state(unsigned int) const { return nan(); }
 
   virtual void set_event(unsigned int) {}
   virtual void set_track_id(unsigned int) {}
@@ -60,6 +64,8 @@ class Full_PolyTrack : public PHObject
   virtual void set_pz(double) {}
   virtual void set_charge(double) {}
   virtual void set_cov(unsigned int, unsigned int, double) {}
+  virtual void set_final_native_state(unsigned int, double) {}
+  virtual void set_fast_native_state(unsigned int, double) {}
 
   virtual unsigned int size_tpc_cluster_keys() const { return 0; }
   virtual TrkrDefs::cluskey get_tpc_cluster_key(unsigned int) const { return TrkrDefs::CLUSKEYMAX; }

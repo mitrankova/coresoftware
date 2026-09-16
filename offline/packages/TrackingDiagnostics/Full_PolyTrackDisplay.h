@@ -31,13 +31,13 @@ class Full_PolyTrackDisplay : public SubsysReco
   void setTrkrClusterNodeName(const std::string& value) { m_trkrClusterNodeName = value; }
   void setZRange(double minimum, double maximum) { m_zmin = minimum; m_zmax = maximum; }
   void setXYRange(double maximum) { m_xymax = maximum; }
-  void setMagneticFieldTesla(double value) { m_magneticFieldTesla = value; }
-  void setUseStraightLineTracks(bool value) { m_useStraightLineTracks = value; }
   void setMinTrackPt(double value) { m_minTrackPt = value; }
   void setMinMvtxHits(unsigned int value) { m_minMvtxHits = value; }
   void setMinInttHits(unsigned int value) { m_minInttHits = value; }
   void setDrawMeasurements(bool value) { m_drawMeasurements = value; }
-  void setDrawFittedTrajectory(bool value) { m_drawFittedTrajectory = value; }
+  void setDrawFittedTrajectory(bool value) { m_drawFinalFieldTrajectory = value; }
+  void setDrawFinalFieldTrajectory(bool value) { m_drawFinalFieldTrajectory = value; }
+  void setDrawFastFieldTrajectory(bool value) { m_drawFastFieldTrajectory = value; }
 
  private:
   bool getNodes(PHCompositeNode*);
@@ -54,11 +54,10 @@ class Full_PolyTrackDisplay : public SubsysReco
   double m_zmin{-102.0};
   double m_zmax{102.0};
   double m_xymax{85.0};
-  double m_magneticFieldTesla{1.4};
   double m_minTrackPt{0.1};
-  bool m_useStraightLineTracks{false};
   bool m_drawMeasurements{true};
-  bool m_drawFittedTrajectory{true};
+  bool m_drawFinalFieldTrajectory{true};
+  bool m_drawFastFieldTrajectory{false};
 
   TFile* m_outfile{nullptr};
   Full_PolyTrackContainer* m_fullTracks{nullptr};

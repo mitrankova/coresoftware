@@ -27,9 +27,11 @@
 #include <cmath>
 #include <format>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace
@@ -43,6 +45,21 @@ namespace
     TrkrDefs::cluskey key{TrkrDefs::CLUSKEYMAX};
     TrkrDefs::TrkrId detector{TrkrDefs::tpcId};
     bool silicon{false};
+  };
+
+  class NamedPolyLine3D : public TPolyLine3D
+  {
+   public:
+    NamedPolyLine3D(const int count, std::string name)
+      : TPolyLine3D(count)
+      , m_name(std::move(name))
+    {
+    }
+
+    const char* GetName() const override { return m_name.c_str(); }
+
+   private:
+    std::string m_name;
   };
 
   const char* detectorName(const TrkrDefs::TrkrId detector)
@@ -86,68 +103,193 @@ namespace
     return output;
   }
 
-  TPolyLine3D* fittedTrajectory(const Full_PolyTrack& track,
-                                const std::vector<Point>& measurements,
-                                const PHField* field,
-                                const bool straight,
-                                const double fallbackField,
-                                const double zmin,
-                                const double zmax,
-                                const double xymax,
-                                const int color,
-                                unsigned int& attempted,
-                                unsigned int& failed,
-                                unsigned int& samples)
+  using NativeState = std::array<double, TpcTrackKalmanFitter::StateDim>;
+
+  bool finiteState(const NativeState& state)
   {
-    const double px = track.get_px();
-    const double py = track.get_py();
-    const double pz = track.get_pz();
-    const double pt = std::hypot(px, py);
-    if (!(pt > 0.) || measurements.empty()) return nullptr;
-    std::array<double, TpcTrackKalmanFitter::StateDim> state{{
-        track.get_x(), track.get_y(), track.get_z(), std::atan2(py, px),
-        straight ? 0. : track.get_charge() / pt, pz / pt}};
-    for (const double value : state) if (!std::isfinite(value)) return nullptr;
+    return std::all_of(state.begin(), state.end(), [](const double value) { return std::isfinite(value); });
+  }
+
+  TPolyLine3D* fieldTrajectory(const Full_PolyTrack& track,
+                               const NativeState& initialState,
+                               const std::vector<Point>& measurements,
+                               const PHField* field,
+                               const char* stateName,
+                               const double zmin,
+                               const double zmax,
+                               const double xymax,
+                               const int color,
+                               const int verbosity,
+                               unsigned int& attempted,
+                               unsigned int& succeeded,
+                               unsigned int& failed,
+                               unsigned int& reportedFailures,
+                               unsigned int& samples)
+  {
+    if (!field || !finiteState(initialState) || measurements.empty()) return nullptr;
+
+    double maximumMeasurementRadius = 0.;
+    for (const auto& point : measurements)
+    {
+      maximumMeasurementRadius = std::max(maximumMeasurementRadius, std::hypot(point.x, point.y));
+    }
+    const double minimumRadius = 2.0;
+    const double maximumRadius = std::min(xymax, std::max(80.0, maximumMeasurementRadius + 1.0));
+
     TpcKalmanConfig config;
-    config.magnetic_field = straight ? nullptr : field;
-    config.analytic_uniform_propagation = straight;
-    config.bfield_t = straight ? 0. : fallbackField;
-    const auto propagate = [&](const std::array<double, TpcTrackKalmanFitter::StateDim>& input,
-                               const double ds)
+    config.magnetic_field = field;
+    config.analytic_uniform_propagation = false;
+
+    const auto propagate = [&](const NativeState& input, const double ds)
     {
       ++attempted;
-      return TpcTrackKalmanFitter::propagate_state(input, ds, config);
+      const auto output = TpcTrackKalmanFitter::propagate_state(input, ds, config);
+      if (finiteState(output))
+      {
+        ++succeeded;
+      }
+      else
+      {
+        ++failed;
+      }
+      return output;
     };
-    const auto plus = propagate(state, 0.25);
-    const auto minus = propagate(state, -0.25);
-    const double radius0 = std::hypot(state[TpcTrackKalmanFitter::X], state[TpcTrackKalmanFitter::Y]);
-    const double radiusPlus = std::hypot(plus[TpcTrackKalmanFitter::X], plus[TpcTrackKalmanFitter::Y]);
-    const double radiusMinus = std::hypot(minus[TpcTrackKalmanFitter::X], minus[TpcTrackKalmanFitter::Y]);
-    if (!std::isfinite(radiusPlus) || !std::isfinite(radiusMinus)) { ++failed; return nullptr; }
-    const double step = radiusPlus >= radiusMinus ? 0.25 : -0.25;
-    double maximumRadius = 0.;
-    for (const auto& point : measurements) maximumRadius = std::max(maximumRadius, std::hypot(point.x, point.y));
-    std::vector<Point> points;
-    if (visible({state[0], state[1], state[2]}, zmin, zmax, xymax))
-      points.push_back({state[0], state[1], state[2]});
-    double previousRadius = radius0;
-    for (unsigned int i = 0; i < 2000 && previousRadius <= maximumRadius + 0.25; ++i)
+
+    const auto reportFailure = [&](const char* reason, const double targetRadius,
+                                   const NativeState& state)
     {
-      const auto next = propagate(state, step);
-      const double radius = std::hypot(next[TpcTrackKalmanFitter::X], next[TpcTrackKalmanFitter::Y]);
-      if (!std::isfinite(radius) || !std::isfinite(next[TpcTrackKalmanFitter::Z])) { ++failed; break; }
-      if (radius + 1.e-4 < previousRadius) { ++failed; break; }
-      state = next;
-      previousRadius = radius;
-      Point point{state[0], state[1], state[2]};
-      if (visible(point, zmin, zmax, xymax)) points.push_back(point);
+      if (verbosity < 5 || reportedFailures >= 5) return;
+      ++reportedFailures;
+      std::cout << "Full_PolyTrackDisplay propagation_failure parent_track_id="
+                << track.get_parent_tpc_track_id() << " crossing=" << track.get_crossing()
+                << " state=" << stateName << " target_radius=" << targetRadius
+                << " status=" << reason
+                << " x=" << state[TpcTrackKalmanFitter::X]
+                << " y=" << state[TpcTrackKalmanFitter::Y]
+                << " z=" << state[TpcTrackKalmanFitter::Z]
+                << " Phi=" << state[TpcTrackKalmanFitter::Phi]
+                << " QOverPt=" << state[TpcTrackKalmanFitter::QOverPt]
+                << " TanLambda=" << state[TpcTrackKalmanFitter::TanLambda] << std::endl;
+    };
+
+    const auto sampleBranch = [&](const int radialDirection)
+    {
+      std::vector<NativeState> branch;
+      branch.push_back(initialState);
+      const double radius0 = std::hypot(initialState[TpcTrackKalmanFitter::X],
+                                        initialState[TpcTrackKalmanFitter::Y]);
+      const auto plus = propagate(initialState, 0.5);
+      const auto minus = propagate(initialState, -0.5);
+      const double plusAdvance = finiteState(plus)
+          ? radialDirection * (std::hypot(plus[TpcTrackKalmanFitter::X], plus[TpcTrackKalmanFitter::Y]) - radius0)
+          : -std::numeric_limits<double>::infinity();
+      const double minusAdvance = finiteState(minus)
+          ? radialDirection * (std::hypot(minus[TpcTrackKalmanFitter::X], minus[TpcTrackKalmanFitter::Y]) - radius0)
+          : -std::numeric_limits<double>::infinity();
+      if (!(std::max(plusAdvance, minusAdvance) > 1.e-5))
+      {
+        reportFailure("no_radial_direction", radialDirection > 0 ? maximumRadius : minimumRadius,
+                      initialState);
+        return branch;
+      }
+
+      const double step = plusAdvance >= minusAdvance ? 0.5 : -0.5;
+      NativeState state = initialState;
+      double previousRadius = radius0;
+      for (unsigned int index = 0; index < 2000; ++index)
+      {
+        const double targetRadius = radialDirection > 0 ? maximumRadius : minimumRadius;
+        if ((radialDirection > 0 && previousRadius >= maximumRadius) ||
+            (radialDirection < 0 && previousRadius <= minimumRadius)) break;
+        const auto next = propagate(state, step);
+        if (!finiteState(next))
+        {
+          reportFailure("non_finite_state", targetRadius, state);
+          break;
+        }
+        const double radius = std::hypot(next[TpcTrackKalmanFitter::X],
+                                         next[TpcTrackKalmanFitter::Y]);
+        const double dx = next[TpcTrackKalmanFitter::X] - state[TpcTrackKalmanFitter::X];
+        const double dy = next[TpcTrackKalmanFitter::Y] - state[TpcTrackKalmanFitter::Y];
+        const double dz = next[TpcTrackKalmanFitter::Z] - state[TpcTrackKalmanFitter::Z];
+        if (!std::isfinite(radius) || radialDirection * (radius - previousRadius) < -1.e-4 ||
+            dx * dx + dy * dy + dz * dz < 1.e-12)
+        {
+          --succeeded;
+          ++failed;
+          reportFailure("trajectory_sanity_check", targetRadius, next);
+          break;
+        }
+        branch.push_back(next);
+        state = next;
+        previousRadius = radius;
+      }
+      return branch;
+    };
+
+    auto outward = sampleBranch(+1);
+    auto inward = sampleBranch(-1);
+    std::vector<NativeState> ordered;
+    ordered.reserve(outward.size() + inward.size());
+    for (auto iterator = outward.rbegin(); iterator != outward.rend(); ++iterator)
+    {
+      ordered.push_back(*iterator);
     }
-    if (points.size() < 2) return nullptr;
-    samples += points.size();
-    auto* line = new TPolyLine3D(points.size());
-    for (unsigned int i = 0; i < points.size(); ++i) line->SetPoint(i, points[i].z, points[i].x, points[i].y);
+    for (auto iterator = std::next(inward.begin()); iterator != inward.end(); ++iterator)
+    {
+      ordered.push_back(*iterator);
+    }
+
+    std::vector<NativeState> visibleStates;
+    for (const auto& state : ordered)
+    {
+      if (visible({state[TpcTrackKalmanFitter::X], state[TpcTrackKalmanFitter::Y],
+                   state[TpcTrackKalmanFitter::Z]}, zmin, zmax, xymax))
+      {
+        visibleStates.push_back(state);
+      }
+    }
+    if (visibleStates.size() < 2) return nullptr;
+
+    if (verbosity >= 10)
+    {
+      std::cout << "Full_PolyTrackDisplay native_state parent=" << track.get_parent_tpc_track_id()
+                << " crossing=" << track.get_crossing() << " source=" << stateName
+                << " frame=global_detector"
+                << " x=" << initialState[TpcTrackKalmanFitter::X]
+                << " y=" << initialState[TpcTrackKalmanFitter::Y]
+                << " z=" << initialState[TpcTrackKalmanFitter::Z]
+                << " Phi=" << initialState[TpcTrackKalmanFitter::Phi]
+                << " QOverPt=" << initialState[TpcTrackKalmanFitter::QOverPt]
+                << " TanLambda=" << initialState[TpcTrackKalmanFitter::TanLambda] << std::endl;
+      for (unsigned int index = 0; index < visibleStates.size(); ++index)
+      {
+        const auto& state = visibleStates[index];
+        std::cout << "  sample=" << index
+                  << " radius=" << std::hypot(state[TpcTrackKalmanFitter::X],
+                                               state[TpcTrackKalmanFitter::Y])
+                  << " x=" << state[TpcTrackKalmanFitter::X]
+                  << " y=" << state[TpcTrackKalmanFitter::Y]
+                  << " z=" << state[TpcTrackKalmanFitter::Z]
+                  << " phi=" << state[TpcTrackKalmanFitter::Phi]
+                  << " QOverPt=" << state[TpcTrackKalmanFitter::QOverPt]
+                  << " TanLambda=" << state[TpcTrackKalmanFitter::TanLambda] << std::endl;
+      }
+    }
+
+    samples += visibleStates.size();
+    auto* line = new NamedPolyLine3D(
+        visibleStates.size(),
+        std::format("{}_parent_{}", stateName, track.get_parent_tpc_track_id()));
+    for (unsigned int index = 0; index < visibleStates.size(); ++index)
+    {
+      const auto& state = visibleStates[index];
+      line->SetPoint(index, state[TpcTrackKalmanFitter::Z],
+                     state[TpcTrackKalmanFitter::X], state[TpcTrackKalmanFitter::Y]);
+    }
     line->SetLineColor(color);
-    line->SetLineWidth(3);
+    line->SetLineWidth(stateName == std::string("final_field_trajectory") ? 3 : 2);
+    line->SetLineStyle(stateName == std::string("final_field_trajectory") ? 1 : 2);
     return line;
   }
 }
@@ -186,9 +328,8 @@ bool Full_PolyTrackDisplay::getNodes(PHCompositeNode* topNode)
   if (!m_fullTracks) std::cerr << Name() << " - missing " << m_fullTrackNodeName << std::endl;
   if (!m_tpcClusters) std::cerr << Name() << " - missing " << m_tpcClusterNodeName << std::endl;
   if (!m_trkrClusters || !m_actsGeometry) std::cerr << Name() << " - silicon cluster position input missing" << std::endl;
-  if (!m_field && !m_useStraightLineTracks) std::cerr << Name() << " - magnetic field input missing" << std::endl;
-  return m_fullTracks && m_tpcClusters && m_trkrClusters && m_actsGeometry &&
-         (m_field || m_useStraightLineTracks);
+  if (!m_field) std::cerr << Name() << " - magnetic field input missing" << std::endl;
+  return m_fullTracks && m_tpcClusters && m_trkrClusters && m_actsGeometry && m_field;
 }
 
 int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
@@ -209,14 +350,22 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
   std::vector<TPolyLine3D*> allLines;
   unsigned int selected = 0;
   unsigned int propagationAttempted = 0;
+  unsigned int propagationSucceeded = 0;
   unsigned int propagationFailed = 0;
+  unsigned int reportedFailures = 0;
   unsigned int trajectorySamples = 0;
   bool dumpedTrack = false;
   for (unsigned int i = 0; i < m_fullTracks->size(); ++i)
   {
     const auto* track = m_fullTracks->get_track(i);
-    if (!track || !track->isValid() || track->get_n_mvtx() < m_minMvtxHits ||
-        track->get_n_intt() < m_minInttHits || std::hypot(track->get_px(), track->get_py()) < m_minTrackPt) continue;
+    if (!track || (!track->has_final_native_state() && !track->has_fast_native_state()) ||
+        track->get_n_mvtx() < m_minMvtxHits || track->get_n_intt() < m_minInttHits) continue;
+    const bool useFinalForSelection = track->has_final_native_state();
+    const double selectionQOverPt = useFinalForSelection
+        ? track->get_final_native_state(TpcTrackKalmanFitter::QOverPt)
+        : track->get_fast_native_state(TpcTrackKalmanFitter::QOverPt);
+    if (!(std::abs(selectionQOverPt) > 1.e-12) ||
+        1. / std::abs(selectionQOverPt) < m_minTrackPt) continue;
     std::vector<Point> points;
     for (const auto key : track->get_tpc_cluster_keys())
     {
@@ -275,24 +424,40 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
       allMarkers.push_back(marker(point, color));
       markersByCrossing[crossing].push_back(marker(point, individualColor));
     }
-    const bool straight = m_useStraightLineTracks || std::abs(track->get_charge() * m_magneticFieldTesla) < 1.e-12;
     const unsigned int attemptsBefore = propagationAttempted;
+    const unsigned int successesBefore = propagationSucceeded;
     const unsigned int failuresBefore = propagationFailed;
     const unsigned int samplesBefore = trajectorySamples;
-    if (m_drawFittedTrajectory)
+    const auto drawTrajectory = [&](const NativeState& state, const char* stateName)
     {
-      if (auto* line = fittedTrajectory(*track, points, m_field, straight, m_magneticFieldTesla,
-                                        m_zmin, m_zmax, m_xymax, color,
-                                        propagationAttempted, propagationFailed, trajectorySamples))
+      if (auto* line = fieldTrajectory(*track, state, points, m_field, stateName,
+                                       m_zmin, m_zmax, m_xymax, color, Verbosity(),
+                                       propagationAttempted, propagationSucceeded,
+                                       propagationFailed, reportedFailures, trajectorySamples))
       {
         allLines.push_back(line);
-        auto* individualLine = dynamic_cast<TPolyLine3D*>(line->Clone());
+        auto* individualLine = new NamedPolyLine3D(
+            *static_cast<NamedPolyLine3D*>(line));
         if (individualLine)
         {
           individualLine->SetLineColor(individualColor);
           linesByCrossing[crossing].push_back(individualLine);
         }
       }
+    };
+    if (m_drawFinalFieldTrajectory && track->has_final_native_state())
+    {
+      NativeState state{};
+      for (unsigned int index = 0; index < state.size(); ++index)
+        state[index] = track->get_final_native_state(index);
+      drawTrajectory(state, "final_field_trajectory");
+    }
+    if (m_drawFastFieldTrajectory && track->has_fast_native_state())
+    {
+      NativeState state{};
+      for (unsigned int index = 0; index < state.size(); ++index)
+        state[index] = track->get_fast_native_state(index);
+      drawTrajectory(state, "fast_field_trajectory");
     }
     if (Verbosity() >= 10 && !dumpedTrack)
     {
@@ -308,12 +473,15 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
         maxRadius = std::max(maxRadius, radius);
       }
       std::cout << Name() << " display_track_summary parent=" << track->get_parent_tpc_track_id()
+                << " crossing=" << track->get_crossing()
+                << " state_frame=global_detector"
                 << " tpc_markers=" << nTpc << " intt_markers=" << nIntt
                 << " mvtx_markers=" << nMvtx
-                << " fitted_trajectory_samples=" << (trajectorySamples - samplesBefore)
+                << " field_trajectory_samples=" << (trajectorySamples - samplesBefore)
                 << " min_radius=" << minRadius << " max_radius=" << maxRadius
-                << " propagation_attempted=" << (propagationAttempted - attemptsBefore)
-                << " propagation_failed=" << (propagationFailed - failuresBefore) << std::endl;
+                << " propagation_attempts=" << (propagationAttempted - attemptsBefore)
+                << " propagation_success=" << (propagationSucceeded - successesBefore)
+                << " propagation_failures=" << (propagationFailed - failuresBefore) << std::endl;
       dumpedTrack = true;
     }
     ++selected;
@@ -331,7 +499,11 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
     hist->SetStats(false); hist->SetDirectory(nullptr);
     auto* canvas = new TCanvas(("c3_" + suffix).c_str(), title.c_str(), 1200, 900);
     hist->Draw();
-    for (auto* line : lines) if (line) line->Draw("same");
+    for (auto* line : lines) if (line)
+    {
+      line->Write();
+      line->Draw("same");
+    }
     for (auto* value : markers) if (value) value->Draw("same");
     canvas->Write();
   };
@@ -342,9 +514,10 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
          std::format("event {} FULL_POLYTRACKS crossing {}", m_event, entry.first), entry.second, linesByCrossing[entry.first]);
   }
   std::cout << Name() << " - saved event " << m_event << " selected_tracks=" << selected
-            << " display_propagation_attempted=" << propagationAttempted
-            << " display_propagation_failed=" << propagationFailed
-            << " fitted_trajectory_samples=" << trajectorySamples << std::endl;
+            << " display_propagation_attempts=" << propagationAttempted
+            << " display_propagation_success=" << propagationSucceeded
+            << " display_propagation_failures=" << propagationFailed
+            << " field_trajectory_samples=" << trajectorySamples << std::endl;
   ++m_eventsSaved;
   return Fun4AllReturnCodes::EVENT_OK;
 }
