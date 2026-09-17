@@ -260,7 +260,14 @@ void Tpc_PolyTrackReco::fillTpc_PolyTrack(unsigned int source_assembled_track_id
   }
 
   m_polyTracks->add_track(out);
-  //out->identify();
+  if (Verbosity() > 1)
+  {
+    std::cout << Name() << " source=" << source_assembled_track_id
+              << " polytrack=" << out->get_track_id()
+              << " crossing=" << crossing
+              << " nclus=" << out->get_nclusters()
+              << std::endl;
+  }
 }
 
 int Tpc_PolyTrackReco::process_event(PHCompositeNode* topNode)

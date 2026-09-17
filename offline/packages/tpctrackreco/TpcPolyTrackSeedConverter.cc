@@ -181,27 +181,12 @@ bool TpcPolyTrackSeedConverter::publishSeed(const Tpc_PolyTrack* track) const
 
   if (Verbosity() > 1 && converted_seed)
   {
-    std::cout << Name() << "::publishSeed"
-              << " track_id=" << track->get_track_id()
-              << " source_track=" << track->get_source_assembled_track_id()
-              << " duplicate_group=" << track->get_source_assembled_track_id()
+    std::cout << Name()
+              << " source=" << track->get_source_assembled_track_id()
+              << " polytrack=" << track->get_track_id()
               << " crossing=" << crossing
-              << " side=" << side
-              << " drift_velocity=" << drift_velocity
-              << " helix_radius=" << helix_radius
-              << " poly_seed=(x0=" << track->get_seed_x0()
-              << ", y0=" << track->get_seed_y0()
-              << ", z0=" << track->get_seed_z0()
-              << ", phi=" << track->get_seed_phi()
-              << ", slope=" << track->get_seed_slope()
-              << ", qOverR=" << track->get_seed_q_over_r() << ")"
-              << " converted_seed=(x0=" << converted_seed->get_X0()
-              << ", y0=" << converted_seed->get_Y0()
-              << ", z0=" << converted_seed->get_Z0()
-              << ", phi=" << converted_seed->get_phi()
-              << ", slope=" << converted_seed->get_slope()
-              << ", qOverR=" << converted_seed->get_qOverR() << ")"
-              << " ncluster_keys=" << track->size_cluster_keys()
+              << " nclus=" << track->size_cluster_keys()
+              << " output_tpc_seed_index=" << track->get_source_assembled_track_id()
               << std::endl;
   }
 

@@ -437,7 +437,7 @@ bool TpcPolyClusterTrkrClusterConverter::publishCluster(const Tpc_PolyCluster* c
 
 int TpcPolyClusterTrkrClusterConverter::process_event(PHCompositeNode* topNode)
 {
-  if (!m_polyClusters || !m_polyTracks || !m_outputClusters || !m_crossingDecisions || !m_geometry)
+  if (!m_polyClusters || !m_polyTracks || !m_outputClusters || !m_geometry)
   {
     if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK ||
         createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK ||
