@@ -134,6 +134,7 @@ libtpctrackreco_la_LIBADD = \
   -lintt_io \
   -lmicromegas_io \
   -lSubsysReco \
+  -ltpc \
   -ltpc_io \
   -ltrack_io \
   -ltrackbase_historic_io \
