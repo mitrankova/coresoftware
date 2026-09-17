@@ -962,23 +962,22 @@ int Tpc_PolyClusterizer::process_event(PHCompositeNode* topNode)
         if (!crossing_decision) { continue;
 }
         std::vector<short> crossings;
-        if (crossing_decision->get_selected_tier() <= m_maxAcceptedTier)
-        {
-          crossings.push_back(crossing_decision->get_selected_crossing());
-        }
-
         if (m_duplicateCrossingHypotheses)
         {
           crossings.reserve(crossing_decision->get_number_of_candidates());
           for (unsigned int icandidate = 0; icandidate < crossing_decision->get_number_of_candidates(); ++icandidate)
           {
             const TpcCrossingCandidate* candidate = crossing_decision->get_candidate(icandidate);
-            if (!candidate || !candidate->passes_time_window || candidate->confidence_tier > m_maxAcceptedTier) { continue;
+            if (!candidate || !candidate->passes_time_window || !candidate->tpc_valid || candidate->confidence_tier > m_maxAcceptedTier) { continue;
 }
             if (std::find(crossings.begin(), crossings.end(), candidate->crossing) != crossings.end()) { continue;
 }
             crossings.push_back(candidate->crossing);
           }
+        }
+        else if (crossing_decision->get_selected_tier() <= m_maxAcceptedTier)
+        {
+          crossings.push_back(crossing_decision->get_selected_crossing());
         }
 
         for (const short crossing : crossings)

@@ -227,7 +227,7 @@ class TpcCrossingFinder : public SubsysReco
   bool m_requireSiliconVertex {false};
   bool m_resolveAmbiguousWithoutVertex {true};
   bool m_preferTriggeredCrossing {false};
-  bool m_useSiSeedCrossing {true};
+  bool m_useSiSeedCrossing {false};
   short m_triggeredCrossing {0};
   bool use_survey_geometry {false};
   bool m_triggeredMode {false};

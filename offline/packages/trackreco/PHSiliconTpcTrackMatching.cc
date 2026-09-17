@@ -228,12 +228,15 @@ int PHSiliconTpcTrackMatching::process_event(PHCompositeNode * /*unused*/)
 
     if (Verbosity() > 1)
     {
-      std::cout << "  combined seed id " << _svtx_seed_map->size() - 1 << " si id " << si_id << " tpc id " << tpcid
-		<< " sil crossing " << crossing_list[0]
-		<< " tpc crossing " << crossing_list[1]
-		<< " estimate " << geometric_crossing_estimate
-		<< " best crossing " << best_crossing
-		<< std::endl;
+      const TrackSeed* tpc_seed = _track_map->get(tpcid);
+      const unsigned int source_id = tpc_seed ? tpc_seed->get_tpc_seed_index() : std::numeric_limits<unsigned int>::max();
+      std::cout << "tpcSeed=" << tpcid
+                << " source=" << source_id
+                << " hyp=" << crossing_list[1]
+                << " si=" << crossing_list[0]
+                << " geom=" << geometric_crossing_estimate
+                << " best=" << best_crossing
+                << std::endl;
     }
   }
 

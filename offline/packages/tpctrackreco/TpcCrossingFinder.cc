@@ -1087,20 +1087,27 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  const std::set<short> si_seed_crossings = m_useSiSeedCrossing ? get_si_seed_crossings() : std::set<short>();
-  const std::set<short> intt_crossings = (!m_useSiSeedCrossing || Verbosity() > 0) ? get_intt_crossings() : std::set<short>();
-  const std::set<short>& available_crossings = m_useSiSeedCrossing ? si_seed_crossings : intt_crossings;
+  const std::set<short> si_seed_crossings = get_si_seed_crossings();
+  const std::set<short> intt_crossings = get_intt_crossings();
+  std::set<short> available_crossings = intt_crossings;
+  if (m_useSiSeedCrossing)
+  {
+    available_crossings.insert(si_seed_crossings.begin(), si_seed_crossings.end());
+  }
 
   const auto vertices_by_crossing = get_vertices_by_crossing();
   const bool has_vertex_map = m_vertexMap != nullptr;
 
   if (Verbosity() > 0)
   {
-    std::cout << Name() << "::process_event - event " << m_event << " available candidate crossings (source=" << (m_useSiSeedCrossing ? "si_seed" : "intt") << "):";
+    std::cout << Name() << "::process_event - event " << m_event << " available candidate crossings (source=" << (m_useSiSeedCrossing ? "intt+si_seed" : "intt") << "):";
     for (const short crossing : available_crossings) { std::cout << " " << crossing;
 }
     std::cout << " | intt crossings:";
     for (const short crossing : intt_crossings) { std::cout << " " << crossing;
+}
+    std::cout << " | si-seed crossings:";
+    for (const short crossing : si_seed_crossings) { std::cout << " " << crossing;
 }
     std::cout << " | vertices by crossing:";
     for (const auto& item : vertices_by_crossing)
