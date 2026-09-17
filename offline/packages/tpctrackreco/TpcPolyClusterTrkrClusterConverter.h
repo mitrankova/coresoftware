@@ -64,7 +64,7 @@ class TpcPolyClusterTrkrClusterConverter : public SubsysReco
   ActsGeometry* m_geometry {nullptr};
   TpcClusterMover m_clusterMover;
 
-  std::map<unsigned int, const Tpc_PolyTrack*> m_tracksBySourceId;
+  std::map<std::pair<unsigned int, short>, const Tpc_PolyTrack*> m_tracksBySourceAndCrossing;
   std::map<TrkrDefs::cluskey, std::array<double, 3>> m_movedGlobals;
   std::map<TrkrDefs::cluskey, unsigned short> m_seedSubSurfKeys;
   double m_crossingPeriodNs {106.56};
