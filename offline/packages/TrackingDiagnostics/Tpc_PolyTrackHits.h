@@ -59,9 +59,7 @@ class Tpc_PolyTrackHits : public SubsysReco
   unsigned int m_event{0};
   unsigned int m_polyTrackId{0};
   unsigned int m_sourceAssembledTrackId{0};
-  int m_crossingValid{0};
   short m_crossing{0};
-  int m_crossingStatus{0};
   unsigned int m_polyClusterId{0};
   unsigned int m_ntpcClusters{0};
   double m_pt{0.0};
@@ -78,6 +76,8 @@ class Tpc_PolyTrackHits : public SubsysReco
   double m_polyClusterRmsX{0.0};
   double m_polyClusterRmsY{0.0};
   double m_polyClusterRmsZ{0.0};
+  double m_polyClusterRPhiError{0.0};
+  double m_polyClusterZError{0.0};
   double m_x{0.0};
   double m_y{0.0};
   double m_z{0.0};

@@ -62,9 +62,7 @@ int Tpc_PolyTrackHits::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("event", &m_event, "event/i");
   m_tree->Branch("poly_track_id", &m_polyTrackId, "poly_track_id/i");
   m_tree->Branch("source_assembled_track_id", &m_sourceAssembledTrackId, "source_assembled_track_id/i");
-  m_tree->Branch("crossing_valid", &m_crossingValid, "crossing_valid/I");
   m_tree->Branch("crossing", &m_crossing, "crossing/S");
-  m_tree->Branch("crossing_status", &m_crossingStatus, "crossing_status/I");
   m_tree->Branch("poly_cluster_id", &m_polyClusterId, "poly_cluster_id/i");
   m_tree->Branch("ntpc_clusters", &m_ntpcClusters, "ntpc_clusters/i");
   m_tree->Branch("pt", &m_pt, "pt/D");
@@ -81,6 +79,8 @@ int Tpc_PolyTrackHits::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("poly_cluster_rms_x", &m_polyClusterRmsX, "poly_cluster_rms_x/D");
   m_tree->Branch("poly_cluster_rms_y", &m_polyClusterRmsY, "poly_cluster_rms_y/D");
   m_tree->Branch("poly_cluster_rms_z", &m_polyClusterRmsZ, "poly_cluster_rms_z/D");
+  m_tree->Branch("poly_cluster_rphi_error", &m_polyClusterRPhiError, "poly_cluster_rphi_error/D");
+  m_tree->Branch("poly_cluster_z_error", &m_polyClusterZError, "poly_cluster_z_error/D");
   m_tree->Branch("x", &m_x, "x/D");
   m_tree->Branch("y", &m_y, "y/D");
   m_tree->Branch("z", &m_z, "z/D");
@@ -140,9 +140,7 @@ void Tpc_PolyTrackHits::reset_tree_values()
   m_event = m_evt;
   m_polyTrackId = 0;
   m_sourceAssembledTrackId = 0;
-  m_crossingValid = 0;
-  m_crossing = std::numeric_limits<short>::max();
-  m_crossingStatus = static_cast<int>(TpcCrossingStatus::Unknown);
+  m_crossing = 0;
   m_polyClusterId = 0;
   m_ntpcClusters = 0;
   m_pt = std::numeric_limits<double>::quiet_NaN();
@@ -159,6 +157,8 @@ void Tpc_PolyTrackHits::reset_tree_values()
   m_polyClusterRmsX = std::numeric_limits<double>::quiet_NaN();
   m_polyClusterRmsY = std::numeric_limits<double>::quiet_NaN();
   m_polyClusterRmsZ = std::numeric_limits<double>::quiet_NaN();
+  m_polyClusterRPhiError = std::numeric_limits<double>::quiet_NaN();
+  m_polyClusterZError = std::numeric_limits<double>::quiet_NaN();
   m_x = std::numeric_limits<double>::quiet_NaN();
   m_y = std::numeric_limits<double>::quiet_NaN();
   m_z = std::numeric_limits<double>::quiet_NaN();
@@ -221,15 +221,11 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
 
     const unsigned int source_assembled_track_id = poly_track->get_source_assembled_track_id();
     const auto crossing_iter = crossing_by_source_assembled_track_id.find(source_assembled_track_id);
-    const TpcCrossingDecision* crossing_decision =
-      crossing_iter != crossing_by_source_assembled_track_id.end() ? crossing_iter->second : nullptr;
-    const unsigned char crossing_status = crossing_decision ?
-      crossing_decision->get_status() : static_cast<unsigned char>(TpcCrossingStatus::Unknown);
-    const bool crossing_valid = crossing_decision &&
-      (crossing_status == static_cast<unsigned char>(TpcCrossingStatus::SelectedByContainment) ||
-       crossing_status == static_cast<unsigned char>(TpcCrossingStatus::SelectedByVertex));
-    const short crossing = crossing_valid ? crossing_decision->get_selected_crossing() :
-                                            std::numeric_limits<short>::max();
+    if (crossing_iter == crossing_by_source_assembled_track_id.end())
+    {
+      continue;
+    }
+    const short crossing = crossing_iter->second->get_selected_crossing();
 
     const std::vector<const Tpc_PolyCluster*>& track_clusters = cluster_iter->second;
     const unsigned int ntpc_clusters = track_clusters.size();
@@ -276,9 +272,7 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
         m_event = m_evt;
         m_polyTrackId = poly_track->get_track_id();
         m_sourceAssembledTrackId = source_assembled_track_id;
-        m_crossingValid = crossing_valid ? 1 : 0;
         m_crossing = crossing;
-        m_crossingStatus = static_cast<int>(crossing_status);
         m_polyClusterId = cluster->get_cluster_id();
         m_ntpcClusters = ntpc_clusters;
         m_pt = pt;
@@ -295,6 +289,8 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
         m_polyClusterRmsX = cluster->get_rms_x();
         m_polyClusterRmsY = cluster->get_rms_y();
         m_polyClusterRmsZ = cluster->get_rms_z();
+        m_polyClusterRPhiError = std::hypot(cluster->get_rms_x(), cluster->get_rms_y());
+        m_polyClusterZError = std::fabs(cluster->get_rms_z());
         m_x = cluster->get_hit_x(ihit);
         m_y = cluster->get_hit_y(ihit);
         m_z = cluster->get_hit_z(ihit);
