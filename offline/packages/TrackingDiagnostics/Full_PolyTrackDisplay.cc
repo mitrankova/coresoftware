@@ -501,7 +501,10 @@ int Full_PolyTrackDisplay::process_event(PHCompositeNode* topNode)
     hist->Draw();
     for (auto* line : lines) if (line)
     {
-      line->Write();
+      if (!std::string(line->GetName()).starts_with("final_field_trajectory_parent_"))
+      {
+        line->Write();
+      }
       line->Draw("same");
     }
     for (auto* value : markers) if (value) value->Draw("same");
