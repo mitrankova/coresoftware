@@ -29,6 +29,8 @@ class TpcCrossingTrajectoryBuilder : public SubsysReco
   void setLongitudinalJacobianValidationTracks(unsigned int value) { m_longitudinalJacobianValidationTracks = value; }
   void setLongitudinalJacobianEpsilonZ(double value) { m_longitudinalJacobianEpsilonZ = value; }
   void setLongitudinalJacobianEpsilonTanLambda(double value) { m_longitudinalJacobianEpsilonTanLambda = value; }
+  void setMinPt(double value) { m_minPt = value; }
+  void setMinTpcClusters(unsigned int value) { m_minTpcClusters = value; }
  private:
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
@@ -46,7 +48,11 @@ class TpcCrossingTrajectoryBuilder : public SubsysReco
   TpcDriftPolylineLookup* m_lookup{nullptr};
   const PHField* m_field{nullptr};
   std::unique_ptr<FastFieldTrackFitter> m_fitter;
-  std::array<float, 7> m_siliconRadii{{2.5F, 3.5F, 4.5F, 7.2F, 8.0F, 9.0F, 10.0F}};
+  // Beam-frame radii used only to sample the inward TPC trajectory for the
+  // matcher's cheap preselection fit. They are not detector surfaces.
+  std::array<float, 7> m_trajectorySamplingRadii{{2.5F, 3.5F, 4.5F, 7.2F, 8.0F, 9.0F, 10.0F}};
+  double m_minPt{0.1};
+  unsigned int m_minTpcClusters{18};
   double m_validationFraction{0.0};
   bool m_validateLongitudinalJacobian{false};
   unsigned int m_longitudinalJacobianValidationTracks{5};

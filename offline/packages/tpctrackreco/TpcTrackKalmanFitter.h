@@ -9,6 +9,12 @@
 #include <utility>
 #include <vector>
 
+namespace Acts
+{
+  class GeometryContext;
+  class Surface;
+}
+
 class TpcTrackKalmanFitter
 {
  public:
@@ -39,6 +45,12 @@ class TpcTrackKalmanFitter
                                                       double ds_cm,
                                                       const TpcKalmanConfig &config,
                                                       double mass_gev = 0.13957039);
+  static bool propagate_to_surface(const std::array<double, StateDim> &start_state,
+                                   const TpcKalmanConfig &config,
+                                   const Acts::Surface &surface,
+                                   const Acts::GeometryContext &geo_context,
+                                   std::array<double, StateDim> &output_state,
+                                   double *path_length_cm = nullptr);
   static std::array<double, StateDim * StateDim> propagation_jacobian(
       const std::array<double, StateDim> &state,
       double ds_cm,

@@ -4,6 +4,9 @@
 
 #include <phfield/PHField.h>
 
+#include <Acts/Definitions/Units.hpp>
+#include <Acts/Surfaces/Surface.hpp>
+
 #include <CLHEP/Units/SystemOfUnits.h>
 
 #include <Eigen/Dense>
@@ -1126,6 +1129,109 @@ std::array<double, TpcTrackKalmanFitter::StateDim> TpcTrackKalmanFitter::propaga
     return to_array(propagate_uniform_bz(input, ds_cm, config.bfield_t, config, mass_gev));
   }
   return to_array(propagate_rkn4(input, ds_cm, config, mass_gev));
+}
+
+bool TpcTrackKalmanFitter::propagate_to_surface(
+    const std::array<double, StateDim> &start_state,
+    const TpcKalmanConfig &config,
+    const Acts::Surface &surface,
+    const Acts::GeometryContext &geo_context,
+    std::array<double, StateDim> &output_state,
+    double *path_length_cm)
+{
+  constexpr double scan_step_cm = -0.25;
+  constexpr unsigned int max_scan_steps = 400U;
+  constexpr unsigned int max_refinement_steps = 48U;
+  constexpr double plane_tolerance_cm = 1.e-4;
+
+  const auto surface_center_acts = surface.center(geo_context);
+  const auto surface_normal_acts =
+      surface.normal(geo_context, surface_center_acts, Acts::Vector3(1., 1., 1.)).normalized();
+  const TpcTrackVec3 surface_center{
+      surface_center_acts.x() / Acts::UnitConstants::cm,
+      surface_center_acts.y() / Acts::UnitConstants::cm,
+      surface_center_acts.z() / Acts::UnitConstants::cm};
+
+  const auto finite_state = [](const auto &state)
+  {
+    return std::all_of(state.begin(), state.end(), [](const double value) { return std::isfinite(value); });
+  };
+  const auto plane_distance = [&](const auto &state)
+  {
+    return surface_normal_acts.x() * (state[X] - surface_center.x) +
+           surface_normal_acts.y() * (state[Y] - surface_center.y) +
+           surface_normal_acts.z() * (state[Z] - surface_center.z);
+  };
+
+  if (!finite_state(start_state) || !std::isfinite(surface_normal_acts.x()) ||
+      !std::isfinite(surface_normal_acts.y()) || !std::isfinite(surface_normal_acts.z()))
+  {
+    return false;
+  }
+
+  double lower_path = 0.;
+  double lower_distance = plane_distance(start_state);
+  if (!std::isfinite(lower_distance)) return false;
+  if (std::abs(lower_distance) <= plane_tolerance_cm)
+  {
+    output_state = start_state;
+    if (path_length_cm) *path_length_cm = lower_path;
+    return true;
+  }
+
+  double upper_path = lower_path;
+  std::array<double, StateDim> upper_state{};
+  double upper_distance = lower_distance;
+  bool bracketed = false;
+  for (unsigned int step = 1; step <= max_scan_steps; ++step)
+  {
+    upper_path = scan_step_cm * static_cast<double>(step);
+    upper_state = propagate_state(start_state, upper_path, config);
+    if (!finite_state(upper_state)) return false;
+    upper_distance = plane_distance(upper_state);
+    if (!std::isfinite(upper_distance)) return false;
+    if (std::abs(upper_distance) <= plane_tolerance_cm ||
+        std::signbit(lower_distance) != std::signbit(upper_distance))
+    {
+      bracketed = true;
+      break;
+    }
+    lower_path = upper_path;
+    lower_distance = upper_distance;
+  }
+  if (!bracketed) return false;
+
+  for (unsigned int iteration = 0; iteration < max_refinement_steps; ++iteration)
+  {
+    if (std::abs(upper_distance) <= plane_tolerance_cm) break;
+    const double middle_path = 0.5 * (lower_path + upper_path);
+    auto middle_state = propagate_state(start_state, middle_path, config);
+    if (!finite_state(middle_state)) return false;
+    const double middle_distance = plane_distance(middle_state);
+    if (!std::isfinite(middle_distance)) return false;
+    if (std::abs(middle_distance) <= plane_tolerance_cm)
+    {
+      upper_path = middle_path;
+      upper_state = middle_state;
+      upper_distance = middle_distance;
+      break;
+    }
+    if (std::signbit(lower_distance) != std::signbit(middle_distance))
+    {
+      upper_path = middle_path;
+      upper_state = middle_state;
+      upper_distance = middle_distance;
+    }
+    else
+    {
+      lower_path = middle_path;
+      lower_distance = middle_distance;
+    }
+  }
+
+  output_state = upper_state;
+  if (path_length_cm) *path_length_cm = upper_path;
+  return finite_state(output_state) && std::abs(plane_distance(output_state)) <= plane_tolerance_cm;
 }
 
 std::array<double, TpcTrackKalmanFitter::StateDim * TpcTrackKalmanFitter::StateDim>

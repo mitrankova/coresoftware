@@ -5,8 +5,10 @@
 #include "TpcSiliconMatchCandidate.h"
 #include "TpcSiliconMatchCandidateContainer.h"
 #include "Tpc_FittingTools.h"
+#include "TpcTrackKalmanFitter.h"
 
 #include <fun4all/Fun4AllReturnCodes.h>
+#include <phfield/PHFieldUtility.h>
 #include <phool/PHCompositeNode.h>
 #include <phool/PHIODataNode.h>
 #include <phool/PHNodeIterator.h>
@@ -16,6 +18,9 @@
 #include <trackbase/TrkrCluster.h>
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrDefs.h>
+
+#include <Acts/Definitions/Units.hpp>
+#include <Acts/Surfaces/Surface.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -94,6 +99,13 @@ int TpcSiliconCrossingMatcher::InitRun(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::ABORTRUN;
   }
   if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) return Fun4AllReturnCodes::ABORTRUN;
+  m_propagationConfig.magnetic_field = PHFieldUtility::GetFieldMapNode(nullptr, topNode, Verbosity());
+  m_propagationConfig.analytic_uniform_propagation = false;
+  if (!m_propagationConfig.magnetic_field)
+  {
+    std::cerr << Name() << "::InitRun - missing magnetic field" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
   return createNodes(topNode);
 }
 
@@ -136,6 +148,9 @@ std::vector<TpcSiliconCrossingMatcher::SpacePoint> TpcSiliconCrossingMatcher::co
         SpacePoint point;
         point.key = iter->first;
         point.layer = layer;
+        point.global_x = global.x();
+        point.global_y = global.y();
+        point.global_z = global.z();
         point.x = centered.x;
         point.y = centered.y;
         point.z = centered.z;
@@ -496,8 +511,50 @@ double TpcSiliconCrossingMatcher::dynamicDzWindow(const double pt) const
   return 1.138 + 0.3919 * std::exp(0.84 / std::max(pt, 0.25));
 }
 
+bool TpcSiliconCrossingMatcher::matchToSurface(
+    const TpcCrossingTrajectory& trajectory, const SpacePoint& point, SurfaceMatch& match) const
+{
+  auto* cluster = m_clusters->findCluster(point.key);
+  const auto surface = cluster ? m_geometry->maps().getSurface(point.key, cluster) : nullptr;
+  if (!cluster || !surface) return false;
+
+  std::array<double, TpcTrackKalmanFitter::StateDim> startState{};
+  for (unsigned int index = 0; index < TpcTrackKalmanFitter::StateDim; ++index)
+    startState[index] = trajectory.get_state(index);
+  std::array<double, TpcTrackKalmanFitter::StateDim> intersectionState{};
+  const auto& context = m_geometry->geometry().geoContext;
+  if (!TpcTrackKalmanFitter::propagate_to_surface(
+          startState, m_propagationConfig, *surface, context, intersectionState, &match.path_length_cm))
+    return false;
+
+  match.intersection = {intersectionState[TpcTrackKalmanFitter::X],
+                        intersectionState[TpcTrackKalmanFitter::Y],
+                        intersectionState[TpcTrackKalmanFitter::Z]};
+  const auto center = surface->center(context) / Acts::UnitConstants::cm;
+  match.surface_center = {center.x(), center.y(), center.z()};
+
+  const Acts::Vector2 local(cluster->getLocalX() * Acts::UnitConstants::cm,
+                            cluster->getLocalY() * Acts::UnitConstants::cm);
+  const auto tangent = TpcTrackKalmanFitter::state_tangent(intersectionState);
+  const Acts::Vector3 direction(tangent.x, tangent.y, tangent.z);
+  const auto origin = surface->localToGlobal(context, local, direction);
+  const auto along0 = surface->localToGlobal(
+      context, local + Acts::Vector2(Acts::UnitConstants::cm, 0.), direction) - origin;
+  const auto along1 = surface->localToGlobal(
+      context, local + Acts::Vector2(0., Acts::UnitConstants::cm), direction) - origin;
+  if (!(along0.norm() > 0.) || !(along1.norm() > 0.)) return false;
+  const auto axis0 = along0.normalized();
+  const auto axis1 = along1.normalized();
+  const Acts::Vector3 residual((point.global_x - match.intersection[0]) * Acts::UnitConstants::cm,
+                               (point.global_y - match.intersection[1]) * Acts::UnitConstants::cm,
+                               (point.global_z - match.intersection[2]) * Acts::UnitConstants::cm);
+  match.local_residual_0 = residual.dot(axis0) / Acts::UnitConstants::cm;
+  match.local_residual_1 = residual.dot(axis1) / Acts::UnitConstants::cm;
+  return std::isfinite(match.local_residual_0) && std::isfinite(match.local_residual_1);
+}
+
 const TpcSiliconCrossingMatcher::SpacePoint* TpcSiliconCrossingMatcher::findBestMvtxCandidate(
-    const Chain& chain, const std::vector<SpacePoint>& points,
+    const TpcCrossingTrajectory& trajectory, const Chain& chain, const std::vector<SpacePoint>& points,
     const std::set<TrkrDefs::cluskey>& used, const unsigned int layer,
     ChainHit& bestHit, double& bestChi2, Counters& counters) const
 {
@@ -530,8 +587,14 @@ const TpcSiliconCrossingMatcher::SpacePoint* TpcSiliconCrossingMatcher::findBest
     }
     if (!m_associationCalibrationMode &&
         (std::abs(sdphi) > m_phiWindowSigma || std::abs(sdtheta) > m_thetaWindowSigma)) continue;
+
+    SurfaceMatch surfaceMatch;
+    if (!matchToSurface(trajectory, point, surfaceMatch) ||
+        std::abs(surfaceMatch.local_residual_0) > m_mvtxLocal0Window ||
+        std::abs(surfaceMatch.local_residual_1) > m_mvtxLocal1Window) continue;
     ++counters.phiPass[layer];
-    const double chi2 = square(sdphi) + square(sdtheta);
+    const double chi2 = square(surfaceMatch.local_residual_0 / m_mvtxLocal0Window) +
+                        square(surfaceMatch.local_residual_1 / m_mvtxLocal1Window);
     if (chi2 < bestChi2)
     {
       bestChi2 = chi2;
@@ -545,6 +608,8 @@ const TpcSiliconCrossingMatcher::SpacePoint* TpcSiliconCrossingMatcher::findBest
       bestHit.dz = dz;
       bestHit.ddphi = dphi - meanPhi;
       bestHit.chi2 = chi2;
+      bestHit.surface_residual_0 = surfaceMatch.local_residual_0;
+      bestHit.surface_residual_1 = surfaceMatch.local_residual_1;
     }
   }
   return best;
@@ -616,6 +681,10 @@ std::vector<TpcSiliconCrossingMatcher::Chain> TpcSiliconCrossingMatcher::buildCh
       const double tpcSeedTheta = std::atan2(seedPoint.r, tpcZ);
       if (std::abs(initialDphi) > SeedPhiWindow + 0.15 ||
           std::abs(seedTheta - tpcSeedTheta) > SeedThetaPreWindow) continue;
+      SurfaceMatch seedSurfaceMatch;
+      if (!matchToSurface(trajectory, seedPoint, seedSurfaceMatch) ||
+          std::abs(seedSurfaceMatch.local_residual_0) > m_mvtxLocal0Window ||
+          std::abs(seedSurfaceMatch.local_residual_1) > m_mvtxLocal1Window) continue;
       ++counters.phiPass[seedLayer];
       Chain chain;
       chain.pt = tpcSeed.pt;
@@ -625,13 +694,17 @@ std::vector<TpcSiliconCrossingMatcher::Chain> TpcSiliconCrossingMatcher::buildCh
       chain.si_reference = chain.state;
       ChainHit seedHit;
       seedHit.point = seedPoint;
-      seedHit.pred_phi = seedPoint.phi;
-      seedHit.pred_z = seedPoint.z;
-      seedHit.dphi = 0.;
-      seedHit.dtheta = 0.;
-      seedHit.rdphi = 0.;
-      seedHit.dz = 0.;
-      seedHit.chi2 = 0.;
+      seedHit.pred_phi = tpcPhi;
+      seedHit.pred_z = tpcZ;
+      seedHit.dphi = initialDphi;
+      seedHit.dtheta = seedTheta - tpcSeedTheta;
+      seedHit.rdphi = seedPoint.r * initialDphi;
+      seedHit.dz = seedPoint.z - tpcZ;
+      seedHit.surface_residual_0 = seedSurfaceMatch.local_residual_0;
+      seedHit.surface_residual_1 = seedSurfaceMatch.local_residual_1;
+      seedHit.chi2 = square(seedSurfaceMatch.local_residual_0 / m_mvtxLocal0Window) +
+                     square(seedSurfaceMatch.local_residual_1 / m_mvtxLocal1Window);
+      chain.chi2 = seedHit.chi2;
       chain.hits.push_back(seedHit);
       chain.has_previous_residual = true;
       std::set<TrkrDefs::cluskey> used{seedPoint.key};
@@ -640,7 +713,7 @@ std::vector<TpcSiliconCrossingMatcher::Chain> TpcSiliconCrossingMatcher::buildCh
         if (layer >= seedLayer) continue;
         ChainHit hit;
         double chi2 = 0.;
-        if (findBestMvtxCandidate(chain, points, used, layer, hit, chi2, counters))
+        if (findBestMvtxCandidate(trajectory, chain, points, used, layer, hit, chi2, counters))
         {
           chain.hits.push_back(hit);
           chain.chi2 += hit.chi2;
@@ -685,7 +758,7 @@ const TpcSiliconCrossingMatcher::Chain* TpcSiliconCrossingMatcher::selectBestCha
 }
 
 TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClusters(
-    const Chain& mvtxChain, const std::vector<SpacePoint>& points, Counters& counters) const
+    const TpcCrossingTrajectory& trajectory, const Chain& mvtxChain, const std::vector<SpacePoint>& points, Counters& counters) const
 {
   Chain output = mvtxChain;
   const TrajectoryState reference = mvtxChain.state;
@@ -706,10 +779,13 @@ TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClu
       const double dphi = wrapPhi(point.phi - predPhi);
       const double rdphi = point.r * dphi;
       if (std::abs(rdphi) > m_inttRdphiWindow || std::abs(dz) > m_inttDzWindow) continue;
+      SurfaceMatch surfaceMatch;
+      if (!matchToSurface(trajectory, point, surfaceMatch) ||
+          std::abs(surfaceMatch.local_residual_0) > m_inttLocal0Window) continue;
       ++counters.phiPass[layer];
-      if (std::abs(rdphi) < bestScore)
+      if (std::abs(surfaceMatch.local_residual_0) < bestScore)
       {
-        bestScore = std::abs(rdphi);
+        bestScore = std::abs(surfaceMatch.local_residual_0);
         best = &point;
         bestHit.point = point;
         bestHit.pred_phi = predPhi;
@@ -720,10 +796,10 @@ TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClu
         bestHit.ddphi = dphi - dynamicMeanPhi(layer, mvtxChain.previous_dphi, mvtxChain.has_previous_residual);
         const double predTheta = std::atan2(point.r, predZ);
         bestHit.dtheta = pointTheta(point) - predTheta;
-        bestHit.chi2 = square(bestHit.ddphi / dynamicSigmaPhi(output.pt)) +
-                       square((bestHit.dtheta - dynamicMeanTheta(layer, mvtxChain.previous_dtheta,
-                                                                 mvtxChain.has_previous_residual)) /
-                              dynamicSigmaTheta(output.pt, predTheta));
+        bestHit.surface_residual_0 = surfaceMatch.local_residual_0;
+        bestHit.surface_residual_1 = surfaceMatch.local_residual_1;
+        // INTT is used only in its precise local measurement direction.
+        bestHit.chi2 = square(surfaceMatch.local_residual_0 / m_inttLocal0Window);
       }
     }
     if (best) output.hits.push_back(bestHit);
@@ -738,6 +814,7 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
   const auto siliconPoints = collectSiliconClusters();
   Counters counters;
   unsigned int rejectedPrinted = 0;
+  unsigned int surfaceQaPrinted = 0;
   for (unsigned int i = 0; i < m_trajectories->size(); ++i)
   {
     const auto* trajectory = m_trajectories->get(i);
@@ -784,7 +861,7 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
       }
       continue;
     }
-    Chain output = attachClosestInttClusters(*best, siliconPoints, counters);
+    Chain output = attachClosestInttClusters(*trajectory, *best, siliconPoints, counters);
     unsigned int nMvtx = 0, nIntt = 0;
     double maxDz = 0., maxDdphi = 0.;
     for (const auto& hit : output.hits)
@@ -798,6 +875,38 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
     if (nMvtx == 2U) ++counters.candidates2Mvtx;
     if (nMvtx >= 3U) ++counters.candidates3Mvtx;
     if (nIntt > 0U) ++counters.candidatesWithIntt;
+    if (Verbosity() >= 10 && surfaceQaPrinted < m_maxSurfaceQaPrints)
+    {
+      const auto coarseReference = makeTpcReferenceTrajectory(*trajectory);
+      for (const auto& hit : output.hits)
+      {
+        if (surfaceQaPrinted >= m_maxSurfaceQaPrints) break;
+        double oldPhi = 0., oldZ = 0., oldX = 0., oldY = 0.;
+        SurfaceMatch surfaceMatch;
+        if (!predictAtRadius(coarseReference, hit.point.r, oldPhi, oldZ, oldX, oldY) ||
+            !matchToSurface(*trajectory, hit.point, surfaceMatch)) continue;
+        const auto& beam = TrkrDefs::getTrkrId(hit.point.key) == TrkrDefs::mvtxId
+                               ? m_beamFrame.mvtxBeamLine() : m_beamFrame.inttBeamLine();
+        const double oldGlobalX = oldX + beam.x0 + beam.dxdz * oldZ;
+        const double oldGlobalY = oldY + beam.y0 + beam.dydz * oldZ;
+        std::cout << Name() << " surface_match parent_track_id=" << trajectory->get_parent_track_id()
+                  << " crossing=" << trajectory->get_crossing()
+                  << " detector=" << (TrkrDefs::getTrkrId(hit.point.key) == TrkrDefs::mvtxId ? "MVTX" : "INTT")
+                  << " layer=" << hit.point.layer << " cluster_key=" << hit.point.key
+                  << " cluster_global_xyz=" << hit.point.global_x << "," << hit.point.global_y << "," << hit.point.global_z
+                  << " cluster_beam_r=" << hit.point.r
+                  << " old_radius_prediction_xyz=" << oldGlobalX << "," << oldGlobalY << "," << oldZ
+                  << " surface_intersection_xyz=" << surfaceMatch.intersection[0] << ","
+                  << surfaceMatch.intersection[1] << "," << surfaceMatch.intersection[2]
+                  << " old_rdphi=" << hit.rdphi << " old_dz=" << hit.dz
+                  << " surface_local_residual_0=" << surfaceMatch.local_residual_0
+                  << " surface_local_residual_1=" << surfaceMatch.local_residual_1
+                  << " surface_center_xyz=" << surfaceMatch.surface_center[0] << ","
+                  << surfaceMatch.surface_center[1] << "," << surfaceMatch.surface_center[2]
+                  << std::endl;
+        ++surfaceQaPrinted;
+      }
+    }
     auto* candidate = new TpcSiliconMatchCandidate;
     candidate->set_parent_track_id(trajectory->get_parent_track_id());
     candidate->set_source_assembled_track_id(trajectory->get_source_assembled_track_id());

@@ -2,6 +2,7 @@
 #define TPCTRACKRECO_TPCSILICONCROSSINGMATCHER_H
 
 #include "BeamFrameTransform.h"
+#include "TpcTrackFit.h"
 
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
@@ -51,6 +52,9 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   void setMaxChainDeltaEta(double value) { m_maxChainDeltaEta = value; }
   void setMaxChains(unsigned int value) { m_maxChains = value; }
   void setMaxRejectedTrajectoryPrints(unsigned int value) { m_maxRejectedTrajectoryPrints = value; }
+  void setSurfaceResidualWindows(double mvtxLocal0, double mvtxLocal1, double inttLocal0)
+  { m_mvtxLocal0Window = mvtxLocal0; m_mvtxLocal1Window = mvtxLocal1; m_inttLocal0Window = inttLocal0; }
+  void setMaxSurfaceQaPrints(unsigned int value) { m_maxSurfaceQaPrints = value; }
 
  private:
   struct SpacePoint
@@ -62,6 +66,18 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     double z{0.};
     double r{0.};
     double phi{0.};
+    double global_x{0.};
+    double global_y{0.};
+    double global_z{0.};
+  };
+
+  struct SurfaceMatch
+  {
+    std::array<double, 3> intersection{};
+    std::array<double, 3> surface_center{};
+    double local_residual_0{0.};
+    double local_residual_1{0.};
+    double path_length_cm{0.};
   };
 
   struct TrajectoryState
@@ -100,6 +116,8 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     double dz{0.};
     double ddphi{0.};
     double chi2{0.};
+    double surface_residual_0{0.};
+    double surface_residual_1{0.};
   };
 
   struct Chain
@@ -140,12 +158,13 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   TrajectoryState correctSiliconSeedWithTwoHits(const TrajectoryState&, const ChainHit&, const ChainHit&) const;
   TrajectoryState correctSiliconSeedWithAllHits(const TrajectoryState&, const std::vector<ChainHit>&) const;
   bool predictAtRadius(const TrajectoryState&, double, double&, double&, double&, double&) const;
-  const SpacePoint* findBestMvtxCandidate(const Chain&, const std::vector<SpacePoint>&,
+  bool matchToSurface(const TpcCrossingTrajectory&, const SpacePoint&, SurfaceMatch&) const;
+  const SpacePoint* findBestMvtxCandidate(const TpcCrossingTrajectory&, const Chain&, const std::vector<SpacePoint>&,
                                          const std::set<TrkrDefs::cluskey>&, unsigned int,
                                          ChainHit&, double&, Counters&) const;
   std::vector<Chain> buildChains(const TpcCrossingTrajectory&, const std::vector<SpacePoint>&, Counters&) const;
   const Chain* selectBestChain(const std::vector<Chain>&) const;
-  Chain attachClosestInttClusters(const Chain&, const std::vector<SpacePoint>&, Counters&) const;
+  Chain attachClosestInttClusters(const TpcCrossingTrajectory&, const Chain&, const std::vector<SpacePoint>&, Counters&) const;
   bool computeChainDcaMetrics(Chain&, const TrajectoryState&) const;
   double wrapPhi(double) const;
   double unwrapPhiNear(double, double) const;
@@ -178,6 +197,9 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   double m_missingLayerPenalty{6.0};
   double m_maxChainDcaScore{5.0};
   double m_maxChainDeltaEta{0.2};
+  double m_mvtxLocal0Window{0.15};
+  double m_mvtxLocal1Window{0.5};
+  double m_inttLocal0Window{0.15};
   bool m_useDynamicResiduals{true};
   bool m_associationCalibrationMode{true};
   std::array<double, 7> m_dynamicPhiMeanOffset{};
@@ -191,6 +213,8 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   unsigned int m_minSiliconClusters{0};
   unsigned int m_maxChains{256};
   unsigned int m_maxRejectedTrajectoryPrints{10};
+  unsigned int m_maxSurfaceQaPrints{20};
+  TpcKalmanConfig m_propagationConfig;
   std::vector<unsigned int> m_matchLayers{2, 1, 0};
   std::vector<unsigned int> m_inttMatchLayers{3, 4, 5, 6};
   TpcCrossingTrajectoryContainer* m_trajectories{nullptr};

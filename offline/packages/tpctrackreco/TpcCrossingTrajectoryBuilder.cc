@@ -215,9 +215,9 @@ bool TpcCrossingTrajectoryBuilder::addSiliconStates(TpcCrossingTrajectory& traje
     const std::array<double, FastFieldTrackFitter::StateSize>& candidateState) const
 {
   auto state = candidateState;
-  for (int layer = static_cast<int>(m_siliconRadii.size()) - 1; layer >= 0; --layer)
+  for (int layer = static_cast<int>(m_trajectorySamplingRadii.size()) - 1; layer >= 0; --layer)
   {
-    const double target = m_siliconRadii[layer];
+    const double target = m_trajectorySamplingRadii[layer];
     bool valid = false;
     for (unsigned int step = 0; step < 1600; ++step)
     {
@@ -247,12 +247,48 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
   unsigned int fullValidationBadCovariance = 0, fullValidationDiscontinuous = 0;
   unsigned int nearValidationAttempted = 0, nearValidationValid = 0;
   double referenceFitSeconds = 0.0, responseSeconds = 0.0, crossingSeconds = 0.0;
+  unsigned int inputTracks = 0;
+  unsigned int rejectedFitStatus = 0;
+  unsigned int rejectedMinPt = 0;
+  unsigned int rejectedMinTpcClusters = 0;
+  unsigned int selectedTracks = 0;
   for (unsigned int i = 0; i < m_tracks->size(); ++i)
   {
     const auto* track = m_tracks->get_track(i);
-    if (!track || !track->get_fit_status()) continue;
-    const auto* decision = m_decisions->get_decision(track->get_source_assembled_track_id());
-    if (!decision) continue;
+    ++inputTracks;
+
+    // Require a valid TPC PolyTrack fit.
+    if (!track || !track->get_fit_status())
+    {
+      ++rejectedFitStatus;
+      continue;
+    }
+
+    // Require at least 18 TPC clusters, i.e. ntpc_clusters > 17.
+    const unsigned int nTpcClusters = track->size_cluster_keys();
+    if (nTpcClusters < m_minTpcClusters)
+    {
+      ++rejectedMinTpcClusters;
+      continue;
+    }
+
+    // Cheap TPC PolyTrack pT preselection.
+    // This is intentionally applied before the expensive FastFieldTrackFitter.
+    const double pt = std::hypot(track->get_px(), track->get_py());
+    if (!std::isfinite(pt) || pt <= m_minPt)
+    {
+      ++rejectedMinPt;
+      continue;
+    }
+
+    ++selectedTracks;
+
+    const auto* decision =
+        m_decisions->get_decision(track->get_source_assembled_track_id());
+    if (!decision)
+    {
+      continue;
+    }
     std::vector<const Tpc_PolyCluster*> clusters;
     for (const auto key : track->get_cluster_keys()) { const auto found = byKey.find(key); if (found != byKey.end()) clusters.push_back(found->second); }
     FastFieldTrackFitter::Result referenceFit;
@@ -450,9 +486,9 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
           {
             auto linearLayer = update.state;
             auto fullLayer = candidateFit.nativeState;
-            for (int layer = static_cast<int>(m_siliconRadii.size()) - 1; layer >= 0; --layer)
+            for (int layer = static_cast<int>(m_trajectorySamplingRadii.size()) - 1; layer >= 0; --layer)
             {
-              const double target = m_siliconRadii[layer];
+              const double target = m_trajectorySamplingRadii[layer];
               for (unsigned int step = 0; step < 1600 && std::hypot(linearLayer[0], linearLayer[1]) > target + 0.08; ++step)
                 linearLayer = TpcTrackKalmanFitter::propagate_state(linearLayer, -0.25, referenceFit.propagationConfig);
               for (unsigned int step = 0; step < 1600 && std::hypot(fullLayer[0], fullLayer[1]) > target + 0.08; ++step)
@@ -490,11 +526,24 @@ int TpcCrossingTrajectoryBuilder::process_event(PHCompositeNode*)
   }
   if (Verbosity() > 0)
   {
-    std::cout << Name() << " reference_field_fits=" << referenceFits << " crossing_updates=" << deltaBuilds
-              << " reference_fit_ms=" << (referenceFits ? 1.e3 * referenceFitSeconds / referenceFits : 0.)
-              << " response_build_ms=" << (referenceFits ? 1.e3 * responseSeconds / referenceFits : 0.)
-              << " crossing_update_us=" << (deltaBuilds ? 1.e6 * crossingSeconds / deltaBuilds : 0.)
-              << " seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count() << std::endl;
+    std::cout << Name()
+              << " input_tracks=" << inputTracks
+              << " rejected_fit_status=" << rejectedFitStatus
+              << " rejected_min_pt=" << rejectedMinPt
+              << " rejected_min_tpc_clusters=" << rejectedMinTpcClusters
+              << " selected_tracks=" << selectedTracks
+              << " reference_field_fits=" << referenceFits
+              << " crossing_updates=" << deltaBuilds
+              << " reference_fit_ms="
+              << (referenceFits ? 1.e3 * referenceFitSeconds / referenceFits : 0.)
+              << " response_build_ms="
+              << (referenceFits ? 1.e3 * responseSeconds / referenceFits : 0.)
+              << " crossing_update_us="
+              << (deltaBuilds ? 1.e6 * crossingSeconds / deltaBuilds : 0.)
+              << " seconds="
+              << std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - begin).count()
+              << std::endl;
   }
   return Fun4AllReturnCodes::EVENT_OK;
 }
