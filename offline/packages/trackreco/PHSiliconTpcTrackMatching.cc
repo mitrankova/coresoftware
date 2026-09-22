@@ -189,12 +189,28 @@ int PHSiliconTpcTrackMatching::process_event(PHCompositeNode * /*unused*/)
   std::set<unsigned int> tpc_unmatched_set;
   findEtaPhiMatches(tpc_matched_set, tpc_unmatched_set, tpc_matches);
 
+  std::map<unsigned int, unsigned int> n_eta_phi_matches;
+
+    for (const auto& [tpcid, siid] : tpc_matches)
+    {
+      ++n_eta_phi_matches[tpcid];
+    }
+
   // check z matching for all matches of tpc and si
   // for _pp_mode=false, assume zero crossings for all tracks
   // for _pp_mode=true, correct tpc seed z according to crossing number, do nothing if no crossing set
   // remove matches from tpc_matches if z matching is not satisfied
   std::multimap<unsigned int, unsigned int> bad_map;
   checkZMatches(tpc_matches, bad_map);
+
+  std::map<unsigned int, unsigned int> n_z_matches;
+
+for (const auto& [tpcid, siid] : tpc_matches)
+{
+  ++n_z_matches[tpcid];
+}
+
+std::map<unsigned int, unsigned int> n_valid_best;
 
   // update tpc_matched_set and tpc_unmatched_set
   tpc_matched_set.clear();
@@ -221,6 +237,10 @@ int PHSiliconTpcTrackMatching::process_event(PHCompositeNode * /*unused*/)
     // the intt and tpc crossings are in the seeds already, add the geometric crossing to the full seed
     std::vector<short int> crossing_list = getBestCrossing(tpcid, si_id);
     short int best_crossing = crossing_list[3];        // the fourth entry is the best crossing choice
+    if (best_crossing != std::numeric_limits<short int>::max())
+    {
+      ++n_valid_best[tpcid];
+    }
     short int geometric_crossing_estimate = crossing_list[2];
     svtxseed->set_crossing_estimate(geometric_crossing_estimate);
     svtxseed->set_crossing(best_crossing);
@@ -256,6 +276,31 @@ int PHSiliconTpcTrackMatching::process_event(PHCompositeNode * /*unused*/)
   if (Verbosity() > 0)
   {
     std::cout << "final svtx seed map size " << _svtx_seed_map->size() << std::endl;
+  }
+
+  if (Verbosity() > 1)
+  {
+    for (unsigned int tpcid = 0; tpcid < _track_map->size(); ++tpcid)
+    {
+      const TrackSeed* tpc_seed = _track_map->get(tpcid);
+      if (!tpc_seed)
+      {
+        continue;
+      }
+
+      const unsigned int source = tpc_seed->get_tpc_seed_index();
+
+      std::cout
+          << "DIAG_MATCH"
+          << " source=" << source
+          << " tpcSeed=" << tpcid
+          << " hyp=" << tpc_seed->get_crossing()
+          << " etaPhi=" << n_eta_phi_matches[tpcid]
+          << " zPass=" << n_z_matches[tpcid]
+          << " validBest=" << n_valid_best[tpcid]
+          << " unmatched=" << tpc_unmatched_set.contains(tpcid)
+          << std::endl;
+    }
   }
 
   if (Verbosity() > 1)

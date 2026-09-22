@@ -30,6 +30,7 @@ class PHTrackCleaner : public SubsysReco
   ~PHTrackCleaner() override;
 
   int InitRun(PHCompositeNode *topNode) override;
+  void set_tight_z_match_max(double value) { m_tight_z_match_max = value; }
   int process_event(PHCompositeNode *topNode) override;
   int End(PHCompositeNode *topNode) override;
 
@@ -47,6 +48,9 @@ class PHTrackCleaner : public SubsysReco
 
   double min_ndf = 25;
   float quality_cut = 150.0;
+  // Tight category for the matcher-style corrected TPC-seed to silicon-seed
+  // z residual. This is distinct from the fitted-track vz-silseedz residual.
+  double m_tight_z_match_max{1.0};
   bool _pp_mode = false;
 };
 

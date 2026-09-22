@@ -980,6 +980,24 @@ int Tpc_PolyClusterizer::process_event(PHCompositeNode* topNode)
           crossings.push_back(crossing_decision->get_selected_crossing());
         }
 
+        if (Verbosity() > 1)
+        {
+          std::cout
+              << "DIAG_HYP"
+              << " source=" << assembled->get_track_id()
+              << " duplicate=" << m_duplicateCrossingHypotheses
+              << " selected=" << crossing_decision->get_selected_crossing()
+              << " nHyp=" << crossings.size()
+              << " hyp=";
+
+          for (const short crossing : crossings)
+          {
+            std::cout << crossing << ",";
+          }
+
+          std::cout << std::endl;
+        }
+
         for (const short crossing : crossings)
         {
           std::map<TrkrDefs::hitsetkey, std::vector<Point>> points_by_hitset;

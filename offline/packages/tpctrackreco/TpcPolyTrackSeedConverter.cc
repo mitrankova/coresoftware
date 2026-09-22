@@ -182,11 +182,13 @@ bool TpcPolyTrackSeedConverter::publishSeed(const Tpc_PolyTrack* track) const
   if (Verbosity() > 1 && converted_seed)
   {
     std::cout << Name()
+              << "  DIAG_TPCSEED"
               << " source=" << track->get_source_assembled_track_id()
-              << " polytrack=" << track->get_track_id()
-              << " crossing=" << crossing
+              << " poly=" << track->get_track_id()
+              << " tpcSeed=" << m_trackSeeds->find(converted_seed)
+              << " hyp=" << crossing
+              << " pt=" << std::hypot(track->get_px(), track->get_py())
               << " nclus=" << track->size_cluster_keys()
-              << " output_tpc_seed_index=" << track->get_source_assembled_track_id()
               << std::endl;
   }
 

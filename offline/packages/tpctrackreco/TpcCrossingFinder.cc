@@ -1137,11 +1137,24 @@ int TpcCrossingFinder::process_event(PHCompositeNode* topNode)
 
     TpcCrossingDecisionv1* decision = new TpcCrossingDecisionv1();
     std::vector<TpcCrossingCandidate> candidate_qa_records;
-    auto add_decision_with_candidates = [&candidate_qa_records, decision, this]()
+    auto add_decision_with_candidates = [&candidate_qa_records, decision, assembled, this]()
     {
       for (const TpcCrossingCandidate& candidate : candidate_qa_records) { decision->add_candidate(candidate);
 }
       m_decisions->add_decision(decision);
+      if (Verbosity() > 1)
+      {
+        std::cout
+            << "DIAG_DECISION"
+            << " source=" << assembled->get_track_id()
+            << " status=" << static_cast<int>(decision->get_status())
+            << " selected=" << decision->get_selected_crossing()
+            << " nCandidates=" << candidate_qa_records.size()
+            << " nAllowed=" << decision->get_number_of_allowed_crossings()
+            << " nValid=" << decision->get_number_of_tpc_valid_crossings()
+            << " tier=" << static_cast<int>(decision->get_selected_tier())
+            << std::endl;
+      }
     };
     decision->set_assembled_track_id(assembled->get_track_id());
     decision->set_number_of_available_crossings(static_cast<unsigned short>(std::min<std::size_t>(available_crossings.size(), std::numeric_limits<unsigned short>::max())));
