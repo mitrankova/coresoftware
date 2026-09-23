@@ -25,6 +25,15 @@ namespace
 
 FastFieldTrackFitter::FastFieldTrackFitter(const PHField* field) : m_field(field) {}
 
+TpcKalmanConfig FastFieldTrackFitter::makePropagationConfig() const
+{
+  TpcKalmanConfig config;
+  config.magnetic_field = m_field;
+  config.analytic_uniform_propagation = false;
+  config.point_order = TpcTrackPointOrder::Input;
+  return config;
+}
+
 std::array<double, FastFieldTrackFitter::StateSize> FastFieldTrackFitter::externalState(
     const std::array<double, StateSize>& native)
 {
@@ -73,10 +82,10 @@ bool FastFieldTrackFitter::fitMeasurementsImpl(
   }
   auto points = input;
   TpcTrackHelixFitter::order_points(points, TpcTrackPointOrder::Radius);
-  TpcKalmanConfig config;
-  config.magnetic_field = m_field;
-  config.analytic_uniform_propagation = false;
-  config.point_order = TpcTrackPointOrder::Input;
+  output.measurementDetector.reserve(points.size());
+  for (const auto& point : points)
+    output.measurementDetector.push_back(static_cast<int>(point.detector));
+  const auto config = makePropagationConfig();
   const auto fitBegin = std::chrono::steady_clock::now();
   TpcKalmanResult fit;
   const int charge = track.get_charge() < 0 ? -1 : 1;
@@ -87,6 +96,7 @@ bool FastFieldTrackFitter::fitMeasurementsImpl(
   output.nAccepted = fit.naccepted;
   output.chi2 = fit.chi2;
   output.ndf = fit.ndof;
+  output.measurementChi2 = fit.measurement_chi2;
   if (!fitOk || fit.states_smoothed.empty()) return false;
   output.nativeState = fit.states_smoothed.front();
   output.state = externalState(output.nativeState);

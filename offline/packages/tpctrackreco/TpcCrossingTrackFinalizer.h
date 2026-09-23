@@ -2,6 +2,7 @@
 #define TPCTRACKRECO_TPCCROSSINGTRACKFINALIZER_H
 #include "FastFieldTrackFitter.h"
 #include <fun4all/SubsysReco.h>
+#include <array>
 #include <memory>
 #include <string>
 class Full_PolyTrackContainer;
@@ -29,6 +30,12 @@ class TpcCrossingTrackFinalizer : public SubsysReco
   void setCorrectedClusterNodeName(const std::string& value) { m_correctedClusterNodeName = value; }
   void setMaxFinalFitQaTracks(unsigned int value) { m_maxFinalFitQaTracks = value; }
   void setFinalFitContinuityMaxPull(double value) { m_finalFitContinuityMaxPull = value; }
+  void setMvtxMisalignmentSigma(double local0_cm, double local1_cm)
+  { m_mvtxMisalignmentSigma = {local0_cm, local1_cm}; }
+  void setInttMisalignmentSigma(double local0_cm, double local1_cm)
+  { m_inttMisalignmentSigma = {local0_cm, local1_cm}; }
+  void setFinalFitContinuityIndices(bool usePhi, bool useQOverPt, bool useTanLambda)
+  { m_finalFitContinuityIndices = {usePhi, useQOverPt, useTanLambda}; }
  private:
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
@@ -53,5 +60,8 @@ class TpcCrossingTrackFinalizer : public SubsysReco
   unsigned int m_event{0};
   unsigned int m_maxFinalFitQaTracks{10};
   double m_finalFitContinuityMaxPull{50.};
+  std::array<double, 2> m_mvtxMisalignmentSigma{{0.15, 0.15}};
+  std::array<double, 2> m_inttMisalignmentSigma{{0.15, 0.15}};
+  std::array<bool, 3> m_finalFitContinuityIndices{{true, true, true}};
 };
 #endif

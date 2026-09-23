@@ -30,6 +30,8 @@ class FastFieldTrackFitter
     std::array<double, StateSize * StateSize> covariance{};
     std::vector<MeasurementResponse> measurements;
     std::vector<double> pathS;
+    std::vector<double> measurementChi2;
+    std::vector<int> measurementDetector;
     TpcKalmanConfig propagationConfig;
     double chi2{0.0};
     int ndf{-1};
@@ -57,6 +59,7 @@ class FastFieldTrackFitter
   bool fitMeasurements(const Tpc_PolyTrack&, const std::vector<TpcTrackPoint>&, Result&) const;
   bool fitMeasurements(const Tpc_PolyTrack&, const std::vector<TpcTrackPoint>&,
                        const std::array<double, StateSize>& initialNativeState, Result&) const;
+  TpcKalmanConfig makePropagationConfig() const;
   Update linearUpdate(const Result&, const std::map<TrkrDefs::cluskey, std::array<double, 3>>&) const;
   static std::array<double, StateSize> externalState(const std::array<double, StateSize>& native);
   static std::array<double, StateSize> nativeState(const std::array<double, StateSize>& external);

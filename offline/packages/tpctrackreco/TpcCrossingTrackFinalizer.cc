@@ -13,6 +13,7 @@
 #include "Tpc_PolyClusterContainer.h"
 #include "Tpc_PolyClusterContainerv1.h"
 #include "TpcDriftPolylineLookup.h"
+#include "TpcTrackHelixFitter.h"
 #include "TpcTrackKalmanFitter.h"
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phfield/PHFieldUtility.h>
@@ -64,6 +65,7 @@ namespace
       const NativeCovariance& fastCovariance,
       const FastFieldTrackFitter::Result& finalFit,
       const double maximumContinuityPull,
+      const std::array<bool, 3>& continuityEnabled,
       double& continuityMaxPull)
   {
     continuityMaxPull = std::numeric_limits<double>::quiet_NaN();
@@ -86,10 +88,14 @@ namespace
         TpcTrackKalmanFitter::QOverPt,
         TpcTrackKalmanFitter::TanLambda}};
     constexpr double twoPi = 6.28318530717958647692;
-    for (const unsigned int index : continuityIndices)
+    for (std::size_t continuityIndex = 0; continuityIndex < continuityIndices.size(); ++continuityIndex)
     {
+      if (!continuityEnabled[continuityIndex]) continue;
+      const unsigned int index = continuityIndices[continuityIndex];
       double delta = finalFit.nativeState[index] - fastNative[index];
       if (index == TpcTrackKalmanFitter::Phi) delta = std::remainder(delta, twoPi);
+      // The trajectory covariance describes the reference fast fit. It is used
+      // as the QA reference covariance without attempting to transport it.
       const double variance = fastCovariance[7 * index] + finalFit.covariance[7 * index];
       if (!(variance > 0.) || !std::isfinite(variance))
         return FullPolyTrackFitStatus::FinalFitBadCovarianceFallback;
@@ -98,6 +104,88 @@ namespace
     return continuityMaxPull > maximumContinuityPull
         ? FullPolyTrackFitStatus::FinalFitDiscontinuousFallback
         : FullPolyTrackFitStatus::FinalFitAccepted;
+  }
+
+  bool finiteState(const NativeState& state)
+  {
+    return std::all_of(state.begin(), state.end(), [](const double value)
+    { return std::isfinite(value); });
+  }
+
+  double positionDistance(const NativeState& state, const TpcTrackPoint& target)
+  {
+    return std::hypot(std::hypot(state[TpcTrackKalmanFitter::X] - target.position.x,
+                                 state[TpcTrackKalmanFitter::Y] - target.position.y),
+                      state[TpcTrackKalmanFitter::Z] - target.position.z);
+  }
+
+  bool transportToMeasurement(
+      const NativeState& state, const TpcTrackPoint& target,
+      const TpcKalmanConfig& config, const Acts::Surface* surface,
+      const Acts::GeometryContext& geoContext, NativeState& output,
+      double& pathCm, double& distanceCm)
+  {
+    pathCm = 0.;
+    distanceCm = std::numeric_limits<double>::quiet_NaN();
+    if (target.detector != TpcTrackPoint::Detector::Tpc && surface &&
+        TpcTrackKalmanFitter::propagate_to_surface(
+            state, config, *surface, geoContext, output, &pathCm) && finiteState(output))
+    {
+      distanceCm = positionDistance(output, target);
+      return distanceCm <= 1.;
+    }
+
+    pathCm = 0.;
+
+    constexpr double stepCm = -0.25;
+    constexpr unsigned int maximumSteps = 1600;
+    const double targetRadius = std::hypot(target.position.x, target.position.y);
+    NativeState previous = state;
+    double previousPath = 0.;
+    NativeState current = state;
+    bool bracketed = std::hypot(current[TpcTrackKalmanFitter::X],
+                               current[TpcTrackKalmanFitter::Y]) <= targetRadius;
+    for (unsigned int step = 0; step < maximumSteps && !bracketed; ++step)
+    {
+      previous = current;
+      previousPath = pathCm;
+      current = TpcTrackKalmanFitter::propagate_state(previous, stepCm, config);
+      pathCm += stepCm;
+      if (!finiteState(current)) return false;
+      bracketed = std::hypot(current[TpcTrackKalmanFitter::X],
+                             current[TpcTrackKalmanFitter::Y]) <= targetRadius;
+    }
+    if (!bracketed) return false;
+
+    double lowPath = pathCm;
+    double highPath = previousPath;
+    for (unsigned int iteration = 0; iteration < 16; ++iteration)
+    {
+      const double width = highPath - lowPath;
+      const double leftPath = lowPath + 0.25 * width;
+      const double rightPath = highPath - 0.25 * width;
+      const auto left = TpcTrackKalmanFitter::propagate_state(state, leftPath, config);
+      const auto right = TpcTrackKalmanFitter::propagate_state(state, rightPath, config);
+      if (!finiteState(left) || !finiteState(right)) return false;
+      if (positionDistance(left, target) < positionDistance(right, target))
+        highPath = 0.5 * (lowPath + highPath);
+      else
+        lowPath = 0.5 * (lowPath + highPath);
+    }
+    pathCm = 0.5 * (lowPath + highPath);
+    output = TpcTrackKalmanFitter::propagate_state(state, pathCm, config);
+    if (!finiteState(output)) return false;
+    distanceCm = positionDistance(output, target);
+    return distanceCm <= 1.;
+  }
+
+  double median(std::vector<double> values)
+  {
+    if (values.empty()) return std::numeric_limits<double>::quiet_NaN();
+    const auto middle = values.begin() + values.size() / 2;
+    std::nth_element(values.begin(), middle, values.end());
+    if (values.size() % 2 != 0) return *middle;
+    return 0.5 * (*middle + *std::max_element(values.begin(), middle));
   }
 }
 
@@ -169,7 +257,9 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
   unsigned int combinedFitBadCovariance = 0;
   unsigned int combinedFitDiscontinuous = 0;
   unsigned int combinedFitFastFallback = 0;
+  unsigned int combinedFitTransportFailed = 0;
   unsigned int finalFitQaPrinted = 0;
+  std::vector<double> acceptedChi2Ndf;
   std::map<int, unsigned int> crossingOffsets;
   double finalFitSeconds = 0.0;
   for (unsigned int i = 0; i < m_candidates->size(); ++i)
@@ -269,19 +359,26 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
       const auto along1 = surface->localToGlobal(context, local + Acts::Vector2(0., Acts::UnitConstants::cm), direction) - origin;
       const auto axis0 = along0.normalized();
       const auto axis1 = along1.normalized();
-      const double sigma0 = std::max(1.e-6, static_cast<double>(cluster->getRPhiError()));
-      const double sigma1 = std::max(1.e-6, static_cast<double>(cluster->getZError()));
+      const bool isMvtx = TrkrDefs::getTrkrId(key) == TrkrDefs::mvtxId;
+      const auto& misalignmentSigma = isMvtx
+          ? m_mvtxMisalignmentSigma : m_inttMisalignmentSigma;
+      const double clusterSigma0 = std::max(1.e-6, static_cast<double>(cluster->getRPhiError()));
+      const double clusterSigma1 = std::max(1.e-6, static_cast<double>(cluster->getZError()));
+      const double variance0 = clusterSigma0 * clusterSigma0 +
+                               misalignmentSigma[0] * misalignmentSigma[0];
+      const double variance1 = clusterSigma1 * clusterSigma1 +
+                               misalignmentSigma[1] * misalignmentSigma[1];
       TpcTrackPoint point;
       point.track_id = static_cast<int>(parent->get_track_id());
       point.layer = static_cast<int>(TrkrDefs::getLayer(key));
       point.position = {global.x(), global.y(), global.z()};
       point.momentum = {parent->get_px(), parent->get_py(), parent->get_pz()};
-      point.detector = TrkrDefs::getTrkrId(key) == TrkrDefs::mvtxId ? TpcTrackPoint::Detector::Mvtx : TpcTrackPoint::Detector::Intt;
+      point.detector = isMvtx ? TpcTrackPoint::Detector::Mvtx : TpcTrackPoint::Detector::Intt;
       point.cluster_key = key;
       point.measurement_dimension = 2;
       point.has_measurement_model = true;
       point.measurement_projection = {axis0.x(), axis0.y(), axis0.z(), axis1.x(), axis1.y(), axis1.z(), 0., 0., 0.};
-      point.measurement_covariance = {sigma0 * sigma0, 0., 0., 0., sigma1 * sigma1, 0., 0., 0., 1.};
+      point.measurement_covariance = {variance0, 0., 0., 0., variance1, 0., 0., 0., 1.};
       measurements.push_back(point);
     }
     const NativeState fastNative{{
@@ -297,21 +394,47 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
         fastCovariance[FastFieldTrackFitter::StateSize * row + column] =
             trajectory->get_covariance(row, column);
 
+    NativeState transportedFastNative = fastNative;
+    double transportPathCm = std::numeric_limits<double>::quiet_NaN();
+    double transportDistanceCm = std::numeric_limits<double>::quiet_NaN();
+    bool transportSucceeded = false;
+    if (!measurements.empty())
+    {
+      auto orderedMeasurements = measurements;
+      // Keep this ordering identical to FastFieldTrackFitter::fitMeasurementsImpl.
+      TpcTrackHelixFitter::order_points(orderedMeasurements, TpcTrackPointOrder::Radius);
+      const auto& target = orderedMeasurements.front();
+      TrkrCluster* targetCluster = target.detector == TpcTrackPoint::Detector::Tpc
+          ? nullptr : m_trkrClusters->findCluster(target.cluster_key);
+      const auto targetSurface = targetCluster
+          ? m_geometry->maps().getSurface(target.cluster_key, targetCluster) : nullptr;
+      transportSucceeded = transportToMeasurement(
+          fastNative, target, m_fitter->makePropagationConfig(), targetSurface.get(),
+          m_geometry->geometry().geoContext, transportedFastNative,
+          transportPathCm, transportDistanceCm);
+    }
+
     FastFieldTrackFitter::Result finalFit;
     const bool allMeasurements = fitClusters.size() == parent->size_cluster_keys() &&
                                  measurements.size() == fitClusters.size() + candidate->get_silicon_cluster_keys().size();
     ++combinedFitAttempted;
     bool fitReturned = false;
-    if (allMeasurements)
+    if (allMeasurements && transportSucceeded)
     {
       ++combinedFitCalls;
-      fitReturned = m_fitter->fitMeasurements(*parent, measurements, fastNative, finalFit);
+      fitReturned = m_fitter->fitMeasurements(
+          *parent, measurements, transportedFastNative, finalFit);
       finalFitSeconds += finalFit.fitSeconds;
+    }
+    else if (allMeasurements)
+    {
+      ++combinedFitTransportFailed;
     }
     double continuityMaxPull = std::numeric_limits<double>::quiet_NaN();
     const auto finalFitStatus = validateFinalFit(
-        fitReturned, fastNative, fastCovariance, finalFit,
-        m_finalFitContinuityMaxPull, continuityMaxPull);
+        fitReturned, transportedFastNative, fastCovariance, finalFit,
+        m_finalFitContinuityMaxPull, m_finalFitContinuityIndices,
+        continuityMaxPull);
     const bool finalFitAccepted =
         finalFitStatus == FullPolyTrackFitStatus::FinalFitAccepted;
     switch (finalFitStatus)
@@ -324,6 +447,8 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
     case FullPolyTrackFitStatus::Unknown: ++combinedFitFailed; break;
     }
     if (!finalFitAccepted) ++combinedFitFastFallback;
+    if (finalFitAccepted && finalFit.ndf > 0)
+      acceptedChi2Ndf.push_back(finalFit.chi2 / static_cast<double>(finalFit.ndf));
 
     std::array<double, FastFieldTrackFitter::StateSize> finalMinusFast{};
     finalMinusFast.fill(std::numeric_limits<double>::quiet_NaN());
@@ -332,12 +457,33 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
       for (unsigned int index = 0; index < finalMinusFast.size(); ++index)
       {
         if (!std::isfinite(finalFit.nativeState[index])) continue;
-        finalMinusFast[index] = finalFit.nativeState[index] - fastNative[index];
+        finalMinusFast[index] = finalFit.nativeState[index] - transportedFastNative[index];
       }
       if (std::isfinite(finalMinusFast[TpcTrackKalmanFitter::Phi]))
         finalMinusFast[TpcTrackKalmanFitter::Phi] =
             std::remainder(finalMinusFast[TpcTrackKalmanFitter::Phi],
                            6.28318530717958647692);
+    }
+
+    const double fastFinalPositionDistanceCm = fitReturned && finiteState(finalFit.nativeState)
+        ? std::hypot(std::hypot(
+              finalFit.nativeState[TpcTrackKalmanFitter::X] - transportedFastNative[TpcTrackKalmanFitter::X],
+              finalFit.nativeState[TpcTrackKalmanFitter::Y] - transportedFastNative[TpcTrackKalmanFitter::Y]),
+              finalFit.nativeState[TpcTrackKalmanFitter::Z] - transportedFastNative[TpcTrackKalmanFitter::Z])
+        : std::numeric_limits<double>::quiet_NaN();
+    unsigned int nTpcFit = 0, nMvtxFit = 0, nInttFit = 0;
+    double chi2Tpc = 0., chi2Mvtx = 0., chi2Intt = 0.;
+    const auto numberFitMeasurements = std::min(
+        finalFit.measurementChi2.size(), finalFit.measurementDetector.size());
+    for (std::size_t index = 0; index < numberFitMeasurements; ++index)
+    {
+      const auto detector = static_cast<TpcTrackPoint::Detector>(finalFit.measurementDetector[index]);
+      if (detector == TpcTrackPoint::Detector::Tpc)
+      { ++nTpcFit; chi2Tpc += finalFit.measurementChi2[index]; }
+      else if (detector == TpcTrackPoint::Detector::Mvtx)
+      { ++nMvtxFit; chi2Mvtx += finalFit.measurementChi2[index]; }
+      else if (detector == TpcTrackPoint::Detector::Intt)
+      { ++nInttFit; chi2Intt += finalFit.measurementChi2[index]; }
     }
 
     const bool printFinalFitQa = Verbosity() >= 10 ||
@@ -362,6 +508,15 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
                 << " chi2=" << finalFit.chi2
                 << " ndf=" << finalFit.ndf
                 << " nAccepted=" << finalFit.nAccepted
+                << " n_tpc=" << nTpcFit
+                << " n_mvtx_fit=" << nMvtxFit
+                << " n_intt_fit=" << nInttFit
+                << " chi2_tpc=" << chi2Tpc
+                << " chi2_mvtx=" << chi2Mvtx
+                << " chi2_intt=" << chi2Intt
+                << " transport_path_cm=" << transportPathCm
+                << " transport_distance_cm=" << transportDistanceCm
+                << " fast_final_position_distance_cm=" << fastFinalPositionDistanceCm
                 << " deltaX_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::X]
                 << " deltaY_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::Y]
                 << " deltaZ_final_minus_fast=" << finalMinusFast[TpcTrackKalmanFitter::Z]
@@ -386,13 +541,15 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
     full->set_fit_status(static_cast<int>(finalFitStatus));
     full->set_chi2(finalFitAccepted ? finalFit.chi2 : parent->get_chi2());
     full->set_ndf(finalFitAccepted ? finalFit.ndf : parent->get_ndf());
-    const auto& finalNative = finalFitAccepted ? finalFit.nativeState : fastNative;
+    const auto& fallbackNative = transportSucceeded ? transportedFastNative : fastNative;
+    const auto& finalNative = finalFitAccepted ? finalFit.nativeState : fallbackNative;
     for (unsigned int index = 0; index < finalNative.size(); ++index)
     {
       full->set_final_native_state(index, finalNative[index]);
-      full->set_fast_native_state(index, fastNative[index]);
+      // The fast state is defined at the innermost combined-fit measurement.
+      full->set_fast_native_state(index, fallbackNative[index]);
     }
-    const auto fastExternal = FastFieldTrackFitter::externalState(fastNative);
+    const auto fastExternal = FastFieldTrackFitter::externalState(fallbackNative);
     const auto& state = finalFitAccepted ? finalFit.state : fastExternal;
     full->set_x(state[0]); full->set_y(state[1]); full->set_z(state[2]);
     const double momentum = std::abs(state[5]) > 1.e-12
@@ -429,6 +586,8 @@ int TpcCrossingTrackFinalizer::process_event(PHCompositeNode*)
               << " combined_fit_bad_covariance=" << combinedFitBadCovariance
               << " combined_fit_discontinuous=" << combinedFitDiscontinuous
               << " combined_fit_fast_fallback=" << combinedFitFastFallback
+              << " combined_fit_transport_failed=" << combinedFitTransportFailed
+              << " accepted_median_chi2_ndf=" << median(acceptedChi2Ndf)
               << " corrected_clusters=" << m_correctedClusters->size()
               << " final_fit_ms=" << (combinedFitCalls
                   ? 1.e3 * finalFitSeconds / combinedFitCalls : 0.)
