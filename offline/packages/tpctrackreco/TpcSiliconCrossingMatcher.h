@@ -197,9 +197,10 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   double m_missingLayerPenalty{6.0};
   double m_maxChainDcaScore{5.0};
   double m_maxChainDeltaEta{0.2};
-  double m_mvtxLocal0Window{0.15};
-  double m_mvtxLocal1Window{0.5};
-  double m_inttLocal0Window{0.15};
+  double m_mvtxLocal0Window{2};
+  double m_mvtxLocal1Window{3};
+  double m_inttLocal0Window{2};
+  double m_inttLocal1Window{3};
   bool m_useDynamicResiduals{true};
   bool m_associationCalibrationMode{true};
   std::array<double, 7> m_dynamicPhiMeanOffset{};

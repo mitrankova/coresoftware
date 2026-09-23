@@ -781,7 +781,10 @@ TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClu
       if (std::abs(rdphi) > m_inttRdphiWindow || std::abs(dz) > m_inttDzWindow) continue;
       SurfaceMatch surfaceMatch;
       if (!matchToSurface(trajectory, point, surfaceMatch) ||
-          std::abs(surfaceMatch.local_residual_0) > m_inttLocal0Window) continue;
+            std::abs(surfaceMatch.local_residual_0) > m_inttLocal0Window ||
+            std::abs(surfaceMatch.local_residual_1) > m_inttLocal1Window) continue;
+          //  std::abs(surfaceMatch.local_residual_0) > m_inttLocal0Window) continue;
+          //(!matchToSurface(trajectory, point, surfaceMatch) ||
       ++counters.phiPass[layer];
       if (std::abs(surfaceMatch.local_residual_0) < bestScore)
       {
