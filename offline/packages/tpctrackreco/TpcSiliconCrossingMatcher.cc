@@ -553,13 +553,11 @@ bool TpcSiliconCrossingMatcher::matchToSurface(
   return std::isfinite(match.local_residual_0) && std::isfinite(match.local_residual_1);
 }
 
-const TpcSiliconCrossingMatcher::SpacePoint* TpcSiliconCrossingMatcher::findBestMvtxCandidate(
-    const TpcCrossingTrajectory& trajectory, const Chain& chain, const std::vector<SpacePoint>& points,
-    const std::set<TrkrDefs::cluskey>& used, const unsigned int layer,
-    ChainHit& bestHit, double& bestChi2, Counters& counters) const
+std::vector<TpcSiliconCrossingMatcher::ChainHit> TpcSiliconCrossingMatcher::findMvtxCandidates(
+    const Chain& chain, const std::vector<SpacePoint>& points,
+    const std::set<TrkrDefs::cluskey>& used, const unsigned int layer, Counters& counters) const
 {
-  const SpacePoint* best = nullptr;
-  bestChi2 = std::numeric_limits<double>::max();
+  std::vector<ChainHit> candidates;
   for (const auto& point : points)
   {
     if (point.layer != layer || TrkrDefs::getTrkrId(point.key) != TrkrDefs::mvtxId || used.count(point.key)) continue;
@@ -572,47 +570,24 @@ const TpcSiliconCrossingMatcher::SpacePoint* TpcSiliconCrossingMatcher::findBest
     const double dphi = wrapPhi(point.phi - predPhi);
     const double rdphi = point.r * dphi;
     if (std::abs(rdphi) > m_looseRdphiWindow || std::abs(dz) > m_looseDzWindow) continue;
-    const double predTheta = std::atan2(point.r, predZ);
-    const double dtheta = pointTheta(point) - predTheta;
-    const double meanPhi = dynamicMeanPhi(layer, chain.previous_dphi, chain.has_previous_residual);
-    const double meanTheta = dynamicMeanTheta(layer, chain.previous_dtheta, chain.has_previous_residual);
-    const double sigmaPhi = dynamicSigmaPhi(chain.pt);
-    const double sigmaTheta = dynamicSigmaTheta(chain.pt, predTheta);
-    double sdphi = (dphi - meanPhi) / sigmaPhi;
-    double sdtheta = (dtheta - meanTheta) / sigmaTheta;
-    if (!m_associationCalibrationMode && layer < 2U)
-    {
-      sdphi = (sdphi - m_vertexPhiMean[layer]) / std::max(m_vertexPhiSigma[layer], 1.e-9);
-      sdtheta = (sdtheta - m_vertexThetaMean[layer]) / std::max(m_vertexThetaSigma[layer], 1.e-9);
-    }
-    if (!m_associationCalibrationMode &&
-        (std::abs(sdphi) > m_phiWindowSigma || std::abs(sdtheta) > m_thetaWindowSigma)) continue;
-
-    SurfaceMatch surfaceMatch;
-    if (!matchToSurface(trajectory, point, surfaceMatch) ||
-        std::abs(surfaceMatch.local_residual_0) > m_mvtxLocal0Window ||
-        std::abs(surfaceMatch.local_residual_1) > m_mvtxLocal1Window) continue;
     ++counters.phiPass[layer];
-    const double chi2 = square(surfaceMatch.local_residual_0 / m_mvtxLocal0Window) +
-                        square(surfaceMatch.local_residual_1 / m_mvtxLocal1Window);
-    if (chi2 < bestChi2)
-    {
-      bestChi2 = chi2;
-      best = &point;
-      bestHit.point = point;
-      bestHit.pred_phi = predPhi;
-      bestHit.pred_z = predZ;
-      bestHit.dphi = dphi;
-      bestHit.dtheta = dtheta;
-      bestHit.rdphi = rdphi;
-      bestHit.dz = dz;
-      bestHit.ddphi = dphi - meanPhi;
-      bestHit.chi2 = chi2;
-      bestHit.surface_residual_0 = surfaceMatch.local_residual_0;
-      bestHit.surface_residual_1 = surfaceMatch.local_residual_1;
-    }
+    ChainHit hit;
+    hit.point = point;
+    hit.pred_phi = predPhi;
+    hit.pred_z = predZ;
+    hit.dphi = dphi;
+    hit.rdphi = rdphi;
+    hit.dz = dz;
+    const double predTheta = std::atan2(point.r, predZ);
+    hit.dtheta = pointTheta(point) - predTheta;
+    hit.ddphi = dphi - dynamicMeanPhi(layer, chain.previous_dphi, chain.has_previous_residual);
+    hit.chi2 = square(rdphi / m_looseRdphiWindow) + square(dz / m_looseDzWindow);
+    candidates.push_back(hit);
   }
-  return best;
+  std::stable_sort(candidates.begin(), candidates.end(),
+                   [](const auto& lhs, const auto& rhs) { return lhs.chi2 < rhs.chi2; });
+  if (candidates.size() > m_maxBranchesPerLayer) candidates.resize(m_maxBranchesPerLayer);
+  return candidates;
 }
 
 double TpcSiliconCrossingMatcher::trajectoryPhi0NearBeam(const TrajectoryState& state) const
@@ -655,6 +630,50 @@ bool TpcSiliconCrossingMatcher::computeChainDcaMetrics(Chain& chain, const Traje
   return std::isfinite(chain.dca_score);
 }
 
+bool TpcSiliconCrossingMatcher::computeMidpointMatch(
+    Chain& chain, const TpcCrossingTrajectory& trajectory) const
+{
+  chain.r_tpc_inner = std::numeric_limits<double>::max();
+  for (unsigned int i = 0; i < trajectory.size_layer_states(); ++i)
+  {
+    const auto* layer = trajectory.get_layer_state(i);
+    if (!layer || !layer->valid) continue;
+    const auto centered = m_beamFrame.toBeamFrame(m_beamFrame.tpcBeamLine(), layer->x, layer->y, layer->z);
+    chain.r_tpc_inner = std::min(chain.r_tpc_inner, std::hypot(centered.x, centered.y));
+  }
+  if (!(chain.r_si_outer > 0.) || !std::isfinite(chain.r_tpc_inner)) return false;
+  chain.r_match = 0.5 * (chain.r_si_outer + chain.r_tpc_inner);
+
+  const auto evaluate = [&](const TrajectoryState& state, std::array<double, 4>& values)
+  {
+    double phi = 0., z = 0., x = 0., y = 0.;
+    double phiBefore = 0., zBefore = 0., xBefore = 0., yBefore = 0.;
+    double phiAfter = 0., zAfter = 0., xAfter = 0., yAfter = 0.;
+    constexpr double step = 0.05;
+    if (!predictAtRadius(state, chain.r_match, phi, z, x, y) ||
+        !predictAtRadius(state, chain.r_match - step, phiBefore, zBefore, xBefore, yBefore) ||
+        !predictAtRadius(state, chain.r_match + step, phiAfter, zAfter, xAfter, yAfter)) return false;
+    const double dx = xAfter - xBefore;
+    const double dy = yAfter - yBefore;
+    const double transverse = std::hypot(dx, dy);
+    if (!(transverse > 0.)) return false;
+    values = {phi, z, std::atan2(dy, dx), (zAfter - zBefore) / transverse};
+    return true;
+  };
+
+  if (!evaluate(chain.tpc_reference, chain.midpoint_tpc) ||
+      !evaluate(chain.state, chain.midpoint_si)) return false;
+  chain.midpoint_delta_rphi = chain.r_match * wrapPhi(chain.midpoint_si[0] - chain.midpoint_tpc[0]);
+  chain.midpoint_delta_z = chain.midpoint_si[1] - chain.midpoint_tpc[1];
+  chain.midpoint_delta_phi = wrapPhi(chain.midpoint_si[2] - chain.midpoint_tpc[2]);
+  chain.midpoint_delta_tan_lambda = chain.midpoint_si[3] - chain.midpoint_tpc[3];
+  chain.midpoint_score = square(chain.midpoint_delta_rphi / m_looseRdphiWindow) +
+                         square(chain.midpoint_delta_z / m_inttDzWindow) +
+                         square(chain.midpoint_delta_phi / SeedPhiWindow) +
+                         square(chain.midpoint_delta_tan_lambda / 0.2);
+  return std::isfinite(chain.midpoint_score);
+}
+
 std::vector<TpcSiliconCrossingMatcher::Chain> TpcSiliconCrossingMatcher::buildChains(
     const TpcCrossingTrajectory& trajectory, const std::vector<SpacePoint>& points, Counters& counters) const
 {
@@ -665,81 +684,105 @@ std::vector<TpcSiliconCrossingMatcher::Chain> TpcSiliconCrossingMatcher::buildCh
   tpcSeed.state = makeTpcReferenceTrajectory(trajectory);
   tpcSeed.tpc_reference = tpcSeed.state;
   if (!tpcSeed.state.valid) return {};
-  std::vector<Chain> chains;
-  for (const unsigned int seedLayer : m_matchLayers)
+
+  std::vector<Chain> branches;
+  constexpr unsigned int seedLayer = 2U;
+  for (const auto& seedPoint : points)
   {
-    for (const auto& seedPoint : points)
-    {
-      if (seedPoint.layer != seedLayer || TrkrDefs::getTrkrId(seedPoint.key) != TrkrDefs::mvtxId) continue;
-      ++counters.search[seedLayer];
-      double tpcPhi = 0., tpcZ = 0., tpcX = 0., tpcY = 0.;
-      if (!predictAtRadius(tpcSeed.state, seedPoint.r, tpcPhi, tpcZ, tpcX, tpcY)) continue;
-      if (std::abs(seedPoint.z - tpcZ) > zSearchWindowCm()) continue;
-      ++counters.zPass[seedLayer];
-      const double initialDphi = wrapPhi(seedPoint.phi - tpcPhi);
-      const double seedTheta = pointTheta(seedPoint);
-      const double tpcSeedTheta = std::atan2(seedPoint.r, tpcZ);
-      if (std::abs(initialDphi) > SeedPhiWindow + 0.15 ||
-          std::abs(seedTheta - tpcSeedTheta) > SeedThetaPreWindow) continue;
-      SurfaceMatch seedSurfaceMatch;
-      if (!matchToSurface(trajectory, seedPoint, seedSurfaceMatch) ||
-          std::abs(seedSurfaceMatch.local_residual_0) > m_mvtxLocal0Window ||
-          std::abs(seedSurfaceMatch.local_residual_1) > m_mvtxLocal1Window) continue;
-      ++counters.phiPass[seedLayer];
-      Chain chain;
-      chain.pt = tpcSeed.pt;
-      chain.tpc_reference = tpcSeed.state;
-      chain.state = makeSiliconSeedTrajectory(tpcSeed.state, seedPoint);
-      if (!chain.state.valid) continue;
-      chain.si_reference = chain.state;
-      ChainHit seedHit;
-      seedHit.point = seedPoint;
-      seedHit.pred_phi = tpcPhi;
-      seedHit.pred_z = tpcZ;
-      seedHit.dphi = initialDphi;
-      seedHit.dtheta = seedTheta - tpcSeedTheta;
-      seedHit.rdphi = seedPoint.r * initialDphi;
-      seedHit.dz = seedPoint.z - tpcZ;
-      seedHit.surface_residual_0 = seedSurfaceMatch.local_residual_0;
-      seedHit.surface_residual_1 = seedSurfaceMatch.local_residual_1;
-      seedHit.chi2 = square(seedSurfaceMatch.local_residual_0 / m_mvtxLocal0Window) +
-                     square(seedSurfaceMatch.local_residual_1 / m_mvtxLocal1Window);
-      chain.chi2 = seedHit.chi2;
-      chain.hits.push_back(seedHit);
-      chain.has_previous_residual = true;
-      std::set<TrkrDefs::cluskey> used{seedPoint.key};
-      for (const unsigned int layer : m_matchLayers)
-      {
-        if (layer >= seedLayer) continue;
-        ChainHit hit;
-        double chi2 = 0.;
-        if (findBestMvtxCandidate(trajectory, chain, points, used, layer, hit, chi2, counters))
-        {
-          chain.hits.push_back(hit);
-          chain.chi2 += hit.chi2;
-          chain.previous_dphi = hit.dphi;
-          chain.previous_dtheta = hit.dtheta;
-          chain.has_previous_residual = true;
-          used.insert(hit.point.key);
-          if (chain.hits.size() == 2U)
-          {
-            const auto corrected = correctSiliconSeedWithTwoHits(chain.si_reference, chain.hits[0], chain.hits[1]);
-            if (corrected.valid) { chain.si_reference = corrected; chain.state = corrected; }
-          }
-          else if (chain.hits.size() >= 3U)
-          {
-            const auto refined = correctSiliconSeedWithAllHits(chain.si_reference, chain.hits);
-            if (refined.valid) { chain.si_reference = refined; chain.state = refined; }
-          }
-        }
-        else ++chain.n_missing;
-      }
-      chain.score = chain.chi2 + m_missingLayerPenalty * chain.n_missing;
-      if (computeChainDcaMetrics(chain, tpcSeed.state)) chains.push_back(chain);
-      if (chains.size() >= m_maxChains) return chains;
-    }
+    if (seedPoint.layer != seedLayer || TrkrDefs::getTrkrId(seedPoint.key) != TrkrDefs::mvtxId) continue;
+    ++counters.search[seedLayer];
+    double tpcPhi = 0., tpcZ = 0., tpcX = 0., tpcY = 0.;
+    if (!predictAtRadius(tpcSeed.state, seedPoint.r, tpcPhi, tpcZ, tpcX, tpcY)) continue;
+    if (std::abs(seedPoint.z - tpcZ) > zSearchWindowCm()) continue;
+    ++counters.zPass[seedLayer];
+    const double initialDphi = wrapPhi(seedPoint.phi - tpcPhi);
+    const double seedTheta = pointTheta(seedPoint);
+    const double tpcSeedTheta = std::atan2(seedPoint.r, tpcZ);
+    if (std::abs(initialDphi) > SeedPhiWindow + 0.15 ||
+        std::abs(seedTheta - tpcSeedTheta) > SeedThetaPreWindow) continue;
+    SurfaceMatch seedSurfaceMatch;
+    if (!matchToSurface(trajectory, seedPoint, seedSurfaceMatch) ||
+        std::abs(seedSurfaceMatch.local_residual_0) > m_mvtxLocal0Window ||
+        std::abs(seedSurfaceMatch.local_residual_1) > m_mvtxLocal1Window) continue;
+    ++counters.phiPass[seedLayer];
+    ++counters.l2Seeds;
+
+    Chain chain;
+    chain.pt = tpcSeed.pt;
+    chain.tpc_reference = tpcSeed.state;
+    chain.state = makeSiliconSeedTrajectory(tpcSeed.state, seedPoint);
+    if (!chain.state.valid) continue;
+    chain.si_reference = chain.state;
+    ChainHit seedHit;
+    seedHit.point = seedPoint;
+    seedHit.pred_phi = tpcPhi;
+    seedHit.pred_z = tpcZ;
+    seedHit.dphi = initialDphi;
+    seedHit.dtheta = seedTheta - tpcSeedTheta;
+    seedHit.rdphi = seedPoint.r * initialDphi;
+    seedHit.dz = seedPoint.z - tpcZ;
+    seedHit.surface_residual_0 = seedSurfaceMatch.local_residual_0;
+    seedHit.surface_residual_1 = seedSurfaceMatch.local_residual_1;
+    chain.hits.push_back(seedHit);
+    chain.r_si_outer = seedPoint.r;
+    branches.push_back(chain);
+    if (branches.size() >= m_maxChains) break;
   }
-  return chains;
+
+  for (const unsigned int layer : {1U, 0U})
+  {
+    std::vector<Chain> next;
+    for (const auto& branch : branches)
+    {
+      std::set<TrkrDefs::cluskey> used;
+      for (const auto& hit : branch.hits) used.insert(hit.point.key);
+      const auto candidates = findMvtxCandidates(branch, points, used, layer, counters);
+      if (candidates.empty())
+      {
+        auto missing = branch;
+        ++missing.n_missing;
+        next.push_back(missing);
+        continue;
+      }
+      for (const auto& hit : candidates)
+      {
+        auto extended = branch;
+        extended.hits.push_back(hit);
+        extended.chi2 += hit.chi2;
+        extended.previous_dphi = hit.dphi;
+        extended.previous_dtheta = hit.dtheta;
+        extended.has_previous_residual = true;
+        if (extended.hits.size() == 2U)
+        {
+          const auto corrected = correctSiliconSeedWithTwoHits(extended.si_reference, extended.hits[0], extended.hits[1]);
+          if (corrected.valid) extended.si_reference = extended.state = corrected;
+        }
+        else
+        {
+          std::vector<SpacePoint> siliconHits;
+          for (const auto& chainHit : extended.hits) siliconHits.push_back(chainHit.point);
+          const auto refined = fitTrajectory(siliconHits);
+          if (refined.valid) extended.si_reference = extended.state = refined;
+        }
+        next.push_back(extended);
+      }
+    }
+    std::stable_sort(next.begin(), next.end(), [](const auto& lhs, const auto& rhs)
+    {
+      if (lhs.hits.size() != rhs.hits.size()) return lhs.hits.size() > rhs.hits.size();
+      return lhs.chi2 < rhs.chi2;
+    });
+    if (next.size() > m_maxChains) next.resize(m_maxChains);
+    branches.swap(next);
+  }
+
+  for (auto& chain : branches)
+  {
+    chain.score = chain.chi2 + m_missingLayerPenalty * chain.n_missing;
+    computeChainDcaMetrics(chain, tpcSeed.state);
+    computeMidpointMatch(chain, trajectory);
+  }
+  return branches;
 }
 
 const TpcSiliconCrossingMatcher::Chain* TpcSiliconCrossingMatcher::selectBestChain(
@@ -749,17 +792,17 @@ const TpcSiliconCrossingMatcher::Chain* TpcSiliconCrossingMatcher::selectBestCha
   for (const auto& chain : chains)
   {
     if (chain.hits.size() < m_minSiliconClusters) continue;
-    if (m_applyChainDcaCut &&
-        (!std::isfinite(chain.dca_score) || chain.dca_score >= m_maxChainDcaScore ||
-         !std::isfinite(chain.delta_eta0) || chain.delta_eta0 >= m_maxChainDeltaEta)) continue;
+    if (!std::isfinite(chain.midpoint_score)) continue;
     if (!best || chain.hits.size() > best->hits.size() ||
-        (chain.hits.size() == best->hits.size() && chain.score < best->score)) best = &chain;
+        (chain.hits.size() == best->hits.size() && chain.midpoint_score < best->midpoint_score) ||
+        (chain.hits.size() == best->hits.size() && chain.midpoint_score == best->midpoint_score &&
+         chain.score < best->score)) best = &chain;
   }
   return best;
 }
 
 TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClusters(
-    const TpcCrossingTrajectory& trajectory, const Chain& mvtxChain, const std::vector<SpacePoint>& points, Counters& counters) const
+    const Chain& mvtxChain, const std::vector<SpacePoint>& points, Counters& counters) const
 {
   Chain output = mvtxChain;
   const TrajectoryState reference = mvtxChain.state;
@@ -780,16 +823,11 @@ TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClu
       const double dphi = wrapPhi(point.phi - predPhi);
       const double rdphi = point.r * dphi;
       if (std::abs(rdphi) > m_inttRdphiWindow || std::abs(dz) > m_inttDzWindow) continue;
-      SurfaceMatch surfaceMatch;
-      if (!matchToSurface(trajectory, point, surfaceMatch) ||
-            std::abs(surfaceMatch.local_residual_0) > m_inttLocal0Window ||
-            std::abs(surfaceMatch.local_residual_1) > m_inttLocal1Window) continue;
-          //  std::abs(surfaceMatch.local_residual_0) > m_inttLocal0Window) continue;
-          //(!matchToSurface(trajectory, point, surfaceMatch) ||
       ++counters.phiPass[layer];
-      if (std::abs(surfaceMatch.local_residual_0) < bestScore)
+      const double siliconScore = square(rdphi / m_inttRdphiWindow) + square(dz / m_inttDzWindow);
+      if (siliconScore < bestScore)
       {
-        bestScore = std::abs(surfaceMatch.local_residual_0);
+        bestScore = siliconScore;
         best = &point;
         bestHit.point = point;
         bestHit.pred_phi = predPhi;
@@ -800,10 +838,7 @@ TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClu
         bestHit.ddphi = dphi - dynamicMeanPhi(layer, mvtxChain.previous_dphi, mvtxChain.has_previous_residual);
         const double predTheta = std::atan2(point.r, predZ);
         bestHit.dtheta = pointTheta(point) - predTheta;
-        bestHit.surface_residual_0 = surfaceMatch.local_residual_0;
-        bestHit.surface_residual_1 = surfaceMatch.local_residual_1;
-        // INTT is used only in its precise local measurement direction.
-        bestHit.chi2 = square(surfaceMatch.local_residual_0 / m_inttLocal0Window);
+        bestHit.chi2 = siliconScore;
       }
     }
     if (best)
@@ -830,10 +865,9 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
     if (!trajectory || !trajectory->isValid()) continue;
     ++counters.trajectoriesSeen;
     auto chains = buildChains(*trajectory, siliconPoints, counters);
-    Counters inttScratch;
     for (auto& chain : chains)
     {
-      chain = attachClosestInttClusters(*trajectory, chain, siliconPoints, inttScratch);
+      chain = attachClosestInttClusters(chain, siliconPoints, counters);
     }
     const Chain* best = selectBestChain(chains);
     if (!best)
@@ -875,7 +909,6 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
       }
       continue;
     }
-    (void) attachClosestInttClusters(*trajectory, *best, siliconPoints, counters);
     Chain output = *best;
     unsigned int nMvtx = 0, nIntt = 0;
     double maxDz = 0., maxDdphi = 0.;
@@ -922,13 +955,35 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
         ++surfaceQaPrinted;
       }
     }
+    if (Verbosity() >= 2)
+    {
+      std::cout << Name() << " candidate parent_track_id=" << trajectory->get_parent_track_id()
+                << " crossing=" << trajectory->get_crossing()
+                << " l2_seed=" << (output.hits.empty() ? TrkrDefs::CLUSKEYMAX : output.hits.front().point.key)
+                << " n_mvtx=" << nMvtx << " n_intt=" << nIntt
+                << " si_internal_score=" << output.score
+                << " r_si_outer=" << output.r_si_outer
+                << " r_tpc_inner=" << output.r_tpc_inner
+                << " r_match=" << output.r_match
+                << " tpc_midpoint=" << output.midpoint_tpc[0] << "," << output.midpoint_tpc[1]
+                << "," << output.midpoint_tpc[2] << "," << output.midpoint_tpc[3]
+                << " si_midpoint=" << output.midpoint_si[0] << "," << output.midpoint_si[1]
+                << "," << output.midpoint_si[2] << "," << output.midpoint_si[3]
+                << " delta_rphi=" << output.midpoint_delta_rphi
+                << " delta_z=" << output.midpoint_delta_z
+                << " delta_phi=" << output.midpoint_delta_phi
+                << " delta_tan_lambda=" << output.midpoint_delta_tan_lambda
+                << " midpoint_score=" << output.midpoint_score << std::endl;
+    }
     auto* candidate = new TpcSiliconMatchCandidate;
     candidate->set_parent_track_id(trajectory->get_parent_track_id());
     candidate->set_source_assembled_track_id(trajectory->get_source_assembled_track_id());
     candidate->set_crossing(trajectory->get_crossing());
     candidate->set_n_mvtx(nMvtx);
     candidate->set_n_intt(nIntt);
-    candidate->set_score(output.score);
+    candidate->set_score(output.midpoint_score);
+    candidate->set_si_internal_score(output.score);
+    candidate->set_tpc_si_midpoint_score(output.midpoint_score);
     candidate->set_max_abs_dz(maxDz);
     candidate->set_max_abs_ddphi(maxDdphi);
     for (const auto& hit : output.hits) candidate->add_silicon_cluster_key(hit.point.key);
@@ -954,6 +1009,7 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
     std::cout << " intt_search=" << inttSearch
               << " intt_z_pass=" << inttZPass
               << " intt_ddphi_pass=" << inttPhiPass
+              << " l2_seeds=" << counters.l2Seeds
               << " candidates_1mvtx=" << counters.candidates1Mvtx
               << " candidates_2mvtx=" << counters.candidates2Mvtx
               << " candidates_3mvtx=" << counters.candidates3Mvtx

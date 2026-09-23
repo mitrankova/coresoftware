@@ -52,6 +52,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   void setMaxChainDcaScore(double value) { m_maxChainDcaScore = value; }
   void setMaxChainDeltaEta(double value) { m_maxChainDeltaEta = value; }
   void setMaxChains(unsigned int value) { m_maxChains = value; }
+  void setMaxBranchesPerLayer(unsigned int value) { m_maxBranchesPerLayer = value; }
   void setMaxRejectedTrajectoryPrints(unsigned int value) { m_maxRejectedTrajectoryPrints = value; }
   void setSurfaceResidualWindows(double mvtxLocal0, double mvtxLocal1, double inttLocal0)
   { m_mvtxLocal0Window = mvtxLocal0; m_mvtxLocal1Window = mvtxLocal1; m_inttLocal0Window = inttLocal0; }
@@ -129,6 +130,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     TrajectoryState state;
     double chi2{0.};
     double score{0.};
+    double midpoint_score{std::numeric_limits<double>::max()};
     double dca_score{std::numeric_limits<double>::max()};
     double delta_eta0{std::numeric_limits<double>::max()};
     double previous_dphi{0.};
@@ -136,6 +138,15 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     bool has_previous_residual{false};
     unsigned int n_missing{0};
     double pt{0.};
+    double r_si_outer{0.};
+    double r_tpc_inner{0.};
+    double r_match{0.};
+    double midpoint_delta_rphi{0.};
+    double midpoint_delta_z{0.};
+    double midpoint_delta_phi{0.};
+    double midpoint_delta_tan_lambda{0.};
+    std::array<double, 4> midpoint_tpc{};
+    std::array<double, 4> midpoint_si{};
   };
 
   struct Counters
@@ -144,6 +155,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     std::array<unsigned long long, 7> search{};
     std::array<unsigned long long, 7> zPass{};
     std::array<unsigned long long, 7> phiPass{};
+    unsigned int l2Seeds{0};
     unsigned int candidates1Mvtx{0};
     unsigned int candidates2Mvtx{0};
     unsigned int candidates3Mvtx{0};
@@ -160,13 +172,14 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   TrajectoryState correctSiliconSeedWithAllHits(const TrajectoryState&, const std::vector<ChainHit>&) const;
   bool predictAtRadius(const TrajectoryState&, double, double&, double&, double&, double&) const;
   bool matchToSurface(const TpcCrossingTrajectory&, const SpacePoint&, SurfaceMatch&) const;
-  const SpacePoint* findBestMvtxCandidate(const TpcCrossingTrajectory&, const Chain&, const std::vector<SpacePoint>&,
-                                         const std::set<TrkrDefs::cluskey>&, unsigned int,
-                                         ChainHit&, double&, Counters&) const;
+  std::vector<ChainHit> findMvtxCandidates(const Chain&, const std::vector<SpacePoint>&,
+                                           const std::set<TrkrDefs::cluskey>&, unsigned int,
+                                           Counters&) const;
   std::vector<Chain> buildChains(const TpcCrossingTrajectory&, const std::vector<SpacePoint>&, Counters&) const;
   const Chain* selectBestChain(const std::vector<Chain>&) const;
-  Chain attachClosestInttClusters(const TpcCrossingTrajectory&, const Chain&, const std::vector<SpacePoint>&, Counters&) const;
+  Chain attachClosestInttClusters(const Chain&, const std::vector<SpacePoint>&, Counters&) const;
   bool computeChainDcaMetrics(Chain&, const TrajectoryState&) const;
+  bool computeMidpointMatch(Chain&, const TpcCrossingTrajectory&) const;
   double wrapPhi(double) const;
   double unwrapPhiNear(double, double) const;
   double predictSagittaPhi(double, const TrajectoryState&) const;
@@ -187,15 +200,15 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   BeamFrameTransform m_beamFrame;
   double m_zSearchTimeBins{2.0};
   double m_tpcAdcClockNs{56.881262};
-  double m_looseRdphiWindow{0.25};
-  double m_looseDzWindow{0.7};
+  double m_looseRdphiWindow{0.15};
+  double m_looseDzWindow{0.5};
   double m_inttRdphiWindow{0.25};
   double m_inttDzWindow{1.0};
-  double m_sigmaPhi{0.015};
-  double m_sigmaTheta{0.02};
-  double m_phiWindowSigma{3.0};
-  double m_thetaWindowSigma{3.0};
-  double m_missingLayerPenalty{6.0};
+  double m_sigmaPhi{0.5};
+  double m_sigmaTheta{0.2};
+  double m_phiWindowSigma{0.7};
+  double m_thetaWindowSigma{0.2};
+  double m_missingLayerPenalty{1.0};
   double m_maxChainDcaScore{5.0};
   double m_maxChainDeltaEta{0.2};
   double m_mvtxLocal0Window{2};
@@ -215,6 +228,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   std::array<double, 3> m_vertexThetaSigma{{0.209156, 0.193329, 1.}};
   unsigned int m_minSiliconClusters{0};
   unsigned int m_maxChains{256};
+  unsigned int m_maxBranchesPerLayer{8};
   unsigned int m_maxRejectedTrajectoryPrints{10};
   unsigned int m_maxSurfaceQaPrints{20};
   TpcKalmanConfig m_propagationConfig;

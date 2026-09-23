@@ -22,8 +22,13 @@ class TpcSiliconMatchCandidate : public PHObject
   void set_source_assembled_track_id(unsigned int value) { m_sourceAssembledTrackId = value; }
   short get_crossing() const { return m_crossing; }
   void set_crossing(short value) { m_crossing = value; }
+  // Legacy score is the TPC-Si midpoint score.
   float get_score() const { return m_score; }
   void set_score(float value) { m_score = value; }
+  float get_si_internal_score() const { return m_siInternalScore; }
+  void set_si_internal_score(float value) { m_siInternalScore = value; }
+  float get_tpc_si_midpoint_score() const { return m_tpcSiMidpointScore; }
+  void set_tpc_si_midpoint_score(float value) { m_tpcSiMidpointScore = value; }
   float get_max_abs_dz() const { return m_maxAbsDz; }
   void set_max_abs_dz(float value) { m_maxAbsDz = value; }
   float get_max_abs_ddphi() const { return m_maxAbsDdphi; }
@@ -42,13 +47,15 @@ class TpcSiliconMatchCandidate : public PHObject
   unsigned int m_sourceAssembledTrackId{0};
   short m_crossing{0};
   float m_score{std::numeric_limits<float>::quiet_NaN()};
+  float m_siInternalScore{std::numeric_limits<float>::quiet_NaN()};
+  float m_tpcSiMidpointScore{std::numeric_limits<float>::quiet_NaN()};
   float m_maxAbsDz{std::numeric_limits<float>::quiet_NaN()};
   float m_maxAbsDdphi{std::numeric_limits<float>::quiet_NaN()};
   unsigned int m_nMvtx{0};
   unsigned int m_nIntt{0};
   bool m_selected{false};
   std::vector<TrkrDefs::cluskey> m_siliconKeys;
-  ClassDefOverride(TpcSiliconMatchCandidate, 2)
+  ClassDefOverride(TpcSiliconMatchCandidate, 3)
 };
 
 #endif
