@@ -53,6 +53,14 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   void setMaxChainDeltaEta(double value) { m_maxChainDeltaEta = value; }
   void setMaxChains(unsigned int value) { m_maxChains = value; }
   void setMaxBranchesPerLayer(unsigned int value) { m_maxBranchesPerLayer = value; }
+  void setMidpointCompatibilityLimits(double rdphi, double dz, double phi, double tanLambda)
+  {
+    m_maxMidpointAbsRdphi = rdphi;
+    m_maxMidpointAbsDz = dz;
+    m_maxMidpointAbsPhi = phi;
+    m_maxMidpointAbsTanLambda = tanLambda;
+  }
+  void setMaxMidpointScore(double value) { m_maxMidpointScore = value; }
   void setMaxRejectedTrajectoryPrints(unsigned int value) { m_maxRejectedTrajectoryPrints = value; }
   void setSurfaceResidualWindows(double mvtxLocal0, double mvtxLocal1, double inttLocal0)
   { m_mvtxLocal0Window = mvtxLocal0; m_mvtxLocal1Window = mvtxLocal1; m_inttLocal0Window = inttLocal0; }
@@ -145,6 +153,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     double midpoint_delta_z{0.};
     double midpoint_delta_phi{0.};
     double midpoint_delta_tan_lambda{0.};
+    bool midpoint_compatible{false};
     std::array<double, 4> midpoint_tpc{};
     std::array<double, 4> midpoint_si{};
   };
@@ -180,6 +189,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   Chain attachClosestInttClusters(const Chain&, const std::vector<SpacePoint>&, Counters&) const;
   bool computeChainDcaMetrics(Chain&, const TrajectoryState&) const;
   bool computeMidpointMatch(Chain&, const TpcCrossingTrajectory&) const;
+  bool propagateTpcToRadius(const TpcCrossingTrajectory&, double, std::array<double, 6>&) const;
   double wrapPhi(double) const;
   double unwrapPhiNear(double, double) const;
   double predictSagittaPhi(double, const TrajectoryState&) const;
@@ -229,6 +239,11 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   unsigned int m_minSiliconClusters{0};
   unsigned int m_maxChains{256};
   unsigned int m_maxBranchesPerLayer{8};
+  double m_maxMidpointAbsRdphi{2.0};
+  double m_maxMidpointAbsDz{3.0};
+  double m_maxMidpointAbsPhi{0.2};
+  double m_maxMidpointAbsTanLambda{0.25};
+  double m_maxMidpointScore{16.0};
   unsigned int m_maxRejectedTrajectoryPrints{10};
   unsigned int m_maxSurfaceQaPrints{20};
   TpcKalmanConfig m_propagationConfig;

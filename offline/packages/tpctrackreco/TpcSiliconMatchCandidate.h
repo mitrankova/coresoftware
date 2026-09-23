@@ -37,6 +37,22 @@ class TpcSiliconMatchCandidate : public PHObject
   void set_n_mvtx(unsigned int value) { m_nMvtx = value; }
   unsigned int get_n_intt() const { return m_nIntt; }
   void set_n_intt(unsigned int value) { m_nIntt = value; }
+  bool get_tpc_si_compatible() const { return m_tpcSiCompatible; }
+  void set_tpc_si_compatible(bool value) { m_tpcSiCompatible = value; }
+  float get_r_si_outer() const { return m_rSiOuter; }
+  void set_r_si_outer(float value) { m_rSiOuter = value; }
+  float get_r_tpc_inner() const { return m_rTpcInner; }
+  void set_r_tpc_inner(float value) { m_rTpcInner = value; }
+  float get_r_match() const { return m_rMatch; }
+  void set_r_match(float value) { m_rMatch = value; }
+  float get_midpoint_delta_rphi() const { return m_midpointDeltaRdphi; }
+  void set_midpoint_delta_rphi(float value) { m_midpointDeltaRdphi = value; }
+  float get_midpoint_delta_z() const { return m_midpointDeltaZ; }
+  void set_midpoint_delta_z(float value) { m_midpointDeltaZ = value; }
+  float get_midpoint_delta_phi() const { return m_midpointDeltaPhi; }
+  void set_midpoint_delta_phi(float value) { m_midpointDeltaPhi = value; }
+  float get_midpoint_delta_tan_lambda() const { return m_midpointDeltaTanLambda; }
+  void set_midpoint_delta_tan_lambda(float value) { m_midpointDeltaTanLambda = value; }
   bool get_selected() const { return m_selected; }
   void set_selected(bool value) { m_selected = value; }
   const std::vector<TrkrDefs::cluskey>& get_silicon_cluster_keys() const { return m_siliconKeys; }
@@ -51,11 +67,19 @@ class TpcSiliconMatchCandidate : public PHObject
   float m_tpcSiMidpointScore{std::numeric_limits<float>::quiet_NaN()};
   float m_maxAbsDz{std::numeric_limits<float>::quiet_NaN()};
   float m_maxAbsDdphi{std::numeric_limits<float>::quiet_NaN()};
+  float m_rSiOuter{std::numeric_limits<float>::quiet_NaN()};
+  float m_rTpcInner{std::numeric_limits<float>::quiet_NaN()};
+  float m_rMatch{std::numeric_limits<float>::quiet_NaN()};
+  float m_midpointDeltaRdphi{std::numeric_limits<float>::quiet_NaN()};
+  float m_midpointDeltaZ{std::numeric_limits<float>::quiet_NaN()};
+  float m_midpointDeltaPhi{std::numeric_limits<float>::quiet_NaN()};
+  float m_midpointDeltaTanLambda{std::numeric_limits<float>::quiet_NaN()};
   unsigned int m_nMvtx{0};
   unsigned int m_nIntt{0};
+  bool m_tpcSiCompatible{false};
   bool m_selected{false};
   std::vector<TrkrDefs::cluskey> m_siliconKeys;
-  ClassDefOverride(TpcSiliconMatchCandidate, 3)
+  ClassDefOverride(TpcSiliconMatchCandidate, 4)
 };
 
 #endif
