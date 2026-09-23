@@ -185,10 +185,10 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   std::string m_outputNodeName{"TPC_SILICON_MATCH_CANDIDATES"};
   BeamFrameTransform m_beamFrame;
   double m_zSearchTimeBins{2.0};
-  double m_tpcAdcClockNs{53.326184};
-  double m_looseRdphiWindow{0.15};
-  double m_looseDzWindow{0.5};
-  double m_inttRdphiWindow{0.15};
+  double m_tpcAdcClockNs{56.881262};
+  double m_looseRdphiWindow{0.25};
+  double m_looseDzWindow{0.7};
+  double m_inttRdphiWindow{0.25};
   double m_inttDzWindow{1.0};
   double m_sigmaPhi{0.015};
   double m_sigmaTheta{0.02};

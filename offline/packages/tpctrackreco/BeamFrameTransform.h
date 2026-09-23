@@ -24,10 +24,12 @@ class BeamFrameTransform
   };
 
   BeamFrameTransform()
-    : m_tpcBeamLine{-0.0103, -0.0013, 0.1814, -0.0002}
-    , m_mvtxBeamLine{-0.0407, -0.0015, 0.1645, -0.0001}
-    // Temporary default until an independent INTT calibration is available.
-    , m_inttBeamLine{-0.0407, -0.0015, 0.1645, -0.0001}
+    //: m_tpcBeamLine{-0.0103, -0.0013, 0.1814, -0.0002}
+    //, m_mvtxBeamLine{-0.0407, -0.0015, 0.1645, -0.0001}
+    //, m_inttBeamLine{-0.0407, -0.0015, 0.1645, -0.0001}
+    : m_tpcBeamLine{0,0, 0,0}
+    , m_mvtxBeamLine{0, 0,0, 0}
+    , m_inttBeamLine{0, 0, 0, 0}
   {
   }
 
