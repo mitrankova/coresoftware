@@ -39,11 +39,13 @@ int TpcSiliconCrossingResolver::process_event(PHCompositeNode*)
   }
   std::sort(ordered.begin(), ordered.end(), [](const auto* lhs, const auto* rhs)
   {
-    if (lhs->get_n_mvtx() != rhs->get_n_mvtx()) return lhs->get_n_mvtx() > rhs->get_n_mvtx();
     const auto lhsTotal = lhs->get_n_mvtx() + lhs->get_n_intt();
     const auto rhsTotal = rhs->get_n_mvtx() + rhs->get_n_intt();
-    if (lhsTotal != rhsTotal) return lhsTotal > rhsTotal;
-    if (lhs->get_n_intt() != rhs->get_n_intt()) return lhs->get_n_intt() > rhs->get_n_intt();
+    if (lhsTotal != rhsTotal)
+    {
+      return lhsTotal > rhsTotal;
+    }
+
     return lhs->get_score() < rhs->get_score();
   });
   std::set<unsigned int> usedTracks;

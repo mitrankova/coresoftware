@@ -748,11 +748,12 @@ const TpcSiliconCrossingMatcher::Chain* TpcSiliconCrossingMatcher::selectBestCha
   const Chain* best = nullptr;
   for (const auto& chain : chains)
   {
-    if (chain.hits.size() < m_minSiliconClusters || !std::isfinite(chain.dca_score) ||
-        chain.dca_score >= m_maxChainDcaScore || !std::isfinite(chain.delta_eta0) ||
-        chain.delta_eta0 >= m_maxChainDeltaEta) continue;
+    if (chain.hits.size() < m_minSiliconClusters) continue;
+    if (m_applyChainDcaCut &&
+        (!std::isfinite(chain.dca_score) || chain.dca_score >= m_maxChainDcaScore ||
+         !std::isfinite(chain.delta_eta0) || chain.delta_eta0 >= m_maxChainDeltaEta)) continue;
     if (!best || chain.hits.size() > best->hits.size() ||
-        (chain.hits.size() == best->hits.size() && chain.dca_score < best->dca_score)) best = &chain;
+        (chain.hits.size() == best->hits.size() && chain.score < best->score)) best = &chain;
   }
   return best;
 }
@@ -805,7 +806,12 @@ TpcSiliconCrossingMatcher::Chain TpcSiliconCrossingMatcher::attachClosestInttClu
         bestHit.chi2 = square(surfaceMatch.local_residual_0 / m_inttLocal0Window);
       }
     }
-    if (best) output.hits.push_back(bestHit);
+    if (best)
+    {
+      output.hits.push_back(bestHit);
+      output.chi2 += bestHit.chi2;
+      output.score += bestHit.chi2;
+    }
   }
   return output;
 }
@@ -823,7 +829,12 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
     const auto* trajectory = m_trajectories->get(i);
     if (!trajectory || !trajectory->isValid()) continue;
     ++counters.trajectoriesSeen;
-    const auto chains = buildChains(*trajectory, siliconPoints, counters);
+    auto chains = buildChains(*trajectory, siliconPoints, counters);
+    Counters inttScratch;
+    for (auto& chain : chains)
+    {
+      chain = attachClosestInttClusters(*trajectory, chain, siliconPoints, inttScratch);
+    }
     const Chain* best = selectBestChain(chains);
     if (!best)
     {
@@ -864,7 +875,8 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
       }
       continue;
     }
-    Chain output = attachClosestInttClusters(*trajectory, *best, siliconPoints, counters);
+    (void) attachClosestInttClusters(*trajectory, *best, siliconPoints, counters);
+    Chain output = *best;
     unsigned int nMvtx = 0, nIntt = 0;
     double maxDz = 0., maxDdphi = 0.;
     for (const auto& hit : output.hits)

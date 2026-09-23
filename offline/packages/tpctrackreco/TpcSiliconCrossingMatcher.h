@@ -48,6 +48,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   void setDynamicThetaMean(unsigned int layer, double offset, double slope)
   { if (layer < 7U) { m_dynamicThetaMeanOffset[layer] = offset; m_dynamicThetaMeanSlope[layer] = slope; } }
   void setMinSiliconClusters(unsigned int value) { m_minSiliconClusters = value; }
+  void setApplyChainDcaCut(bool value) { m_applyChainDcaCut = value; }
   void setMaxChainDcaScore(double value) { m_maxChainDcaScore = value; }
   void setMaxChainDeltaEta(double value) { m_maxChainDeltaEta = value; }
   void setMaxChains(unsigned int value) { m_maxChains = value; }
@@ -201,6 +202,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   double m_mvtxLocal1Window{3};
   double m_inttLocal0Window{2};
   double m_inttLocal1Window{3};
+  bool m_applyChainDcaCut{true};
   bool m_useDynamicResiduals{true};
   bool m_associationCalibrationMode{true};
   std::array<double, 7> m_dynamicPhiMeanOffset{};
