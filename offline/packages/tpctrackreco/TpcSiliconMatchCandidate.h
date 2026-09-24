@@ -22,13 +22,16 @@ class TpcSiliconMatchCandidate : public PHObject
   void set_source_assembled_track_id(unsigned int value) { m_sourceAssembledTrackId = value; }
   short get_crossing() const { return m_crossing; }
   void set_crossing(short value) { m_crossing = value; }
-  // Legacy score is the TPC-Si midpoint score.
+  // Legacy score is the combined TPC-Si compatibility score.
   float get_score() const { return m_score; }
   void set_score(float value) { m_score = value; }
   float get_si_internal_score() const { return m_siInternalScore; }
   void set_si_internal_score(float value) { m_siInternalScore = value; }
-  float get_tpc_si_midpoint_score() const { return m_tpcSiMidpointScore; }
-  void set_tpc_si_midpoint_score(float value) { m_tpcSiMidpointScore = value; }
+  float get_tpc_si_match_score() const { return m_tpcSiMatchScore; }
+  void set_tpc_si_match_score(float value) { m_tpcSiMatchScore = value; }
+  // Legacy aliases retained for existing consumers.
+  float get_tpc_si_midpoint_score() const { return get_tpc_si_match_score(); }
+  void set_tpc_si_midpoint_score(float value) { set_tpc_si_match_score(value); }
   float get_max_abs_dz() const { return m_maxAbsDz; }
   void set_max_abs_dz(float value) { m_maxAbsDz = value; }
   float get_max_abs_ddphi() const { return m_maxAbsDdphi; }
@@ -49,10 +52,17 @@ class TpcSiliconMatchCandidate : public PHObject
   void set_midpoint_delta_rphi(float value) { m_midpointDeltaRdphi = value; }
   float get_midpoint_delta_z() const { return m_midpointDeltaZ; }
   void set_midpoint_delta_z(float value) { m_midpointDeltaZ = value; }
-  float get_midpoint_delta_phi() const { return m_midpointDeltaPhi; }
-  void set_midpoint_delta_phi(float value) { m_midpointDeltaPhi = value; }
-  float get_midpoint_delta_tan_lambda() const { return m_midpointDeltaTanLambda; }
-  void set_midpoint_delta_tan_lambda(float value) { m_midpointDeltaTanLambda = value; }
+  float get_r_direction_match() const { return m_rDirectionMatch; }
+  void set_r_direction_match(float value) { m_rDirectionMatch = value; }
+  float get_outer_mvtx_delta_phi() const { return m_outerMvtxDeltaPhi; }
+  void set_outer_mvtx_delta_phi(float value) { m_outerMvtxDeltaPhi = value; }
+  float get_outer_mvtx_delta_tan_lambda() const { return m_outerMvtxDeltaTanLambda; }
+  void set_outer_mvtx_delta_tan_lambda(float value) { m_outerMvtxDeltaTanLambda = value; }
+  // Legacy aliases now refer to the outer-MVTX direction comparison.
+  float get_midpoint_delta_phi() const { return get_outer_mvtx_delta_phi(); }
+  void set_midpoint_delta_phi(float value) { set_outer_mvtx_delta_phi(value); }
+  float get_midpoint_delta_tan_lambda() const { return get_outer_mvtx_delta_tan_lambda(); }
+  void set_midpoint_delta_tan_lambda(float value) { set_outer_mvtx_delta_tan_lambda(value); }
   bool get_selected() const { return m_selected; }
   void set_selected(bool value) { m_selected = value; }
   const std::vector<TrkrDefs::cluskey>& get_silicon_cluster_keys() const { return m_siliconKeys; }
@@ -64,7 +74,7 @@ class TpcSiliconMatchCandidate : public PHObject
   short m_crossing{0};
   float m_score{std::numeric_limits<float>::quiet_NaN()};
   float m_siInternalScore{std::numeric_limits<float>::quiet_NaN()};
-  float m_tpcSiMidpointScore{std::numeric_limits<float>::quiet_NaN()};
+  float m_tpcSiMatchScore{std::numeric_limits<float>::quiet_NaN()};
   float m_maxAbsDz{std::numeric_limits<float>::quiet_NaN()};
   float m_maxAbsDdphi{std::numeric_limits<float>::quiet_NaN()};
   float m_rSiOuter{std::numeric_limits<float>::quiet_NaN()};
@@ -72,14 +82,15 @@ class TpcSiliconMatchCandidate : public PHObject
   float m_rMatch{std::numeric_limits<float>::quiet_NaN()};
   float m_midpointDeltaRdphi{std::numeric_limits<float>::quiet_NaN()};
   float m_midpointDeltaZ{std::numeric_limits<float>::quiet_NaN()};
-  float m_midpointDeltaPhi{std::numeric_limits<float>::quiet_NaN()};
-  float m_midpointDeltaTanLambda{std::numeric_limits<float>::quiet_NaN()};
+  float m_rDirectionMatch{std::numeric_limits<float>::quiet_NaN()};
+  float m_outerMvtxDeltaPhi{std::numeric_limits<float>::quiet_NaN()};
+  float m_outerMvtxDeltaTanLambda{std::numeric_limits<float>::quiet_NaN()};
   unsigned int m_nMvtx{0};
   unsigned int m_nIntt{0};
   bool m_tpcSiCompatible{false};
   bool m_selected{false};
   std::vector<TrkrDefs::cluskey> m_siliconKeys;
-  ClassDefOverride(TpcSiliconMatchCandidate, 4)
+  ClassDefOverride(TpcSiliconMatchCandidate, 5)
 };
 
 #endif

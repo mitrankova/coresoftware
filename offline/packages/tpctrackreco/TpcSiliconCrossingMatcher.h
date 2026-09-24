@@ -53,14 +53,19 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   void setMaxChainDeltaEta(double value) { m_maxChainDeltaEta = value; }
   void setMaxChains(unsigned int value) { m_maxChains = value; }
   void setMaxBranchesPerLayer(unsigned int value) { m_maxBranchesPerLayer = value; }
-  void setMidpointCompatibilityLimits(double rdphi, double dz, double phi, double tanLambda)
+  void setTpcSiCompatibilityLimits(double midpointRdphi, double midpointDz,
+                                   double outerMvtxPhi, double outerMvtxTanLambda)
   {
-    m_maxMidpointAbsRdphi = rdphi;
-    m_maxMidpointAbsDz = dz;
-    m_maxMidpointAbsPhi = phi;
-    m_maxMidpointAbsTanLambda = tanLambda;
+    m_maxPositionAbsRdphi = midpointRdphi;
+    m_maxPositionAbsDz = midpointDz;
+    m_maxOuterMvtxAbsPhi = outerMvtxPhi;
+    m_maxOuterMvtxAbsTanLambda = outerMvtxTanLambda;
   }
-  void setMaxMidpointScore(double value) { m_maxMidpointScore = value; }
+  // Legacy configuration aliases retained for existing macros.
+  void setMidpointCompatibilityLimits(double rdphi, double dz, double phi, double tanLambda)
+  { setTpcSiCompatibilityLimits(rdphi, dz, phi, tanLambda); }
+  void setMaxTpcSiMatchScore(double value) { m_maxTpcSiMatchScore = value; }
+  void setMaxMidpointScore(double value) { setMaxTpcSiMatchScore(value); }
   void setMaxRejectedTrajectoryPrints(unsigned int value) { m_maxRejectedTrajectoryPrints = value; }
   void setSurfaceResidualWindows(double mvtxLocal0, double mvtxLocal1, double inttLocal0)
   { m_mvtxLocal0Window = mvtxLocal0; m_mvtxLocal1Window = mvtxLocal1; m_inttLocal0Window = inttLocal0; }
@@ -138,7 +143,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     TrajectoryState state;
     double chi2{0.};
     double score{0.};
-    double midpoint_score{std::numeric_limits<double>::max()};
+    double tpc_si_match_score{std::numeric_limits<double>::max()};
     double dca_score{std::numeric_limits<double>::max()};
     double delta_eta0{std::numeric_limits<double>::max()};
     double previous_dphi{0.};
@@ -151,9 +156,14 @@ class TpcSiliconCrossingMatcher : public SubsysReco
     double r_match{0.};
     double midpoint_delta_rphi{0.};
     double midpoint_delta_z{0.};
-    double midpoint_delta_phi{0.};
-    double midpoint_delta_tan_lambda{0.};
-    bool midpoint_compatible{false};
+    double r_direction_match{0.};
+    double outer_mvtx_delta_phi{0.};
+    double outer_mvtx_delta_tan_lambda{0.};
+    double tpc_phi_direction_outer{0.};
+    double si_phi_direction_outer{0.};
+    double tpc_tan_lambda_outer{0.};
+    double si_tan_lambda_outer{0.};
+    bool tpc_si_compatible{false};
     std::array<double, 4> midpoint_tpc{};
     std::array<double, 4> midpoint_si{};
   };
@@ -188,7 +198,7 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   const Chain* selectBestChain(const std::vector<Chain>&) const;
   Chain attachClosestInttClusters(const Chain&, const std::vector<SpacePoint>&, Counters&) const;
   bool computeChainDcaMetrics(Chain&, const TrajectoryState&) const;
-  bool computeMidpointMatch(Chain&, const TpcCrossingTrajectory&) const;
+  bool computeTpcSiMatch(Chain&, const TpcCrossingTrajectory&) const;
   bool propagateTpcToRadius(const TpcCrossingTrajectory&, double, std::array<double, 6>&) const;
   double wrapPhi(double) const;
   double unwrapPhiNear(double, double) const;
@@ -239,11 +249,11 @@ class TpcSiliconCrossingMatcher : public SubsysReco
   unsigned int m_minSiliconClusters{0};
   unsigned int m_maxChains{256};
   unsigned int m_maxBranchesPerLayer{8};
-  double m_maxMidpointAbsRdphi{2.0};
-  double m_maxMidpointAbsDz{3.0};
-  double m_maxMidpointAbsPhi{0.2};
-  double m_maxMidpointAbsTanLambda{0.25};
-  double m_maxMidpointScore{16.0};
+  double m_maxPositionAbsRdphi{2.0};
+  double m_maxPositionAbsDz{3.0};
+  double m_maxOuterMvtxAbsPhi{0.2};
+  double m_maxOuterMvtxAbsTanLambda{0.25};
+  double m_maxTpcSiMatchScore{16.0};
   unsigned int m_maxRejectedTrajectoryPrints{10};
   unsigned int m_maxSurfaceQaPrints{20};
   TpcKalmanConfig m_propagationConfig;
