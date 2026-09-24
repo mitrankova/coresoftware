@@ -7,9 +7,9 @@ ClassImp(TpcSiliconMatchCandidate)
 void TpcSiliconMatchCandidate::identify(std::ostream& os) const
 {
   os << "TpcSiliconMatchCandidate parent=" << m_parentTrackId << " crossing=" << m_crossing
-     << " silicon=" << m_siliconKeys.size() << " tpc_si_match_score=" << m_tpcSiMatchScore
+     << " silicon=" << m_siliconKeys.size() << " direction_score=" << m_tpcSiMatchScore
      << " si_internal_score=" << m_siInternalScore
-     << " compatible=" << m_tpcSiCompatible
+     << " usable=" << m_tpcSiCompatible
      << " selected=" << m_selected << std::endl;
 }
 
@@ -31,5 +31,9 @@ void TpcSiliconMatchCandidate::Reset()
 
 int TpcSiliconMatchCandidate::isValid() const
 {
-  return m_tpcSiCompatible && std::isfinite(m_tpcSiMatchScore) && !m_siliconKeys.empty();
+  return m_tpcSiCompatible && std::isfinite(m_tpcSiMatchScore) &&
+         std::isfinite(m_siInternalScore) &&
+         std::isfinite(m_rDirectionMatch) &&
+         std::isfinite(m_outerMvtxDeltaPhi) &&
+         std::isfinite(m_outerMvtxDeltaTanLambda) && !m_siliconKeys.empty();
 }

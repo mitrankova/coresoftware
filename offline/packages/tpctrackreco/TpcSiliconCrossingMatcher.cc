@@ -94,13 +94,12 @@ int TpcSiliconCrossingMatcher::createNodes(PHCompositeNode* topNode)
 int TpcSiliconCrossingMatcher::InitRun(PHCompositeNode* topNode)
 {
   if (!m_beamFrame.validate() || !(m_zSearchTimeBins > 0.) || !(m_tpcAdcClockNs > 0.) ||
-      !(m_maxPositionAbsRdphi > 0.) || !(m_maxPositionAbsDz > 0.) ||
-      !(m_maxOuterMvtxAbsPhi > 0.) || !(m_maxOuterMvtxAbsTanLambda > 0.) ||
-      !(m_maxTpcSiMatchScore > 0.))
+      !(m_directionPhiScale > 0.) || !(m_directionTanLambdaScale > 0.))
   {
-    std::cerr << Name() << "::InitRun - invalid beam frame, TPC time-bin search, or midpoint compatibility configuration" << std::endl;
+    std::cerr << Name() << "::InitRun - invalid beam frame, TPC time-bin search, or direction ranking scales" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
+
   if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) return Fun4AllReturnCodes::ABORTRUN;
   m_propagationConfig.magnetic_field = PHFieldUtility::GetFieldMapNode(nullptr, topNode, Verbosity());
   m_propagationConfig.analytic_uniform_propagation = false;
@@ -712,24 +711,27 @@ bool TpcSiliconCrossingMatcher::computeTpcSiMatch(
   chain.r_match = 0.5 * (chain.r_si_outer + chain.r_tpc_inner);
   chain.r_direction_match = chain.r_si_outer;
 
+  // Midpoint position residuals are best-effort QA only. Failure to calculate
+  // them must not reject an otherwise usable direction-ranked candidate.
   std::array<double, 6> tpcMidpointState{};
-  if (!propagateTpcToRadius(trajectory, chain.r_match, tpcMidpointState)) return false;
-  chain.midpoint_tpc = {
-      std::atan2(tpcMidpointState[TpcTrackKalmanFitter::Y],
-                 tpcMidpointState[TpcTrackKalmanFitter::X]),
-      tpcMidpointState[TpcTrackKalmanFitter::Z],
-      tpcMidpointState[TpcTrackKalmanFitter::Phi],
-      tpcMidpointState[TpcTrackKalmanFitter::TanLambda]};
-
   double siMidpointPhi = 0., siMidpointZ = 0.;
   double siMidpointX = 0., siMidpointY = 0.;
-  if (!predictAtRadius(chain.state, chain.r_match, siMidpointPhi, siMidpointZ,
-                       siMidpointX, siMidpointY)) return false;
-  chain.midpoint_si[0] = siMidpointPhi;
-  chain.midpoint_si[1] = siMidpointZ;
-  chain.midpoint_delta_rphi =
-      chain.r_match * wrapPhi(chain.midpoint_si[0] - chain.midpoint_tpc[0]);
-  chain.midpoint_delta_z = chain.midpoint_si[1] - chain.midpoint_tpc[1];
+  if (propagateTpcToRadius(trajectory, chain.r_match, tpcMidpointState) &&
+      predictAtRadius(chain.state, chain.r_match, siMidpointPhi, siMidpointZ,
+                      siMidpointX, siMidpointY))
+  {
+    chain.midpoint_tpc = {
+        std::atan2(tpcMidpointState[TpcTrackKalmanFitter::Y],
+                   tpcMidpointState[TpcTrackKalmanFitter::X]),
+        tpcMidpointState[TpcTrackKalmanFitter::Z],
+        tpcMidpointState[TpcTrackKalmanFitter::Phi],
+        tpcMidpointState[TpcTrackKalmanFitter::TanLambda]};
+    chain.midpoint_si[0] = siMidpointPhi;
+    chain.midpoint_si[1] = siMidpointZ;
+    chain.midpoint_delta_rphi =
+        chain.r_match * wrapPhi(chain.midpoint_si[0] - chain.midpoint_tpc[0]);
+    chain.midpoint_delta_z = chain.midpoint_si[1] - chain.midpoint_tpc[1];
+  }
 
   std::array<double, 6> tpcOuterState{};
   if (!propagateTpcToRadius(trajectory, chain.r_direction_match, tpcOuterState)) return false;
@@ -754,18 +756,14 @@ bool TpcSiliconCrossingMatcher::computeTpcSiMatch(
   chain.outer_mvtx_delta_tan_lambda =
       chain.si_tan_lambda_outer - chain.tpc_tan_lambda_outer;
 
-  chain.tpc_si_match_score =
-      square(chain.midpoint_delta_rphi / m_maxPositionAbsRdphi) +
-      square(chain.midpoint_delta_z / m_maxPositionAbsDz) +
-      square(chain.outer_mvtx_delta_phi / m_maxOuterMvtxAbsPhi) +
-      square(chain.outer_mvtx_delta_tan_lambda / m_maxOuterMvtxAbsTanLambda);
-  chain.tpc_si_compatible =
-      std::abs(chain.midpoint_delta_rphi) <= m_maxPositionAbsRdphi &&
-      std::abs(chain.midpoint_delta_z) <= m_maxPositionAbsDz &&
-      std::abs(chain.outer_mvtx_delta_phi) <= m_maxOuterMvtxAbsPhi &&
-      std::abs(chain.outer_mvtx_delta_tan_lambda) <= m_maxOuterMvtxAbsTanLambda &&
-      chain.tpc_si_match_score <= m_maxTpcSiMatchScore;
-  return std::isfinite(chain.tpc_si_match_score);
+  chain.direction_score =
+      square(chain.outer_mvtx_delta_phi / m_directionPhiScale) +
+      square(chain.outer_mvtx_delta_tan_lambda / m_directionTanLambdaScale);
+  chain.usable = std::isfinite(chain.r_direction_match) &&
+                 std::isfinite(chain.outer_mvtx_delta_phi) &&
+                 std::isfinite(chain.outer_mvtx_delta_tan_lambda) &&
+                 std::isfinite(chain.direction_score);
+  return chain.usable;
 }
 
 std::vector<TpcSiliconCrossingMatcher::Chain> TpcSiliconCrossingMatcher::buildChains(
@@ -881,18 +879,25 @@ std::vector<TpcSiliconCrossingMatcher::Chain> TpcSiliconCrossingMatcher::buildCh
 const TpcSiliconCrossingMatcher::Chain* TpcSiliconCrossingMatcher::selectBestChain(
     const std::vector<Chain>& chains) const
 {
+  const auto countMvtx = [](const Chain& chain)
+  {
+    return std::count_if(chain.hits.begin(), chain.hits.end(), [](const auto& hit)
+    { return TrkrDefs::getTrkrId(hit.point.key) == TrkrDefs::mvtxId; });
+  };
   const Chain* best = nullptr;
   for (const auto& chain : chains)
   {
     if (chain.hits.size() < m_minSiliconClusters) continue;
-    if (!std::isfinite(chain.tpc_si_match_score)) continue;
+    if (!chain.usable || !std::isfinite(chain.direction_score) || !std::isfinite(chain.score)) continue;
+    const auto nMvtx = countMvtx(chain);
+    const auto bestNMvtx = best ? countMvtx(*best) : 0;
     if (!best ||
-        (chain.tpc_si_compatible && !best->tpc_si_compatible) ||
-        (chain.tpc_si_compatible == best->tpc_si_compatible &&
-         (chain.hits.size() > best->hits.size() ||
-          (chain.hits.size() == best->hits.size() && chain.tpc_si_match_score < best->tpc_si_match_score) ||
-          (chain.hits.size() == best->hits.size() && chain.tpc_si_match_score == best->tpc_si_match_score &&
-           chain.score < best->score)))) best = &chain;
+        chain.hits.size() > best->hits.size() ||
+        (chain.hits.size() == best->hits.size() && chain.direction_score < best->direction_score) ||
+        (chain.hits.size() == best->hits.size() && chain.direction_score == best->direction_score &&
+         nMvtx > bestNMvtx) ||
+        (chain.hits.size() == best->hits.size() && chain.direction_score == best->direction_score &&
+         nMvtx == bestNMvtx && chain.score < best->score)) best = &chain;
   }
   return best;
 }
@@ -976,13 +981,14 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
         std::cout << Name() << " completed_candidate parent_track_id=" << trajectory->get_parent_track_id()
                   << " crossing=" << trajectory->get_crossing()
                   << " n_mvtx=" << chainMvtx << " n_intt=" << chainIntt
+                  << " n_si=" << chainMvtx + chainIntt
                   << " r_si_outer=" << chain.r_si_outer
                   << " r_tpc_inner=" << chain.r_tpc_inner
-                  << " r_midpoint=" << chain.r_match
-                  << " tpc_midpoint_position=" << chain.midpoint_tpc[0] << "," << chain.midpoint_tpc[1]
-                  << " si_midpoint_position=" << chain.midpoint_si[0] << "," << chain.midpoint_si[1]
-                  << " midpoint_delta_rphi=" << chain.midpoint_delta_rphi
-                  << " midpoint_delta_z=" << chain.midpoint_delta_z
+                  << " qa_r_midpoint=" << chain.r_match
+                  << " qa_tpc_midpoint_position=" << chain.midpoint_tpc[0] << "," << chain.midpoint_tpc[1]
+                  << " qa_si_midpoint_position=" << chain.midpoint_si[0] << "," << chain.midpoint_si[1]
+                  << " qa_midpoint_delta_rphi=" << chain.midpoint_delta_rphi
+                  << " qa_midpoint_delta_z=" << chain.midpoint_delta_z
                   << " r_direction_match=" << chain.r_direction_match
                   << " tpc_phi_direction_outer=" << chain.tpc_phi_direction_outer
                   << " si_phi_direction_outer=" << chain.si_phi_direction_outer
@@ -990,15 +996,8 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
                   << " si_tan_lambda_outer=" << chain.si_tan_lambda_outer
                   << " delta_phi_outer=" << chain.outer_mvtx_delta_phi
                   << " delta_tan_lambda_outer=" << chain.outer_mvtx_delta_tan_lambda
-                  << " tpc_si_match_score=" << chain.tpc_si_match_score
-                  << " compatible=" << chain.tpc_si_compatible
-                  << " fail_rdphi=" << (std::abs(chain.midpoint_delta_rphi) > m_maxPositionAbsRdphi)
-                  << " fail_z=" << (std::abs(chain.midpoint_delta_z) > m_maxPositionAbsDz)
-                  << " fail_phi_outer="
-                  << (std::abs(chain.outer_mvtx_delta_phi) > m_maxOuterMvtxAbsPhi)
-                  << " fail_tan_lambda_outer="
-                  << (std::abs(chain.outer_mvtx_delta_tan_lambda) > m_maxOuterMvtxAbsTanLambda)
-                  << " fail_score=" << (chain.tpc_si_match_score > m_maxTpcSiMatchScore) << std::endl;
+                  << " direction_score=" << chain.direction_score
+                  << " usable=" << chain.usable << std::endl;
       }
     }
     const Chain* best = selectBestChain(chains);
@@ -1096,9 +1095,9 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
                 << " si_internal_score=" << output.score
                 << " r_si_outer=" << output.r_si_outer
                 << " r_tpc_inner=" << output.r_tpc_inner
-                << " r_midpoint=" << output.r_match
-                << " midpoint_delta_rphi=" << output.midpoint_delta_rphi
-                << " midpoint_delta_z=" << output.midpoint_delta_z
+                << " qa_r_midpoint=" << output.r_match
+                << " qa_midpoint_delta_rphi=" << output.midpoint_delta_rphi
+                << " qa_midpoint_delta_z=" << output.midpoint_delta_z
                 << " r_direction_match=" << output.r_direction_match
                 << " tpc_phi_direction_outer=" << output.tpc_phi_direction_outer
                 << " si_phi_direction_outer=" << output.si_phi_direction_outer
@@ -1106,8 +1105,8 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
                 << " si_tan_lambda_outer=" << output.si_tan_lambda_outer
                 << " delta_phi_outer=" << output.outer_mvtx_delta_phi
                 << " delta_tan_lambda_outer=" << output.outer_mvtx_delta_tan_lambda
-                << " tpc_si_match_score=" << output.tpc_si_match_score
-                << " compatible=" << output.tpc_si_compatible << std::endl;
+                << " direction_score=" << output.direction_score
+                << " usable=" << output.usable << std::endl;
     }
     auto* candidate = new TpcSiliconMatchCandidate;
     candidate->set_parent_track_id(trajectory->get_parent_track_id());
@@ -1115,10 +1114,10 @@ int TpcSiliconCrossingMatcher::process_event(PHCompositeNode*)
     candidate->set_crossing(trajectory->get_crossing());
     candidate->set_n_mvtx(nMvtx);
     candidate->set_n_intt(nIntt);
-    candidate->set_score(output.tpc_si_match_score);
+    candidate->set_score(output.direction_score);
     candidate->set_si_internal_score(output.score);
-    candidate->set_tpc_si_match_score(output.tpc_si_match_score);
-    candidate->set_tpc_si_compatible(output.tpc_si_compatible);
+    candidate->set_direction_score(output.direction_score);
+    candidate->set_tpc_si_compatible(output.usable);
     candidate->set_r_si_outer(output.r_si_outer);
     candidate->set_r_tpc_inner(output.r_tpc_inner);
     candidate->set_r_match(output.r_match);

@@ -22,13 +22,17 @@ class TpcSiliconMatchCandidate : public PHObject
   void set_source_assembled_track_id(unsigned int value) { m_sourceAssembledTrackId = value; }
   short get_crossing() const { return m_crossing; }
   void set_crossing(short value) { m_crossing = value; }
-  // Legacy score is the combined TPC-Si compatibility score.
+  // Legacy score is the outer-MVTX TPC-Si direction ranking score.
   float get_score() const { return m_score; }
   void set_score(float value) { m_score = value; }
   float get_si_internal_score() const { return m_siInternalScore; }
   void set_si_internal_score(float value) { m_siInternalScore = value; }
-  float get_tpc_si_match_score() const { return m_tpcSiMatchScore; }
-  void set_tpc_si_match_score(float value) { m_tpcSiMatchScore = value; }
+  float get_direction_score() const { return m_tpcSiMatchScore; }
+  void set_direction_score(float value) { m_tpcSiMatchScore = value; }
+  // Legacy aliases: this score contains direction terms only, with no
+  // midpoint-position contribution and no acceptance threshold.
+  float get_tpc_si_match_score() const { return get_direction_score(); }
+  void set_tpc_si_match_score(float value) { set_direction_score(value); }
   // Legacy aliases retained for existing consumers.
   float get_tpc_si_midpoint_score() const { return get_tpc_si_match_score(); }
   void set_tpc_si_midpoint_score(float value) { set_tpc_si_match_score(value); }
@@ -40,6 +44,8 @@ class TpcSiliconMatchCandidate : public PHObject
   void set_n_mvtx(unsigned int value) { m_nMvtx = value; }
   unsigned int get_n_intt() const { return m_nIntt; }
   void set_n_intt(unsigned int value) { m_nIntt = value; }
+  // Legacy compatibility flag now means structurally usable with finite
+  // direction-ranking quantities; it is not an angular physics cut.
   bool get_tpc_si_compatible() const { return m_tpcSiCompatible; }
   void set_tpc_si_compatible(bool value) { m_tpcSiCompatible = value; }
   float get_r_si_outer() const { return m_rSiOuter; }

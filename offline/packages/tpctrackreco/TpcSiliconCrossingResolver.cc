@@ -37,7 +37,7 @@ int TpcSiliconCrossingResolver::process_event(PHCompositeNode*)
   std::vector<TpcSiliconMatchCandidate*> ordered;
   std::set<unsigned int> candidateParents;
   std::map<unsigned int, unsigned int> parentToSource;
-  std::map<unsigned int, unsigned int> incompatibleByParent;
+  std::map<unsigned int, unsigned int> invalidByParent;
   std::map<unsigned int, unsigned int> conflictsByParent;
   for (unsigned int i = 0; i < m_candidates->size(); ++i)
   {
@@ -47,9 +47,9 @@ int TpcSiliconCrossingResolver::process_event(PHCompositeNode*)
     candidate->set_selected(false);
     candidateParents.insert(parent);
     parentToSource[parent] = candidate->get_source_assembled_track_id();
-    if (!candidate->get_tpc_si_compatible() || !candidate->isValid())
+    if (!candidate->isValid())
     {
-      ++incompatibleByParent[parent];
+      ++invalidByParent[parent];
       continue;
     }
     ordered.push_back(candidate);
@@ -67,8 +67,8 @@ int TpcSiliconCrossingResolver::process_event(PHCompositeNode*)
     const auto lhsTotal = lhs->get_n_mvtx() + lhs->get_n_intt();
     const auto rhsTotal = rhs->get_n_mvtx() + rhs->get_n_intt();
     if (lhsTotal != rhsTotal) return lhsTotal > rhsTotal;
-    if (lhs->get_tpc_si_match_score() != rhs->get_tpc_si_match_score())
-      return lhs->get_tpc_si_match_score() < rhs->get_tpc_si_match_score();
+    if (lhs->get_direction_score() != rhs->get_direction_score())
+      return lhs->get_direction_score() < rhs->get_direction_score();
     if (lhs->get_n_mvtx() != rhs->get_n_mvtx()) return lhs->get_n_mvtx() > rhs->get_n_mvtx();
     if (lhs->get_si_internal_score() != rhs->get_si_internal_score())
       return lhs->get_si_internal_score() < rhs->get_si_internal_score();
@@ -99,8 +99,7 @@ int TpcSiliconCrossingResolver::process_event(PHCompositeNode*)
         std::cout << Name() << " skip_shared_cluster parent_track_id=" << parent
                   << " crossing=" << candidate->get_crossing()
                   << " cluster_key=" << conflictingKey
-                  << " tpc_si_match_score=" << candidate->get_tpc_si_match_score()
-                  << " compatible=" << candidate->get_tpc_si_compatible() << std::endl;
+                  << " direction_score=" << candidate->get_direction_score() << std::endl;
       }
       continue;
     }
@@ -109,7 +108,7 @@ int TpcSiliconCrossingResolver::process_event(PHCompositeNode*)
     if (auto* decision = m_decisions->get_decision(candidate->get_source_assembled_track_id()))
     {
       decision->set_selected_crossing(candidate->get_crossing());
-      decision->set_selected_score(candidate->get_tpc_si_match_score());
+      decision->set_selected_score(candidate->get_direction_score());
       decision->set_status(TpcCrossingStatus::ResolvedBySilicon);
     }
     usedTracks.insert(parent);
@@ -123,11 +122,11 @@ int TpcSiliconCrossingResolver::process_event(PHCompositeNode*)
     {
       if (usedTracks.count(parent)) continue;
       std::cout << Name() << " unmatched parent_track_id=" << parent
-                << " incompatible_candidates=" << incompatibleByParent[parent]
+                << " invalid_candidates=" << invalidByParent[parent]
                 << " conflicting_candidates=" << conflictsByParent[parent]
                 << " reason="
-                << (conflictsByParent[parent] ? "no_nonconflicting_compatible_candidate"
-                                             : "no_compatible_candidate")
+                << (conflictsByParent[parent] ? "no_nonconflicting_candidate"
+                                             : "no_valid_candidate")
                 << std::endl;
     }
   }
