@@ -40,6 +40,7 @@ pkginclude_HEADERS = \
   Tpc_PolyTrackVertexContainer.h \
   Tpc_PolyTrackVertexContainerv1.h \
   Tpc_PolyTrackVertexer.h \
+  Tpc_PolyTrackVertexFinder.h \
   Tpc_PolyCluster.h \
   Tpc_PolyClusterv1.h \
   Tpc_PolyClusterContainer.h \
@@ -105,6 +106,7 @@ libtpctrackreco_la_SOURCES = \
   Tpc_AssembledTrackReco.cc \
   TpcCrossingFinder.cc \
   Tpc_PolyTrackVertexer.cc \
+  Tpc_PolyTrackVertexFinder.cc \
   Tpc_PolyClusterizer.cc \
   Tpc_PolyTrackReco.cc \
   TpcPolyTrackSeedConverter.cc \
@@ -121,6 +123,7 @@ libtpctrackreco_la_LIBADD = \
   libtpctrackreco_io.la \
   -lphool \
   -lfun4all \
+  -lglobalvertex_io \
   -lffamodules \
   -lcdbobjects \
   -lg4eval \

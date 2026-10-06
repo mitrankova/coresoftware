@@ -61,6 +61,7 @@ libTrackingDiagnostics_la_LIBADD = \
   -ltrack_io \
   -ltrackeralign \
   -ltrackbase_historic_io \
+  -lglobalvertex_io \
   -ltpctrackreco
 
 BUILT_SOURCES = testexternals.cc

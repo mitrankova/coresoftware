@@ -12,6 +12,7 @@ class PHCompositeNode;
 class TFile;
 class TTree;
 class Tpc_PolyClusterContainer;
+class SvtxVertexMap;
 
 class Tpc_PolyClusterResiduals : public SubsysReco
 {
@@ -34,6 +35,14 @@ class Tpc_PolyClusterResiduals : public SubsysReco
   void setMinTpcClusters(unsigned int v) { m_minTpcClusters = v; }
   void setMaxTpcClusters(unsigned int v) { m_maxTpcClusters = v; }
   void setUseStraightLineTracks(bool v) { m_useStraightLineTracks = v; }
+  //! reconstructed TPC vertices (Tpc_PolyTrackVertexFinder output)
+  void setVertexMapName(const std::string& n) { m_vertexMapName = n; }
+  //! fall back to the closest vertex in z if the track was not used in any vertex fit
+  void setUseClosestVertexFallback(bool v) { m_useClosestVertexFallback = v; }
+  //! fall back to collision_* of TPC_POLYTRACKVERTICES if no reconstructed vertex exists
+  void setUseLegacyCollisionVertex(bool v) { m_useLegacyCollisionVertex = v; }
+  //! max |z_track(PCA to vertex) - z_vertex| for the closest-vertex fallback [cm]
+  void setMaxVertexDz(double v) { m_maxVertexDz = v; }
 
  private:
   bool get_nodes(PHCompositeNode* topNode);
@@ -43,6 +52,7 @@ class Tpc_PolyClusterResiduals : public SubsysReco
   std::string m_clusterNodeName;
   std::string m_finalTrackNodeName;
   std::string m_finalTrackVertexNodeName;
+  std::string m_vertexMapName;
 
   double m_magneticFieldTesla{1.4};
   double m_minPt{0.0};
@@ -50,6 +60,9 @@ class Tpc_PolyClusterResiduals : public SubsysReco
   unsigned int m_minTpcClusters{0};
   unsigned int m_maxTpcClusters{0xffffffffu};
   bool m_useStraightLineTracks{false};
+  bool m_useClosestVertexFallback{true};
+  bool m_useLegacyCollisionVertex{true};
+  double m_maxVertexDz{1.0e30};
 
   unsigned int m_evt{0};
   TFile* m_outfile{nullptr};
@@ -57,6 +70,7 @@ class Tpc_PolyClusterResiduals : public SubsysReco
   Tpc_PolyClusterContainer* m_clusters{nullptr};
   Tpc_PolyTrackContainer* m_finalTracks{nullptr};
   Tpc_PolyTrackVertexContainer* m_finalTrackVertices{nullptr};
+  SvtxVertexMap* m_vertexMap{nullptr};
 
   unsigned int m_event{0};
   unsigned int m_finalTrackId{0};
@@ -80,6 +94,21 @@ class Tpc_PolyClusterResiduals : public SubsysReco
   double m_vertexY{0.0};
   double m_vertexZ{0.0};
   double m_vertexR{0.0};
+  // reconstructed-vertex details
+  int m_vertexSource{0};  //!< 0 none, 1 track used in vertex fit, 2 closest reco vertex, 3 legacy collision vertex
+  int m_vertexId{-1};
+  unsigned int m_vertexNtracks{0};
+  double m_vertexChi2{0.0};
+  double m_vertexNdf{0.0};
+  double m_vertexEx{0.0};
+  double m_vertexEy{0.0};
+  double m_vertexEz{0.0};
+  unsigned int m_nVerticesEvent{0};
+  double m_zDCAVtx{0.0};      //!< z of track at its transverse PCA to the vertex minus vertex z
+  // legacy z-clustering collision vertex, kept for comparison
+  double m_collVertexX{0.0};
+  double m_collVertexY{0.0};
+  double m_collVertexZ{0.0};
   double m_pcaX{0.0};
   double m_pcaY{0.0};
   double m_pcaZ{0.0};
