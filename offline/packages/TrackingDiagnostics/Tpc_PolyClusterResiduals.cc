@@ -7,6 +7,9 @@
 #include "tpctrackreco/Tpc_PolyTrackVertex.h"
 #include "tpctrackreco/Tpc_PolyTrackVertexContainer.h"
 
+#include <globalvertex/SvtxVertex.h>
+#include <globalvertex/SvtxVertexMap.h>
+
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phool/PHCompositeNode.h>
 #include <phool/getClass.h>
@@ -211,46 +214,76 @@ namespace
     return std::isfinite(z_state);
   }
 
-  bool choose_collision_vertex(const Tpc_PolyTrackVertexContainer* vertices,
-                               const HelixCircle& circle,
-                               double& vertex_x,
-                               double& vertex_y,
-                               double& vertex_z)
+  //! a vertex the track can be attached to (reconstructed or legacy)
+  struct VertexCandidate
   {
-    if (!vertices || !vertices->get_collision_vertex_valid() || !circle.ok)
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    double ex{std::numeric_limits<double>::quiet_NaN()};
+    double ey{std::numeric_limits<double>::quiet_NaN()};
+    double ez{std::numeric_limits<double>::quiet_NaN()};
+    double chi2{std::numeric_limits<double>::quiet_NaN()};
+    double ndf{std::numeric_limits<double>::quiet_NaN()};
+    unsigned int ntracks{0};
+    int id{-1};
+  };
+
+  VertexCandidate make_candidate(const SvtxVertex* vtx)
+  {
+    VertexCandidate c;
+    c.x = vtx->get_x();
+    c.y = vtx->get_y();
+    c.z = vtx->get_z();
+    const double exx = vtx->get_error(0, 0);
+    const double eyy = vtx->get_error(1, 1);
+    const double ezz = vtx->get_error(2, 2);
+    c.ex = exx >= 0.0 ? std::sqrt(exx) : std::numeric_limits<double>::quiet_NaN();
+    c.ey = eyy >= 0.0 ? std::sqrt(eyy) : std::numeric_limits<double>::quiet_NaN();
+    c.ez = ezz >= 0.0 ? std::sqrt(ezz) : std::numeric_limits<double>::quiet_NaN();
+    c.chi2 = vtx->get_chisq();
+    c.ndf = static_cast<double>(vtx->get_ndof());
+    c.ntracks = static_cast<unsigned int>(vtx->size_tracks());
+    c.id = static_cast<int>(vtx->get_id());
+    return c;
+  }
+
+  bool candidate_ok(const VertexCandidate& c)
+  {
+    return std::isfinite(c.x) && std::isfinite(c.y) && std::isfinite(c.z);
+  }
+
+  //! closest candidate in z at the track's transverse PCA to it (helix)
+  int choose_vertex_helix(const std::vector<VertexCandidate>& candidates,
+                          const HelixCircle& circle,
+                          const double max_dz)
+  {
+    if (!circle.ok)
     {
-      return false;
+      return -1;
     }
-
-    double best_dz = std::numeric_limits<double>::max();
-    const unsigned int nvertices = vertices->get_collision_vertex_count();
-    for (unsigned int ivtx = 0; ivtx < nvertices; ++ivtx)
+    int best = -1;
+    double best_dz = max_dz;
+    for (std::size_t i = 0; i < candidates.size(); ++i)
     {
-      const double x = vertices->get_collision_x(ivtx);
-      const double y = vertices->get_collision_y(ivtx);
-      const double z = vertices->get_collision_z(ivtx);
-      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+      const VertexCandidate& c = candidates[i];
+      if (!candidate_ok(c))
       {
         continue;
       }
-
       double z_at_dca = 0.0;
-      if (!helix_z_at_dca_to_vertex(circle, x, y, z_at_dca))
+      if (!helix_z_at_dca_to_vertex(circle, c.x, c.y, z_at_dca))
       {
         continue;
       }
-
-      const double dz = std::fabs(z - z_at_dca);
+      const double dz = std::fabs(c.z - z_at_dca);
       if (dz < best_dz)
       {
         best_dz = dz;
-        vertex_x = x;
-        vertex_y = y;
-        vertex_z = z;
+        best = static_cast<int>(i);
       }
     }
-
-    return best_dz != std::numeric_limits<double>::max();
+    return best;
   }
 
   bool line_xy_at_z(const Tpc_PolyTrack* trk,
@@ -371,50 +404,39 @@ namespace
     return std::isfinite(z_at_dca) && std::isfinite(dca_xy);
   }
 
-  bool choose_collision_vertex_line(const Tpc_PolyTrackVertexContainer* vertices,
-                                    const Tpc_PolyTrack* trk,
-                                    const double arc_direction,
-                                    double& vertex_x,
-                                    double& vertex_y,
-                                    double& vertex_z,
-                                    double& rdca)
+  //! closest candidate in z at the track's transverse PCA to it (straight line)
+  int choose_vertex_line(const std::vector<VertexCandidate>& candidates,
+                         const Tpc_PolyTrack* trk,
+                         const double arc_direction,
+                         const double max_dz)
   {
-    if (!vertices || !vertices->get_collision_vertex_valid() || !trk)
+    if (!trk)
     {
-      return false;
+      return -1;
     }
-
-    double best_dz = std::numeric_limits<double>::max();
-    const unsigned int nvertices = vertices->get_collision_vertex_count();
-    for (unsigned int ivtx = 0; ivtx < nvertices; ++ivtx)
+    int best = -1;
+    double best_dz = max_dz;
+    for (std::size_t i = 0; i < candidates.size(); ++i)
     {
-      const double x = vertices->get_collision_x(ivtx);
-      const double y = vertices->get_collision_y(ivtx);
-      const double z = vertices->get_collision_z(ivtx);
-      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+      const VertexCandidate& c = candidates[i];
+      if (!candidate_ok(c))
       {
         continue;
       }
-
       double z_at_dca = 0.0;
       double dca_xy = 0.0;
-      if (!line_z_at_dca_to_vertex(trk, x, y, arc_direction, z_at_dca, dca_xy))
+      if (!line_z_at_dca_to_vertex(trk, c.x, c.y, arc_direction, z_at_dca, dca_xy))
       {
         continue;
       }
-
-      const double dz = std::fabs(z - z_at_dca);
+      const double dz = std::fabs(c.z - z_at_dca);
       if (dz < best_dz)
       {
         best_dz = dz;
-        vertex_x = x;
-        vertex_y = y;
-        vertex_z = z;
-        rdca = dca_xy;
+        best = static_cast<int>(i);
       }
     }
-
-    return best_dz != std::numeric_limits<double>::max();
+    return best;
   }
 
   unsigned int cluster_sector(const Tpc_PolyCluster* cluster)
@@ -554,6 +576,7 @@ Tpc_PolyClusterResiduals::Tpc_PolyClusterResiduals(const std::string& name,
   , m_clusterNodeName("TPC_POLYCLUSTERS")
   , m_finalTrackNodeName("TPC_POLYTRACKS")
   , m_finalTrackVertexNodeName("TPC_POLYTRACKVERTICES")
+  , m_vertexMapName("TpcPolyVertexMap")
 {
 }
 
@@ -602,12 +625,25 @@ int Tpc_PolyClusterResiduals::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("vertex_y", &m_vertexY, "vertex_y/D");
   m_tree->Branch("vertex_z", &m_vertexZ, "vertex_z/D");
   m_tree->Branch("vertex_r", &m_vertexR, "vertex_r/D");
+  m_tree->Branch("vertex_source", &m_vertexSource, "vertex_source/I");
+  m_tree->Branch("vertex_id", &m_vertexId, "vertex_id/I");
+  m_tree->Branch("vertex_ntracks", &m_vertexNtracks, "vertex_ntracks/i");
+  m_tree->Branch("vertex_chi2", &m_vertexChi2, "vertex_chi2/D");
+  m_tree->Branch("vertex_ndf", &m_vertexNdf, "vertex_ndf/D");
+  m_tree->Branch("vertex_ex", &m_vertexEx, "vertex_ex/D");
+  m_tree->Branch("vertex_ey", &m_vertexEy, "vertex_ey/D");
+  m_tree->Branch("vertex_ez", &m_vertexEz, "vertex_ez/D");
+  m_tree->Branch("nvertices_event", &m_nVerticesEvent, "nvertices_event/i");
+  m_tree->Branch("coll_vertex_x", &m_collVertexX, "coll_vertex_x/D");
+  m_tree->Branch("coll_vertex_y", &m_collVertexY, "coll_vertex_y/D");
+  m_tree->Branch("coll_vertex_z", &m_collVertexZ, "coll_vertex_z/D");
   m_tree->Branch("pca_x", &m_pcaX, "pca_x/D");
   m_tree->Branch("pca_y", &m_pcaY, "pca_y/D");
   m_tree->Branch("pca_z", &m_pcaZ, "pca_z/D");
   m_tree->Branch("rDCA", &m_rDCA, "rDCA/D");
   m_tree->Branch("rDCA_zero", &m_rDCAZero, "rDCA_zero/D");
   m_tree->Branch("zDCA", &m_zDCA, "zDCA/D");
+  m_tree->Branch("zDCA_vtx", &m_zDCAVtx, "zDCA_vtx/D");
   m_tree->Branch("R", &m_R, "R/D");
   m_tree->Branch("rzslope", &m_rzSlope, "rzslope/D");
   m_tree->Branch("cluster_x", &m_clusterX);
@@ -650,7 +686,14 @@ bool Tpc_PolyClusterResiduals::get_nodes(PHCompositeNode* topNode)
   if (!m_finalTrackVertices && Verbosity() > 0)
   {
     std::cerr << Name() << " - missing " << m_finalTrackVertexNodeName
-              << ", rdca will be NaN" << std::endl;
+              << ", PCA branches will be NaN" << std::endl;
+  }
+
+  m_vertexMap = findNode::getClass<SvtxVertexMap>(topNode, m_vertexMapName);
+  if (!m_vertexMap && Verbosity() > 0)
+  {
+    std::cerr << Name() << " - missing " << m_vertexMapName
+              << " (register Tpc_PolyTrackVertexFinder before this module)" << std::endl;
   }
 
   return true;
@@ -680,6 +723,18 @@ void Tpc_PolyClusterResiduals::reset_tree_values()
   m_vertexY = std::numeric_limits<double>::quiet_NaN();
   m_vertexZ = std::numeric_limits<double>::quiet_NaN();
   m_vertexR = std::numeric_limits<double>::quiet_NaN();
+  m_vertexSource = 0;
+  m_vertexId = -1;
+  m_vertexNtracks = 0;
+  m_vertexChi2 = std::numeric_limits<double>::quiet_NaN();
+  m_vertexNdf = std::numeric_limits<double>::quiet_NaN();
+  m_vertexEx = std::numeric_limits<double>::quiet_NaN();
+  m_vertexEy = std::numeric_limits<double>::quiet_NaN();
+  m_vertexEz = std::numeric_limits<double>::quiet_NaN();
+  m_zDCAVtx = std::numeric_limits<double>::quiet_NaN();
+  m_collVertexX = std::numeric_limits<double>::quiet_NaN();
+  m_collVertexY = std::numeric_limits<double>::quiet_NaN();
+  m_collVertexZ = std::numeric_limits<double>::quiet_NaN();
   m_pcaX = std::numeric_limits<double>::quiet_NaN();
   m_pcaY = std::numeric_limits<double>::quiet_NaN();
   m_pcaZ = std::numeric_limits<double>::quiet_NaN();
@@ -745,6 +800,51 @@ int Tpc_PolyClusterResiduals::process_event(PHCompositeNode* topNode)
       }
       track_vertices_by_track_id[vtx->get_track_id()] = vtx;
       track_vertices_by_source_assembled_track_id[vtx->get_source_assembled_track_id()] = vtx;
+    }
+  }
+
+  // reconstructed TPC vertices and the tracks used in their fits
+  std::vector<VertexCandidate> reco_vertices;
+  std::map<unsigned int, std::size_t> reco_vertex_by_track_id;
+  if (m_vertexMap)
+  {
+    for (auto iter = m_vertexMap->begin(); iter != m_vertexMap->end(); ++iter)
+    {
+      const SvtxVertex* vtx = iter->second;
+      if (!vtx)
+      {
+        continue;
+      }
+      const VertexCandidate c = make_candidate(vtx);
+      if (!candidate_ok(c))
+      {
+        continue;
+      }
+      reco_vertices.push_back(c);
+      for (auto trk_iter = vtx->begin_tracks(); trk_iter != vtx->end_tracks(); ++trk_iter)
+      {
+        reco_vertex_by_track_id[*trk_iter] = reco_vertices.size() - 1;
+      }
+    }
+  }
+
+  // legacy z-clustering collision vertices
+  std::vector<VertexCandidate> legacy_vertices;
+  if (m_finalTrackVertices && m_finalTrackVertices->get_collision_vertex_valid())
+  {
+    for (unsigned int ivtx = 0; ivtx < m_finalTrackVertices->get_collision_vertex_count(); ++ivtx)
+    {
+      VertexCandidate c;
+      c.x = m_finalTrackVertices->get_collision_x(ivtx);
+      c.y = m_finalTrackVertices->get_collision_y(ivtx);
+      c.z = m_finalTrackVertices->get_collision_z(ivtx);
+      c.ez = m_finalTrackVertices->get_collision_z_rms(ivtx);
+      c.ntracks = m_finalTrackVertices->get_collision_ntracks(ivtx);
+      c.id = static_cast<int>(ivtx);
+      if (candidate_ok(c))
+      {
+        legacy_vertices.push_back(c);
+      }
     }
   }
 
@@ -818,17 +918,72 @@ int Tpc_PolyClusterResiduals::process_event(PHCompositeNode* topNode)
     const HelixCircle circle = use_straight_line ? HelixCircle() : make_track_circle(poly_track, m_magneticFieldTesla);
     const double dedx = poly_track->get_dedx();
 
-    if (use_straight_line)
+    // --- choose the vertex for this track ---
+    // 1) the reconstructed vertex whose fit used this track
+    // 2) the closest reconstructed vertex in z (track not used in any fit)
+    // 3) the closest legacy collision vertex
+    const VertexCandidate* chosen = nullptr;
+    int vertex_source = 0;
+    const auto assoc = reco_vertex_by_track_id.find(poly_track->get_track_id());
+    if (assoc != reco_vertex_by_track_id.end())
     {
-      if (choose_collision_vertex_line(m_finalTrackVertices, poly_track, arc_direction, vertex_x, vertex_y, vertex_z, rdca))
+      chosen = &reco_vertices[assoc->second];
+      vertex_source = 1;
+    }
+    if (!chosen && m_useClosestVertexFallback && !reco_vertices.empty())
+    {
+      const int ibest = use_straight_line ? choose_vertex_line(reco_vertices, poly_track, arc_direction, m_maxVertexDz)
+                                          : choose_vertex_helix(reco_vertices, circle, m_maxVertexDz);
+      if (ibest >= 0)
       {
-        double z_at_zero = 0.0;
-        line_z_at_dca_to_vertex(poly_track, 0.0, 0.0, arc_direction, z_at_zero, rdca_zero);
+        chosen = &reco_vertices[ibest];
+        vertex_source = 2;
       }
     }
-    else if (choose_collision_vertex(m_finalTrackVertices, circle, vertex_x, vertex_y, vertex_z))
+    int ilegacy = -1;
+    if (!legacy_vertices.empty())
     {
-      rdca = std::hypot(circle.xc - vertex_x, circle.yc - vertex_y) - circle.radius;
+      ilegacy = use_straight_line ? choose_vertex_line(legacy_vertices, poly_track, arc_direction, std::numeric_limits<double>::max())
+                                  : choose_vertex_helix(legacy_vertices, circle, std::numeric_limits<double>::max());
+    }
+    if (!chosen && m_useLegacyCollisionVertex && ilegacy >= 0)
+    {
+      chosen = &legacy_vertices[ilegacy];
+      vertex_source = 3;
+    }
+
+    double zdca_vtx = std::numeric_limits<double>::quiet_NaN();
+    if (chosen)
+    {
+      vertex_x = chosen->x;
+      vertex_y = chosen->y;
+      vertex_z = chosen->z;
+      double z_at_dca = std::numeric_limits<double>::quiet_NaN();
+      if (use_straight_line)
+      {
+        if (line_z_at_dca_to_vertex(poly_track, vertex_x, vertex_y, arc_direction, z_at_dca, rdca))
+        {
+          zdca_vtx = z_at_dca - vertex_z;
+        }
+      }
+      else if (circle.ok)
+      {
+        rdca = std::hypot(circle.xc - vertex_x, circle.yc - vertex_y) - circle.radius;
+        if (helix_z_at_dca_to_vertex(circle, vertex_x, vertex_y, z_at_dca))
+        {
+          zdca_vtx = z_at_dca - vertex_z;
+        }
+      }
+    }
+
+    // DCA to the z axis, independent of any vertex
+    if (use_straight_line)
+    {
+      double z_at_zero = 0.0;
+      line_z_at_dca_to_vertex(poly_track, 0.0, 0.0, arc_direction, z_at_zero, rdca_zero);
+    }
+    else if (circle.ok)
+    {
       rdca_zero = std::hypot(circle.xc, circle.yc) - circle.radius;
     }
 
@@ -866,6 +1021,25 @@ int Tpc_PolyClusterResiduals::process_event(PHCompositeNode* topNode)
     m_vertexY = vertex_y;
     m_vertexZ = vertex_z;
     m_vertexR = std::hypot(vertex_x, vertex_y);
+    m_vertexSource = vertex_source;
+    m_nVerticesEvent = static_cast<unsigned int>(reco_vertices.size());
+    if (chosen)
+    {
+      m_vertexId = chosen->id;
+      m_vertexNtracks = chosen->ntracks;
+      m_vertexChi2 = chosen->chi2;
+      m_vertexNdf = chosen->ndf;
+      m_vertexEx = chosen->ex;
+      m_vertexEy = chosen->ey;
+      m_vertexEz = chosen->ez;
+    }
+    if (ilegacy >= 0)
+    {
+      m_collVertexX = legacy_vertices[ilegacy].x;
+      m_collVertexY = legacy_vertices[ilegacy].y;
+      m_collVertexZ = legacy_vertices[ilegacy].z;
+    }
+    m_zDCAVtx = zdca_vtx;
     m_pcaX = pca_x;
     m_pcaY = pca_y;
     m_pcaZ = pca_z;
