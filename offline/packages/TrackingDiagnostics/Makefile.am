@@ -14,6 +14,7 @@ pkginclude_HEADERS = \
   Tpc_ModuleTrackDisplay.h \
   Tpc_AssembledTrackDisplay.h \
   SiTpc_EventDisplay.h \
+  SiTpc_TrackResiduals.h \
   Tpc_PolyClusterDisplay.h \
   Tpc_PolyClusterResiduals.h \
   TpcV0CandidateTree.h \
@@ -32,6 +33,7 @@ libTrackingDiagnostics_la_SOURCES = \
   Tpc_ModuleTrackDisplay.cc \
   Tpc_AssembledTrackDisplay.cc \
   SiTpc_EventDisplay.cc \
+  SiTpc_TrackResiduals.cc \
   Tpc_PolyClusterDisplay.cc \
   Tpc_PolyClusterResiduals.cc \
   TpcV0CandidateTree.cc \
