@@ -23,6 +23,12 @@ pkginclude_HEADERS = \
   Si_TrajectoryContainerv1.h \
   SiDetectorFrame.h \
   SiTpcBeamAlignment.h \
+  SiTpcHelixFit.h \
+  SiTpc_Track.h \
+  SiTpc_Trackv1.h \
+  SiTpc_TrackContainer.h \
+  SiTpc_TrackContainerv1.h \
+  SiTpcTrackMatcher.h \
   SiTrajectoryFitter.h \
   SiHitSeedData.h \
   SiHitSeedReco.h \
@@ -36,7 +42,11 @@ ROOTDICTS = \
   Si_Trajectory_Dict.cc \
   Si_Trajectoryv1_Dict.cc \
   Si_TrajectoryContainer_Dict.cc \
-  Si_TrajectoryContainerv1_Dict.cc
+  Si_TrajectoryContainerv1_Dict.cc \
+  SiTpc_Track_Dict.cc \
+  SiTpc_Trackv1_Dict.cc \
+  SiTpc_TrackContainer_Dict.cc \
+  SiTpc_TrackContainerv1_Dict.cc
 
 pcmdir = $(libdir)
 nobase_dist_pcm_DATA = $(ROOTDICTS:.cc=_rdict.pcm)
@@ -49,6 +59,10 @@ libsitrackreco_la_SOURCES = \
   Si_Trajectoryv1.cc \
   Si_TrajectoryContainerv1.cc \
   SiTrajectoryFitter.cc \
+  SiTpcHelixFit.cc \
+  SiTpc_Trackv1.cc \
+  SiTpc_TrackContainerv1.cc \
+  SiTpcTrackMatcher.cc \
   SiHitSeedReco.cc \
   SiHitSeedQA.cc \
   $(ROOTDICTS)
@@ -64,7 +78,8 @@ libsitrackreco_la_LIBADD = \
   -lmvtx_io \
   -lintt \
   -lintt_io \
-  -lg4detectors_io
+  -lg4detectors_io \
+  -ltpctrackreco_io
 
 %_Dict.cc: %.h %LinkDef.h
 	rootcint -f $@ @CINTDEFS@ $(DEFAULT_INCLUDES) $(AM_CPPFLAGS) $^
