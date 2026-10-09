@@ -341,7 +341,10 @@ namespace
 
   // First crossing of the helix (from the pca outward) with the circle of radius r around
   // (ox, oy); false if it does not reach it within half a turn.
-  bool helix_at_radius(const Helix& hx, const double ox, const double oy, const double r, XYZ& out)
+  // First crossing of the helix (from the pca outward) with the circle of radius r, where the
+  // radius of a helix point p is |toFrame(p)|_xy, e.g. its radius in the Si detector frame.
+  template <class Map>
+  bool helix_at_radius_mapped(const Helix& hx, Map toFrame, const double r, XYZ& out)
   {
     if (!hx.ok)
     {
@@ -349,8 +352,8 @@ namespace
     }
     auto dist = [&](double s)
     {
-      const XYZ p = hx.at(s);
-      return std::hypot(p.x - ox, p.y - oy) - r;
+      const XYZ p = toFrame(hx.at(s));
+      return std::hypot(p.x, p.y) - r;
     };
     const double smax = std::min(kPi * hx.R, 4.0 * r + 100.0);
     const double ds = kHelixStep;
@@ -774,6 +777,30 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
   }
 
+  // TPC -> beam-axis frame (after the track sampling, which works in the TPC's own frame)
+  if (m_alignment.enabled())
+  {
+    auto alignTpc = [&](XYZ& p)
+    {
+      const auto b = m_alignment.tpcToBeamAxis(p.x, p.y, p.z);
+      p = {b.x, b.y, b.z};
+    };
+    for (auto& [id, pts] : tpcClustersById)
+    {
+      std::for_each(pts.begin(), pts.end(), alignTpc);
+    }
+    for (auto& l : tpcLines)
+    {
+      std::for_each(l.pts.begin(), l.pts.end(), alignTpc);
+      std::for_each(l.ext.begin(), l.ext.end(), alignTpc);
+    }
+    for (auto& [color, p] : tpcPca)
+    {
+      alignTpc(p);
+    }
+    std::for_each(tpcCollision.begin(), tpcCollision.end(), alignTpc);
+  }
+
   if ((m_requireSiTraj && siTrajs.empty()) || (m_requireTpcTrack && tpcLines.empty()))
   {
     return Fun4AllReturnCodes::EVENT_OK;
@@ -805,7 +832,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       {
         continue;
       }
-      const auto g = m_frame.toGlobal(m_frame.toDetector(h.layer, h.phi, h.z));
+      const auto g = m_alignment.siToBeamAxis(m_frame, h.layer, h.phi, h.z);
       if (!onChain[i])
       {
         siFreeHits.push_back({g.x, g.y, g.z});
@@ -820,7 +847,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
           continue;
         }
         const auto& h = m_siSeeds->hits[hid];
-        const auto g = m_frame.toGlobal(m_frame.toDetector(h.layer, h.phi, h.z));
+        const auto g = m_alignment.siToBeamAxis(m_frame, h.layer, h.phi, h.z);
         siChainHits[chain.id].push_back({g.x, g.y, g.z});
       }
     }
@@ -891,12 +918,19 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       dt.color = d.color;
       for (int l = SiDetectorFrame::kNLayers - 1; l >= 0; --l)
       {
+        // the trajectory is in the beam-axis frame: undo the beam-axis alignment and the
+        // detector shift to get the crossing with the nominal layer in the detector frame
+        auto toDet = [&](const XYZ& b)
+        {
+          const auto dp = m_frame.toDetectorFromGlobal(m_alignment.siBeamAxisToGlobal(m_frame, {b.x, b.y, b.z}));
+          return XYZ{dp.x, dp.y, dp.z};
+        };
         XYZ g;
-        if (!helix_at_radius(d.helix, center[0], center[1], SiDetectorFrame::layerRadius(l), g))
+        if (!helix_at_radius_mapped(d.helix, toDet, SiDetectorFrame::layerRadius(l), g))
         {
           continue;
         }
-        const auto det = m_frame.toDetectorFromGlobal({g.x, g.y, g.z});
+        const XYZ det = toDet(g);
         dt.layers.push_back({det.z, wrap2pi(std::atan2(det.y, det.x) - m_frame.uphiRotation()), static_cast<double>(l)});
       }
       if (!dt.layers.empty() && d.helix.ok)
@@ -1182,26 +1216,35 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     // x-y, silicon zoom
     {
       auto* c = new TCanvas(("c_" + tag + "_phys_xy_si").c_str(), (title + " x-y silicon").c_str(), 1000, 1000);
-      c->DrawFrame(-kSiZoomR, -kSiZoomR, kSiZoomR, kSiZoomR, (title + " silicon (global frame);x [cm];y [cm]").c_str());
-      for (int l = 0; l < SiDetectorFrame::kNLayers; ++l)
+      c->DrawFrame(-kSiZoomR, -kSiZoomR, kSiZoomR, kSiZoomR, (title + (m_alignment.enabled() ? " silicon (beam-axis frame)" : " silicon (global frame)") + ";x [cm];y [cm]").c_str());
+      // nominal layers: one half circle per clamshell half, around the position of the
+      // detector centre after the shift and that half's beam-axis alignment (at z = 0)
+      const double phiA = (m_alignment.clamshellBoundary() + m_frame.uphiRotation()) * 180.0 / kPi;
+      for (int half = SiTpcBeamAlignment::SiHalfA; half <= SiTpcBeamAlignment::SiHalfB; ++half)
       {
-        const double r = SiDetectorFrame::layerRadius(l);
-        auto* e = owned(new TEllipse(center[0], center[1], r, r));
-        e->SetFillStyle(0);
-        e->SetLineColor(kGray);
-        e->SetLineStyle(3);
-        e->Draw("same");
+        const auto cen = m_alignment.toBeamAxis(half, {center[0], center[1], 0.0});
+        const double phi0 = phiA + (half == SiTpcBeamAlignment::SiHalfA ? 0.0 : 180.0);
+        for (int l = 0; l < SiDetectorFrame::kNLayers; ++l)
+        {
+          const double r = SiDetectorFrame::layerRadius(l);
+          auto* e = owned(new TEllipse(cen.x, cen.y, r, r, phi0, phi0 + 180.0));
+          e->SetFillStyle(0);
+          e->SetLineColor(half == SiTpcBeamAlignment::SiHalfA ? kGray + 1 : kGray);
+          e->SetLineStyle(3);
+          e->SetNoEdges(true);
+          e->Draw("same");
+        }
+        auto* det = owned(new TMarker(cen.x, cen.y, half == SiTpcBeamAlignment::SiHalfA ? 5 : 2));
+        det->SetMarkerColor(kGray + 2);
+        det->SetMarkerSize(2.0);
+        det->Draw();
       }
       drawEverything2D(0, true);
       auto* beam = owned(new TMarker(m_beamX, m_beamY, 29));
       beam->SetMarkerSize(2.0);
       beam->Draw();
-      auto* det = owned(new TMarker(center[0], center[1], 5));
-      det->SetMarkerColor(kGray + 2);
-      det->SetMarkerSize(2.0);
-      det->Draw();
-      auto* tx = owned(new TLatex(0.12, 0.92, std::format("#star beam   #times detector centre ({:.1f}, {:.1f}) mm   {}",
-                                                          10 * center[0], 10 * center[1], siSummary)
+      auto* tx = owned(new TLatex(0.12, 0.92, std::format("#star beam   #times/+ detector centre half A/B   shift ({:.1f}, {:.1f}) mm, beam-axis alignment {}   {}",
+                                                          10 * center[0], 10 * center[1], m_alignment.enabled() ? "on" : "off", siSummary)
                                                   .c_str()));
       tx->SetNDC();
       tx->SetTextSize(0.025);

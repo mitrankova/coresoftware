@@ -2,6 +2,7 @@
 #define SITPC_EVENTDISPLAY_H
 
 #include <sitrackreco/SiDetectorFrame.h>
+#include <sitrackreco/SiTpcBeamAlignment.h>
 
 #include <fun4all/SubsysReco.h>
 
@@ -46,8 +47,11 @@ class Tpc_PolyTrackVertexContainer;
 //                           centre, beam and detector-centre markers
 //   c_evtN_phys_z_r         z vs radius, everything
 //
-// Si positions: hit (Uphi, Vz) -> detector frame -> shifted by the detector centre
-// (SiDetectorFrame; keep the same settings as SiTrajectoryFitter).
+// Coordinates of the physics views: BEAM-AXIS frame (SiTpcBeamAlignment), beam at (0, 0).
+//   Si : hit (Uphi, Vz) -> detector frame -> detector shift (SiDetectorFrame) -> beam axis of
+//        its clamshell half.  Keep the same settings as SiTrajectoryFitter.
+//   TPC: clusters, poly tracks, pca and collision vertices -> beam axis with the TPC beam line.
+// setApplyBeamAlignment(false) shows the old frames (Si global frame, TPC as reconstructed).
 // Colours: Si seed and its trajectory share a colour (chain id); a TPC poly cluster and its
 // poly track share a colour (assembled track id).  Si hits are squares, TPC clusters circles.
 class SiTpc_EventDisplay : public SubsysReco
@@ -84,6 +88,11 @@ class SiTpc_EventDisplay : public SubsysReco
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
   void setDetectorCenterMm(double x, double y, double z = 0.0) { m_frame.setDetectorCenterMm(x, y, z); }
   void setBeamPositionCm(double x, double y) { m_beamX = x; m_beamY = y; }
+  // Beam-axis alignment of TPC and the two Si clamshell halves (SiTpcBeamAlignment, default:
+  // values of the vertex QA PDFs).  Must be the same object as in SiTrajectoryFitter: the Si
+  // trajectories are fitted in the beam-axis frame.  With it on, the beam is at (0, 0).
+  void setBeamAlignment(const SiTpcBeamAlignment& a) { m_alignment = a; }
+  void setApplyBeamAlignment(bool v) { m_alignment.setEnabled(v); }
 
   // ---- How far trajectories are drawn in the physics views (TPC + Si together).
   // The own-detector part is always solid; the extension into the other detector is dashed.
@@ -166,6 +175,7 @@ class SiTpc_EventDisplay : public SubsysReco
   bool m_requireTpcTrack = false;
 
   SiDetectorFrame m_frame;
+  SiTpcBeamAlignment m_alignment;
   double m_beamX = 0.0;
   double m_beamY = 0.0;
 

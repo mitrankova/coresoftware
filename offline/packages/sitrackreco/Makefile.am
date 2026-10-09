@@ -22,6 +22,7 @@ pkginclude_HEADERS = \
   Si_TrajectoryContainer.h \
   Si_TrajectoryContainerv1.h \
   SiDetectorFrame.h \
+  SiTpcBeamAlignment.h \
   SiTrajectoryFitter.h \
   SiHitSeedData.h \
   SiHitSeedReco.h \
