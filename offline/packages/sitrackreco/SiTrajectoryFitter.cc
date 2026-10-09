@@ -50,6 +50,20 @@ int SiTrajectoryFitter::InitRun(PHCompositeNode* topNode)
               << ", use INTT " << m_useIntt << ", min points " << m_minPoints
               << ", straight line if radial lever arm < " << m_minCurvatureLeverArm << " cm"
               << ", beam constraint " << (m_beamConstraint ? "on" : "off") << std::endl;
+    if (m_alignment.enabled())
+    {
+      const char* names[] = {"TPC", "Si half A", "Si half B"};
+      for (int part = SiTpcBeamAlignment::SiHalfA; part <= SiTpcBeamAlignment::SiHalfB; ++part)
+      {
+        const auto& l = m_alignment.beamLine(part);
+        std::cout << Name() << ":   beam-axis alignment " << names[part] << ": x0 " << 10 * l.x0 << " mm, y0 "
+                  << 10 * l.y0 << " mm, dx/dz " << 1e3 * l.dxdz << " mrad, dy/dz " << 1e3 * l.dydz << " mrad" << std::endl;
+      }
+    }
+    else
+    {
+      std::cout << Name() << ":   beam-axis alignment off" << std::endl;
+    }
   }
   return createNodes(topNode);
 }
@@ -213,7 +227,8 @@ std::vector<SiTrajectoryFitter::LayerPoint> SiTrajectoryFitter::layerPoints(
     const SiDetectorFrame::Point det{r * std::cos(phi), r * std::sin(phi), s.z / s.n};
     LayerPoint p;
     p.layer = layer;
-    p.global = m_frame.toGlobal(det);  // step 2: global alignment
+    // step 2: detector shift (global frame); step 3: beam-axis alignment of its clamshell half
+    p.global = m_alignment.toBeamAxis(m_alignment.siHalf(phi - m_frame.uphiRotation()), m_frame.toGlobal(det));
     p.nhits = s.n;
     out.push_back(p);
   }
