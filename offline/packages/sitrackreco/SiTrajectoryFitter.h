@@ -4,6 +4,7 @@
 #define SITRACKRECO_SITRAJECTORYFITTER_H
 
 #include "SiDetectorFrame.h"
+#include "SiTpcBeamAlignment.h"
 
 #include <fun4all/SubsysReco.h>
 
@@ -23,7 +24,9 @@ class Si_TrajectoryContainer;
 //
 // For every chain:
 //   1. every hit on the chain -> DETECTOR frame   (SiDetectorFrame::toDetector)
-//   2. -> GLOBAL frame: shift by the detector centre (default +6, -1, 0 mm)
+//   2. -> GLOBAL frame: shift by the detector centre (default +6, -1, 0 mm), own step
+//   2b. -> BEAM-AXIS frame: per clamshell half, the measured beam line is moved onto the
+//       z axis (SiTpcBeamAlignment; setBeamAlignment / setApplyBeamAlignment)
 //   3. one fit point per layer = centroid of that layer's hits (projected back to the
 //      layer radius, i.e. the azimuth of the centroid on the nominal cylinder)
 //   4. xy: Taubin circle fit (or a straight line if the radial lever arm is too short to
@@ -45,7 +48,12 @@ class SiTrajectoryFitter : public SubsysReco
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
   // step 2: position of the detector-frame origin in the global frame
   void setDetectorCenterMm(double x, double y, double z = 0.0) { m_frame.setDetectorCenterMm(x, y, z); }
-  // beam position (global frame, cm) used for the perigee
+  // Beam-axis alignment of the two clamshell halves (SiTpcBeamAlignment, default: values of
+  // si_alignment_new3.pdf).  With it on, the beam is at (0, 0): keep setBeamPositionCm(0, 0).
+  void setBeamAlignment(const SiTpcBeamAlignment& a) { m_alignment = a; }
+  void setApplyBeamAlignment(bool v) { m_alignment.setEnabled(v); }
+  const SiTpcBeamAlignment& beamAlignment() const { return m_alignment; }
+  // beam position (cm, frame of the fit points) used for the perigee
   void setBeamPositionCm(double x, double y) { m_beamX = x; m_beamY = y; }
   // solenoid field [T], signed: only used for pt and charge
   void setBz(double tesla) { m_bz = tesla; }
@@ -102,6 +110,7 @@ class SiTrajectoryFitter : public SubsysReco
   Si_TrajectoryContainer* m_container = nullptr;
 
   SiDetectorFrame m_frame;
+  SiTpcBeamAlignment m_alignment;
   double m_beamX = 0.0;
   double m_beamY = 0.0;
   double m_bz = 1.4;
