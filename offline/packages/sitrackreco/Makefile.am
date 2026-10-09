@@ -17,6 +17,12 @@ pkginclude_HEADERS = \
   Si_Chainv1.h \
   Si_ChainContainer.h \
   Si_ChainContainerv1.h \
+  Si_Trajectory.h \
+  Si_Trajectoryv1.h \
+  Si_TrajectoryContainer.h \
+  Si_TrajectoryContainerv1.h \
+  SiDetectorFrame.h \
+  SiTrajectoryFitter.h \
   SiHitSeedData.h \
   SiHitSeedReco.h \
   SiHitSeedQA.h
@@ -25,7 +31,11 @@ ROOTDICTS = \
   Si_Chain_Dict.cc \
   Si_Chainv1_Dict.cc \
   Si_ChainContainer_Dict.cc \
-  Si_ChainContainerv1_Dict.cc
+  Si_ChainContainerv1_Dict.cc \
+  Si_Trajectory_Dict.cc \
+  Si_Trajectoryv1_Dict.cc \
+  Si_TrajectoryContainer_Dict.cc \
+  Si_TrajectoryContainerv1_Dict.cc
 
 pcmdir = $(libdir)
 nobase_dist_pcm_DATA = $(ROOTDICTS:.cc=_rdict.pcm)
@@ -35,6 +45,9 @@ lib_LTLIBRARIES = libsitrackreco.la
 libsitrackreco_la_SOURCES = \
   Si_Chainv1.cc \
   Si_ChainContainerv1.cc \
+  Si_Trajectoryv1.cc \
+  Si_TrajectoryContainerv1.cc \
+  SiTrajectoryFitter.cc \
   SiHitSeedReco.cc \
   SiHitSeedQA.cc \
   $(ROOTDICTS)
