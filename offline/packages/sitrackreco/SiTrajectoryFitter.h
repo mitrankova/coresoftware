@@ -5,6 +5,7 @@
 
 #include "SiDetectorFrame.h"
 #include "SiTpcBeamAlignment.h"
+#include "SiTpcHelixFit.h"
 
 #include <fun4all/SubsysReco.h>
 
@@ -74,6 +75,15 @@ class SiTrajectoryFitter : public SubsysReco
     m_beamWeight = weight;
   }
 
+  // Weights of the MVTX and INTT points in the z(s) fit.  INTT z is the centre of a 1.6 / 2.0 cm
+  // long strip (sigma ~0.5 cm), MVTX z is a pixel (~10 um): with equal weights the INTT
+  // dominates the eta of the trajectory.  Default 1 / 0.01.
+  void setZWeights(double mvtx, double intt)
+  {
+    m_zWeightMvtx = mvtx;
+    m_zWeightIntt = intt;
+  }
+
   // Verbosity 1: per-event count of fits per status.  Verbosity 2: also every chain that was
   // not fitted or got a circle fit with pt below this [GeV] (layers, hits, radii).
   void setReportPt(double gev) { m_reportPt = gev; }
@@ -91,7 +101,7 @@ class SiTrajectoryFitter : public SubsysReco
   static Circle fitCircleTaubin(const std::vector<double>& x, const std::vector<double>& y,
                                 const std::vector<double>& w);
   // radius used to store a straight-line fit in the circle parametrization [cm]
-  static constexpr double kStraightRadius = 1.0e6;
+  static constexpr double kStraightRadius = SiTpcHelixFit::kStraightRadius;
 
  private:
   struct LayerPoint
@@ -120,6 +130,8 @@ class SiTrajectoryFitter : public SubsysReco
   bool m_beamConstraint = false;
   double m_beamWeight = 1.0;
   double m_reportPt = 0.2;
+  double m_zWeightMvtx = 1.0;
+  double m_zWeightIntt = 0.01;
 };
 
 #endif

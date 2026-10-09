@@ -15,6 +15,7 @@ class Si_TrajectoryContainer;
 class Tpc_PolyClusterContainer;
 class Tpc_PolyTrackContainer;
 class Tpc_PolyTrackVertexContainer;
+class SiTpc_TrackContainer;
 
 // Event display of the silicon seeds / trajectories together with the TPC poly clusters and
 // poly tracks.  One TDirectory per event (events/event_NNNNNN), only canvases are written.
@@ -46,6 +47,7 @@ class Tpc_PolyTrackVertexContainer;
 //   c_evtN_phys_xy_si       x-y zoom on the silicon with nominal layers around the detector
 //                           centre, beam and detector-centre markers
 //   c_evtN_phys_z_r         z vs radius, everything
+//   Optional (setDrawSiTpcTracks): fitted Si+TPC tracks as solid lines in all physics views.
 //
 // Coordinates of the physics views: BEAM-AXIS frame (SiTpcBeamAlignment), beam at (0, 0).
 //   Si : hit (Uphi, Vz) -> detector frame -> detector shift (SiDetectorFrame) -> beam axis of
@@ -83,6 +85,16 @@ class SiTpc_EventDisplay : public SubsysReco
   // Only save events with at least one Si trajectory / one TPC poly track.
   void setRequireSiTrajectory(bool v) { m_requireSiTraj = v; }
   void setRequireTpcTrack(bool v) { m_requireTpcTrack = v; }
+  // Fitted Si+TPC tracks (SiTpcTrackMatcher, node SITPC_TRACKS) as solid lines in the physics
+  // views, from the pca to the edge of the view (default off; colour default black).
+  // Note: with a free TPC z offset in the refit, the drawn TPC clusters are at their measured
+  // z, i.e. displaced in z from the line by the fitted offset.
+  void setDrawSiTpcTracks(bool v) { m_drawSiTpcTracks = v; }
+  void setSiTpcTrackNodeName(const std::string& s) { m_siTpcTrackNodeName = s; }
+  void setSiTpcTrackColor(int c) { m_siTpcTrackColor = c; }
+  // With SITPC_TRACKS present: TPC clusters / tracks matched to a Si trajectory are drawn in the
+  // colour of that Si chain, unmatched TPC in grey (default).  false: colour by assembled id.
+  void setColorTpcByMatch(bool v) { m_colorTpcByMatch = v; }
 
   // ---- Si frame (must match SiTrajectoryFitter)
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
@@ -117,7 +129,9 @@ class SiTpc_EventDisplay : public SubsysReco
   void setSiMinPt(double gev) { m_siMinPt = gev; }
   void setDrawLowPtSi(bool v) { m_drawLowPtSi = v; }
   void setSiMinPoints(unsigned int n) { m_siMinPoints = n; }
-  // Radius [cm] up to which Si trajectories are extrapolated (ExtendSiIntoTpc / ExtendBoth).
+  // Radius [cm] at which Si trajectories end (ExtendSiIntoTpc / ExtendBoth): solid up to the
+  // silicon (13 cm) or to this radius if smaller, dashed beyond.  Without Si extension they
+  // end at 13 cm.
   void setSiExtrapolationRadius(double r) { m_siExtrapR = r; }
   // Radius [cm] down to which TPC tracks are extrapolated (ExtendTpcIntoSi / ExtendBoth);
   // the extension also stops at the track's closest approach to the beam axis.
@@ -165,6 +179,11 @@ class SiTpc_EventDisplay : public SubsysReco
   Tpc_PolyClusterContainer* m_tpcClusters = nullptr;
   Tpc_PolyTrackContainer* m_tpcTracks = nullptr;
   Tpc_PolyTrackVertexContainer* m_tpcVertices = nullptr;
+  SiTpc_TrackContainer* m_siTpcTracks = nullptr;
+  std::string m_siTpcTrackNodeName = "SITPC_TRACKS";
+  bool m_drawSiTpcTracks = false;
+  bool m_colorTpcByMatch = true;
+  int m_siTpcTrackColor = 1;  // kBlack
 
   bool m_drawDetector = true;
   bool m_drawPhysics = true;

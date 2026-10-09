@@ -10,6 +10,9 @@
 #include <sitrackreco/SiHitSeedData.h>
 #include <sitrackreco/Si_Trajectory.h>
 #include <sitrackreco/Si_TrajectoryContainer.h>
+#include <sitrackreco/SiTpcHelixFit.h>
+#include <sitrackreco/SiTpc_Track.h>
+#include <sitrackreco/SiTpc_TrackContainer.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phool/PHCompositeNode.h>
@@ -589,6 +592,7 @@ void SiTpc_EventDisplay::get_nodes(PHCompositeNode* topNode)
   m_tpcClusters = m_drawTpc ? findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_tpcClusterNodeName) : nullptr;
   m_tpcTracks = m_drawTpc ? findNode::getClass<Tpc_PolyTrackContainer>(topNode, m_tpcTrackNodeName) : nullptr;
   m_tpcVertices = m_drawTpc ? findNode::getClass<Tpc_PolyTrackVertexContainer>(topNode, m_tpcVertexNodeName) : nullptr;
+  m_siTpcTracks = findNode::getClass<SiTpc_TrackContainer>(topNode, m_siTpcTrackNodeName);
 
   if (Verbosity() > 0)
   {
@@ -659,6 +663,31 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   const bool extendSi = m_extension == ExtendSiIntoTpc || m_extension == ExtendBoth;
   const bool extendTpc = m_extension == ExtendTpcIntoSi || m_extension == ExtendBoth;
   const double zabs = std::max(std::fabs(m_zmin), std::fabs(m_zmax));
+
+  // TPC colours: a TPC track matched to a Si trajectory (SITPC_TRACKS) takes the colour of the
+  // Si chain, unmatched TPC tracks are grey; without SITPC_TRACKS (or setColorTpcByMatch(false))
+  // the colour comes from the assembled track id as before.
+  std::map<unsigned int, int> tpcMatchedChain;  // assembled track id -> Si chain id
+  if (m_siTpcTracks)
+  {
+    for (unsigned int i = 0; i < m_siTpcTracks->size(); ++i)
+    {
+      if (const SiTpc_Track* t = m_siTpcTracks->get_track(i))
+      {
+        tpcMatchedChain[t->get_tpc_assembled_track_id()] = t->get_si_chain_id();
+      }
+    }
+  }
+  const bool colorByMatch = m_colorTpcByMatch && m_siTpcTracks;
+  auto tpcColor = [&](unsigned int assembledId)
+  {
+    if (!colorByMatch)
+    {
+      return palette_color(static_cast<int>(assembledId));
+    }
+    const auto it = tpcMatchedChain.find(assembledId);
+    return it != tpcMatchedChain.end() ? palette_color(it->second) : static_cast<int>(kGray + 1);
+  };
 
   struct TpcLine
   {
@@ -734,7 +763,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       const double rev = cluster_line_residual2(trk, it->second, m_bz, -1.0, straight);
       const double arc = fwd <= rev ? 1.0 : -1.0;
       TpcLine line;
-      line.color = palette_color(static_cast<int>(trk->get_source_assembled_track_id()));
+      line.color = tpcColor(trk->get_source_assembled_track_id());
       line.pts = sample_poly_track(trk, zlo, zhi, m_xymax, m_bz, arc, straight);
       if (line.pts.size() < 2)
       {
@@ -761,7 +790,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       const XYZ p{v->get_pca_x(), v->get_pca_y(), v->get_pca_z()};
       if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z))
       {
-        tpcPca.emplace_back(palette_color(static_cast<int>(v->get_source_assembled_track_id())), p);
+        tpcPca.emplace_back(tpcColor(v->get_source_assembled_track_id()), p);
       }
     }
     const unsigned int ncoll = (m_tpcVertices && m_tpcVertices->get_collision_vertex_valid())
@@ -873,6 +902,17 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
                                               : "fit status " + std::to_string(it->second))
                 << "), " << pts.size() << " hits" << std::endl;
     }
+  }
+  std::string siTpcSummary;
+  if (!m_siTpcTracks)
+  {
+    siTpcSummary = "no " + m_siTpcTrackNodeName + " node (SiTpcTrackMatcher not run before the display?)";
+  }
+  else
+  {
+    siTpcSummary = std::format("{} Si+TPC tracks ({}), TPC coloured by {}", m_siTpcTracks->size(),
+                               m_drawSiTpcTracks ? "drawn" : "lines off: setDrawSiTpcTracks(true)",
+                               colorByMatch ? "matched Si chain, unmatched grey" : "assembled id");
   }
   const std::string siSummary = std::format("{} chains: {} drawn, {} below {:.2f} GeV{}, {} not fitted (#diamond)",
                                             siChainHits.size(), siTrajs.size() - (m_drawLowPtSi ? nSiLowPt : 0),
@@ -1059,9 +1099,13 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   {
     // one sampling, split where the trajectory leaves the silicon; the extension starts at
     // the last silicon point so the dashed part joins the solid one
-    const auto full = sample_helix(d.helix, 0.0, 0.0, extendSi ? std::max(m_siExtrapR, kSiZoomR) : kSiZoomR, zabs);
+    // solid inside the silicon (up to the silicon radius, or less if the extrapolation radius
+    // is smaller), dashed beyond; extendSi: the trajectory ends exactly at m_siExtrapR
+    const double rEnd = extendSi ? m_siExtrapR : kSiZoomR;
+    const double rSolid = std::min(kSiZoomR, rEnd);
+    const auto full = sample_helix(d.helix, 0.0, 0.0, rEnd, zabs);
     std::size_t nIn = 0;
-    while (nIn < full.size() && radius_of(full[nIn]) <= kSiZoomR)
+    while (nIn < full.size() && radius_of(full[nIn]) <= rSolid)
     {
       ++nIn;
     }
@@ -1081,6 +1125,37 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     const auto& pts = extension ? l.ext : l.pts;
     return zoom ? clip_curve(pts, kSiZoomR, zoomZ) : std::vector<std::vector<XYZ>>{pts};
   };
+  // Si+TPC fitted tracks (optional): from the pca outward through the whole tracker
+  std::vector<std::vector<XYZ>> siTpcCurves;
+  if (m_siTpcTracks && m_drawSiTpcTracks)
+  {
+    for (unsigned int i = 0; i < m_siTpcTracks->size(); ++i)
+    {
+      const SiTpc_Track* t = m_siTpcTracks->get_track(i);
+      if (!t || !t->isValid())
+      {
+        continue;
+      }
+      const auto hx = SiTpcHelixFit::fromTrack(*t);
+      const double smax = std::min(kPi * hx.R, 4.0 * m_xymax + 100.0);
+      std::vector<XYZ> pts;
+      for (double sv = 0; sv <= smax; sv += kHelixStep)
+      {
+        const auto p = SiTpcHelixFit::at(hx, sv);
+        if (std::hypot(p.x, p.y) > m_xymax || std::fabs(p.z) > zabs)
+        {
+          break;
+        }
+        pts.push_back({p.x, p.y, p.z});
+      }
+      siTpcCurves.push_back(std::move(pts));
+    }
+  }
+  auto siTpcSegments = [&](const std::vector<XYZ>& pts, const bool zoom)
+  {
+    return zoom ? clip_curve(pts, kSiZoomR, zoomZ) : std::vector<std::vector<XYZ>>{pts};
+  };
+
   std::vector<XYZ> siTrajPoints;  // fit points of all trajectories
   for (const auto& d : siTrajs)
   {
@@ -1108,7 +1183,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
     for (const auto& [id, pts] : tpcClustersById)
     {
-      draw_markers_zxy(pts, palette_color(static_cast<int>(id)), tpcClusterStyle, zoom ? 0.8 : 1.0);
+      draw_markers_zxy(pts, tpcColor(id), tpcClusterStyle, zoom ? 0.8 : 1.0);
     }
     for (const auto& [color, p] : tpcPca)
     {
@@ -1121,6 +1196,13 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       draw_markers_zxy(pts, palette_color(id), siHitStyle, zoom ? 0.8 : 0.6);
     }
     draw_markers_zxy(siUnfittedHits, kBlack, 27, zoom ? 1.4 : 1.0);
+    for (const auto& c : siTpcCurves)
+    {
+      for (const auto& seg : siTpcSegments(c, zoom))
+      {
+        draw_line_zxy(seg, m_siTpcTrackColor, 1, 2);
+      }
+    }
     for (std::size_t i = 0; i < siTrajs.size(); ++i)
     {
       const bool low = siTrajs[i].lowPt;
@@ -1178,7 +1260,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       }
       for (const auto& [id, pts] : tpcClustersById)
       {
-        draw_markers_2d(pts, proj, palette_color(static_cast<int>(id)), tpcClusterStyle, 0.5);
+        draw_markers_2d(pts, proj, tpcColor(id), tpcClusterStyle, 0.5);
       }
       for (const auto& [color, p] : tpcPca)
       {
@@ -1191,6 +1273,13 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
         draw_markers_2d(pts, proj, palette_color(id), siHitStyle, zoom ? 0.8 : 0.5);
       }
       draw_markers_2d(siUnfittedHits, proj, kBlack, 27, zoom ? 1.6 : 1.0);
+      for (const auto& c : siTpcCurves)
+      {
+        for (const auto& seg : siTpcSegments(c, zoom))
+        {
+          draw_line_2d(seg, proj, m_siTpcTrackColor, 1, 2);
+        }
+      }
       for (std::size_t i = 0; i < siTrajs.size(); ++i)
       {
         const bool low = siTrajs[i].lowPt;
@@ -1249,6 +1338,10 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       tx->SetNDC();
       tx->SetTextSize(0.025);
       tx->Draw();
+      auto* tx2 = owned(new TLatex(0.12, 0.89, siTpcSummary.c_str()));
+      tx2->SetNDC();
+      tx2->SetTextSize(0.025);
+      tx2->Draw();
       write_and_delete(c);
     }
     // z vs r, full
@@ -1270,7 +1363,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   {
     nTpcClusters += pts.size();
   }
-  std::cout << Name() << " - saved event " << m_evt << ": Si " << siSummary << ", TPC clusters " << nTpcClusters
+  std::cout << Name() << " - saved event " << m_evt << ": Si " << siSummary << "; " << siTpcSummary << "; TPC clusters " << nTpcClusters
             << ", TPC poly tracks " << tpcLines.size() << ", TPC collision vertices " << tpcCollision.size() << std::endl;
   ++m_eventsSaved;
   return Fun4AllReturnCodes::EVENT_OK;
