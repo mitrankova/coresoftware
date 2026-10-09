@@ -13,6 +13,7 @@ AM_LDFLAGS = \
 pkginclude_HEADERS = \
   Tpc_ModuleTrackDisplay.h \
   Tpc_AssembledTrackDisplay.h \
+  SiTpc_EventDisplay.h \
   Tpc_PolyClusterDisplay.h \
   Tpc_PolyClusterResiduals.h \
   TpcV0CandidateTree.h \
@@ -30,6 +31,7 @@ lib_LTLIBRARIES = \
 libTrackingDiagnostics_la_SOURCES = \
   Tpc_ModuleTrackDisplay.cc \
   Tpc_AssembledTrackDisplay.cc \
+  SiTpc_EventDisplay.cc \
   Tpc_PolyClusterDisplay.cc \
   Tpc_PolyClusterResiduals.cc \
   TpcV0CandidateTree.cc \
@@ -61,7 +63,8 @@ libTrackingDiagnostics_la_LIBADD = \
   -ltrack_io \
   -ltrackeralign \
   -ltrackbase_historic_io \
-  -ltpctrackreco
+  -ltpctrackreco \
+  -lsitrackreco
 
 BUILT_SOURCES = testexternals.cc
 
