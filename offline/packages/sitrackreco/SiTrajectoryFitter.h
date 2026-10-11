@@ -49,13 +49,22 @@ class SiTrajectoryFitter : public SubsysReco
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
   // step 2: position of the detector-frame origin in the global frame
   void setDetectorCenterMm(double x, double y, double z = 0.0) { m_frame.setDetectorCenterMm(x, y, z); }
-  // Beam-axis alignment of the two clamshell halves (SiTpcBeamAlignment, default: values of
-  // si_alignment_new3.pdf).  With it on, the beam is at (0, 0): keep setBeamPositionCm(0, 0).
+  // step 3: Si clamshell half A / B moved onto the TPC beam axis (SiTpcBeamAlignment, default:
+  // VertexDCAAlignmentQA_All.pdf + si_alignment_new3.pdf).  The fit points are then in the TPC
+  // frame, the beam is on the TPC beam axis.
   void setBeamAlignment(const SiTpcBeamAlignment& a) { m_alignment = a; }
   void setApplyBeamAlignment(bool v) { m_alignment.setEnabled(v); }
   const SiTpcBeamAlignment& beamAlignment() const { return m_alignment; }
-  // beam position (cm, frame of the fit points) used for the perigee
-  void setBeamPositionCm(double x, double y) { m_beamX = x; m_beamY = y; }
+  // Beam position (cm, frame of the fit points) used for the perigee and the beam constraint.
+  // Default: the TPC beam axis at z = 0 from the alignment object.  Calling this overrides it.
+  void setBeamPositionCm(double x, double y)
+  {
+    m_beamX = x;
+    m_beamY = y;
+    m_beamFromAlignment = false;
+  }
+  double beamX() const { return m_beamFromAlignment ? m_alignment.referenceBeamX() : m_beamX; }
+  double beamY() const { return m_beamFromAlignment ? m_alignment.referenceBeamY() : m_beamY; }
   // solenoid field [T], signed: only used for pt and charge
   void setBz(double tesla) { m_bz = tesla; }
 
@@ -123,6 +132,7 @@ class SiTrajectoryFitter : public SubsysReco
   SiTpcBeamAlignment m_alignment;
   double m_beamX = 0.0;
   double m_beamY = 0.0;
+  bool m_beamFromAlignment = true;
   double m_bz = 1.4;
   bool m_useIntt = true;
   unsigned int m_minPoints = 3;

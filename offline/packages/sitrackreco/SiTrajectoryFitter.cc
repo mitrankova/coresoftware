@@ -31,7 +31,7 @@ int SiTrajectoryFitter::InitRun(PHCompositeNode* topNode)
     const auto& c = m_frame.detectorCenterCm();
     std::cout << Name() << ": Uphi rotation " << m_frame.uphiRotation() << " rad"
               << ", detector centre (" << 10 * c[0] << ", " << 10 * c[1] << ", " << 10 * c[2] << ") mm"
-              << ", beam (" << m_beamX << ", " << m_beamY << ") cm"
+              << ", beam (" << beamX() << ", " << beamY() << ") cm" << (m_beamFromAlignment ? " (TPC beam axis)" : "")
               << ", Bz " << m_bz << " T"
               << ", use INTT " << m_useIntt << ", min points " << m_minPoints
               << ", straight line if radial lever arm < " << m_minCurvatureLeverArm << " cm"
@@ -39,12 +39,19 @@ int SiTrajectoryFitter::InitRun(PHCompositeNode* topNode)
               << ", z weights MVTX/INTT " << m_zWeightMvtx << "/" << m_zWeightIntt << std::endl;
     if (m_alignment.enabled())
     {
-      const char* names[] = {"TPC", "Si half A", "Si half B"};
-      for (int part = SiTpcBeamAlignment::SiHalfA; part <= SiTpcBeamAlignment::SiHalfB; ++part)
+      const char* names[] = {"TPC      ", "Si half A", "Si half B"};
+      std::cout << Name() << ":   beam axes (Si in the global frame), Si halves moved onto the TPC beam axis:" << std::endl;
+      for (int part = SiTpcBeamAlignment::Tpc; part <= SiTpcBeamAlignment::SiHalfB; ++part)
       {
         const auto& l = m_alignment.beamLine(part);
-        std::cout << Name() << ":   beam-axis alignment " << names[part] << ": x0 " << 10 * l.x0 << " mm, y0 "
-                  << 10 * l.y0 << " mm, dx/dz " << 1e3 * l.dxdz << " mrad, dy/dz " << 1e3 * l.dydz << " mrad" << std::endl;
+        std::cout << Name() << ":     " << names[part] << ": x0 " << 10 * l.x0 << " mm, y0 "
+                  << 10 * l.y0 << " mm, dx/dz " << 1e3 * l.dxdz << " mrad, dy/dz " << 1e3 * l.dydz << " mrad";
+        if (part != SiTpcBeamAlignment::Tpc)
+        {
+          std::cout << "  -> correction at z=0: dx " << -10 * m_alignment.siOffsetX(part, 0) << " mm, dy "
+                    << -10 * m_alignment.siOffsetY(part, 0) << " mm";
+        }
+        std::cout << std::endl;
       }
     }
     else
@@ -214,8 +221,9 @@ std::vector<SiTrajectoryFitter::LayerPoint> SiTrajectoryFitter::layerPoints(
     const SiDetectorFrame::Point det{r * std::cos(phi), r * std::sin(phi), s.z / s.n};
     LayerPoint p;
     p.layer = layer;
-    // step 2: detector shift (global frame); step 3: beam-axis alignment of its clamshell half
-    p.global = m_alignment.toBeamAxis(m_alignment.siHalf(phi - m_frame.uphiRotation()), m_frame.toGlobal(det));
+    // step 2: detector shift (global frame); step 3: its clamshell half onto the TPC beam axis
+    const SiDetectorFrame::Point glob = m_frame.toGlobal(det);
+    p.global = m_alignment.siHalfToTpcAxis(m_alignment.siHalf(phi - m_frame.uphiRotation()), glob);
     p.nhits = s.n;
     out.push_back(p);
   }
@@ -231,8 +239,8 @@ void SiTrajectoryFitter::fit(const std::vector<LayerPoint>& points, Si_Trajector
     pts.push_back({p.global.x, p.global.y, p.global.z, 1.0, p.layer <= 2 ? m_zWeightMvtx : m_zWeightIntt, 0});
   }
   SiTpcHelixFit::Config cfg;
-  cfg.beamX = m_beamX;
-  cfg.beamY = m_beamY;
+  cfg.beamX = beamX();
+  cfg.beamY = beamY();
   cfg.bz = m_bz;
   cfg.minLeverArm = m_minCurvatureLeverArm;
   cfg.beamWeight = m_beamConstraint ? m_beamWeight : 0.0;
