@@ -17,7 +17,8 @@
 // plus a straight line in (s, z).  The payload is implemented by versioned classes
 // (Si_Trajectoryv1, ...) so the on-disk schema can evolve without changing this interface.
 //
-// Units: cm, rad, GeV.  All positions are in the GLOBAL frame (after the detector shift).
+// Units: cm, rad, GeV.  All positions are in the GLOBAL frame (after the detector shift), and with the
+// beam-axis alignment on (SiTpcBeamAlignment) in the TPC frame: clamshell half moved onto the TPC beam axis.
 //
 // Conventions
 //   helicity  +1: the trajectory turns counter-clockwise (seen from +z) while moving outward,

@@ -806,29 +806,8 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
   }
 
-  // TPC -> beam-axis frame (after the track sampling, which works in the TPC's own frame)
-  if (m_alignment.enabled())
-  {
-    auto alignTpc = [&](XYZ& p)
-    {
-      const auto b = m_alignment.tpcToBeamAxis(p.x, p.y, p.z);
-      p = {b.x, b.y, b.z};
-    };
-    for (auto& [id, pts] : tpcClustersById)
-    {
-      std::for_each(pts.begin(), pts.end(), alignTpc);
-    }
-    for (auto& l : tpcLines)
-    {
-      std::for_each(l.pts.begin(), l.pts.end(), alignTpc);
-      std::for_each(l.ext.begin(), l.ext.end(), alignTpc);
-    }
-    for (auto& [color, p] : tpcPca)
-    {
-      alignTpc(p);
-    }
-    std::for_each(tpcCollision.begin(), tpcCollision.end(), alignTpc);
-  }
+  // TPC: reference frame of the beam-axis alignment, clusters / tracks / vertices are drawn as
+  // reconstructed (SiTpcBeamAlignment::tpcToTpcFrame is the identity).  Only the Si is moved.
 
   if ((m_requireSiTraj && siTrajs.empty()) || (m_requireTpcTrack && tpcLines.empty()))
   {
@@ -861,7 +840,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       {
         continue;
       }
-      const auto g = m_alignment.siToBeamAxis(m_frame, h.layer, h.phi, h.z);
+      const auto g = m_alignment.siToTpcFrame(m_frame, h.layer, h.phi, h.z);
       if (!onChain[i])
       {
         siFreeHits.push_back({g.x, g.y, g.z});
@@ -876,7 +855,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
           continue;
         }
         const auto& h = m_siSeeds->hits[hid];
-        const auto g = m_alignment.siToBeamAxis(m_frame, h.layer, h.phi, h.z);
+        const auto g = m_alignment.siToTpcFrame(m_frame, h.layer, h.phi, h.z);
         siChainHits[chain.id].push_back({g.x, g.y, g.z});
       }
     }
@@ -958,11 +937,11 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       dt.color = d.color;
       for (int l = SiDetectorFrame::kNLayers - 1; l >= 0; --l)
       {
-        // the trajectory is in the beam-axis frame: undo the beam-axis alignment and the
-        // detector shift to get the crossing with the nominal layer in the detector frame
+        // the trajectory is in the TPC frame: undo the move of the clamshell half onto the TPC
+        // beam axis and the detector shift to get the crossing with the nominal layer
         auto toDet = [&](const XYZ& b)
         {
-          const auto dp = m_frame.toDetectorFromGlobal(m_alignment.siBeamAxisToGlobal(m_frame, {b.x, b.y, b.z}));
+          const auto dp = m_frame.toDetectorFromGlobal(m_alignment.siTpcFrameToGlobal(m_frame, {b.x, b.y, b.z}));
           return XYZ{dp.x, dp.y, dp.z};
         };
         XYZ g;
@@ -1238,7 +1217,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       h3->SetStats(false);
       h3->Draw();
       drawEverything3D(true);
-      draw_markers_zxy({{m_beamX, m_beamY, 0.0}}, kBlack, 29, 1.5);
+      draw_markers_zxy({{beamX(), beamY(), 0.0}}, kBlack, 29, 1.5);
       write_and_delete(c);
     }
   }
@@ -1305,13 +1284,13 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     // x-y, silicon zoom
     {
       auto* c = new TCanvas(("c_" + tag + "_phys_xy_si").c_str(), (title + " x-y silicon").c_str(), 1000, 1000);
-      c->DrawFrame(-kSiZoomR, -kSiZoomR, kSiZoomR, kSiZoomR, (title + (m_alignment.enabled() ? " silicon (beam-axis frame)" : " silicon (global frame)") + ";x [cm];y [cm]").c_str());
+      c->DrawFrame(-kSiZoomR, -kSiZoomR, kSiZoomR, kSiZoomR, (title + (m_alignment.enabled() ? " silicon (TPC frame, Si halves on TPC beam axis)" : " silicon (global frame)") + ";x [cm];y [cm]").c_str());
       // nominal layers: one half circle per clamshell half, around the position of the
-      // detector centre after the shift and that half's beam-axis alignment (at z = 0)
+      // detector centre after the shift and the move of that half onto the TPC beam axis (z = 0)
       const double phiA = (m_alignment.clamshellBoundary() + m_frame.uphiRotation()) * 180.0 / kPi;
       for (int half = SiTpcBeamAlignment::SiHalfA; half <= SiTpcBeamAlignment::SiHalfB; ++half)
       {
-        const auto cen = m_alignment.toBeamAxis(half, {center[0], center[1], 0.0});
+        const auto cen = m_alignment.siHalfToTpcAxis(half, {center[0], center[1], 0.0});
         const double phi0 = phiA + (half == SiTpcBeamAlignment::SiHalfA ? 0.0 : 180.0);
         for (int l = 0; l < SiDetectorFrame::kNLayers; ++l)
         {
@@ -1329,10 +1308,10 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
         det->Draw();
       }
       drawEverything2D(0, true);
-      auto* beam = owned(new TMarker(m_beamX, m_beamY, 29));
+      auto* beam = owned(new TMarker(beamX(), beamY(), 29));
       beam->SetMarkerSize(2.0);
       beam->Draw();
-      auto* tx = owned(new TLatex(0.12, 0.92, std::format("#star beam   #times/+ detector centre half A/B   shift ({:.1f}, {:.1f}) mm, beam-axis alignment {}   {}",
+      auto* tx = owned(new TLatex(0.12, 0.92, std::format("#star beam (TPC beam axis)   #times/+ detector centre half A/B   shift ({:.1f}, {:.1f}) mm, Si halves on TPC beam axis {}   {}",
                                                           10 * center[0], 10 * center[1], m_alignment.enabled() ? "on" : "off", siSummary)
                                                   .c_str()));
       tx->SetNDC();

@@ -49,11 +49,11 @@ class SiTpc_TrackContainer;
 //   c_evtN_phys_z_r         z vs radius, everything
 //   Optional (setDrawSiTpcTracks): fitted Si+TPC tracks as solid lines in all physics views.
 //
-// Coordinates of the physics views: BEAM-AXIS frame (SiTpcBeamAlignment), beam at (0, 0).
-//   Si : hit (Uphi, Vz) -> detector frame -> detector shift (SiDetectorFrame) -> beam axis of
-//        its clamshell half.  Keep the same settings as SiTrajectoryFitter.
-//   TPC: clusters, poly tracks, pca and collision vertices -> beam axis with the TPC beam line.
-// setApplyBeamAlignment(false) shows the old frames (Si global frame, TPC as reconstructed).
+// Coordinates of the physics views: TPC frame (SiTpcBeamAlignment), beam on the TPC beam axis.
+//   TPC: clusters, poly tracks, pca and collision vertices as reconstructed (reference).
+//   Si : hit (Uphi, Vz) -> detector frame -> detector shift (SiDetectorFrame) -> its clamshell
+//        half moved onto the TPC beam axis.  Keep the same settings as SiTrajectoryFitter.
+// setApplyBeamAlignment(false) shows the Si in the global frame (only the detector shift).
 // Colours: Si seed and its trajectory share a colour (chain id); a TPC poly cluster and its
 // poly track share a colour (assembled track id).  Si hits are squares, TPC clusters circles.
 class SiTpc_EventDisplay : public SubsysReco
@@ -99,10 +99,16 @@ class SiTpc_EventDisplay : public SubsysReco
   // ---- Si frame (must match SiTrajectoryFitter)
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
   void setDetectorCenterMm(double x, double y, double z = 0.0) { m_frame.setDetectorCenterMm(x, y, z); }
-  void setBeamPositionCm(double x, double y) { m_beamX = x; m_beamY = y; }
-  // Beam-axis alignment of TPC and the two Si clamshell halves (SiTpcBeamAlignment, default:
-  // values of the vertex QA PDFs).  Must be the same object as in SiTrajectoryFitter: the Si
-  // trajectories are fitted in the beam-axis frame.  With it on, the beam is at (0, 0).
+  // Beam marker position.  Default: TPC beam axis at z = 0 from the alignment object.
+  void setBeamPositionCm(double x, double y)
+  {
+    m_beamX = x;
+    m_beamY = y;
+    m_beamFromAlignment = false;
+  }
+  // Si clamshell halves moved onto the TPC beam axis (SiTpcBeamAlignment, default: values of
+  // the vertex QA PDFs).  Must be the same object as in SiTrajectoryFitter: the Si
+  // trajectories are fitted in the TPC frame.
   void setBeamAlignment(const SiTpcBeamAlignment& a) { m_alignment = a; }
   void setApplyBeamAlignment(bool v) { m_alignment.setEnabled(v); }
 
@@ -197,6 +203,9 @@ class SiTpc_EventDisplay : public SubsysReco
   SiTpcBeamAlignment m_alignment;
   double m_beamX = 0.0;
   double m_beamY = 0.0;
+  bool m_beamFromAlignment = true;
+  double beamX() const { return m_beamFromAlignment ? m_alignment.referenceBeamX() : m_beamX; }
+  double beamY() const { return m_beamFromAlignment ? m_alignment.referenceBeamY() : m_beamY; }
 
   bool m_siOnlyGood = true;
   double m_siMinPt = 0.0;

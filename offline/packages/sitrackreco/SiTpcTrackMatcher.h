@@ -21,8 +21,9 @@ class Tpc_PolyTrackContainer;
 // (TPC_POLYTRACKS + their TPC_POLYCLUSTERS) in phi and eta, and refits every matched pair
 // with all its points.  Output: SiTpc_TrackContainerv1 "SITPC_TRACKS" under DST/SVTX.
 //
-// Frame: beam-axis frame (SiTpcBeamAlignment).  The Si trajectories are already in it (use the
-// same alignment object in SiTrajectoryFitter); the TPC clusters are moved into it here.
+// Frame: TPC frame (SiTpcBeamAlignment).  The TPC clusters are used as measured; the Si
+// trajectories are already in it (SiTrajectoryFitter moves both clamshell halves onto the TPC
+// beam axis - use the same alignment object there).  Beam = TPC beam axis.
 //
 // 1. TPC-only helix: SiTpcHelixFit on the track's clusters (same model as the Si fit), so
 //    both sides are described the same way at their point of closest approach to the beam.
@@ -55,13 +56,20 @@ class SiTpcTrackMatcher : public SubsysReco
   void setOutputNodeName(const std::string& s) { m_outputNodeName = s; }
 
   // ---- frame (same object as in SiTrajectoryFitter / SiTpc_EventDisplay)
+  // Common frame = TPC frame: TPC clusters are used as measured, the Si trajectories come from
+  // SiTrajectoryFitter with both clamshell halves already moved onto the TPC beam axis.
   void setBeamAlignment(const SiTpcBeamAlignment& a) { m_alignment = a; }
   void setApplyBeamAlignment(bool v) { m_alignment.setEnabled(v); }
+  // Beam position for the perigee / beam constraint.  Default: TPC beam axis at z = 0 from the
+  // alignment object.  Calling this overrides it.
   void setBeamPositionCm(double x, double y)
   {
     m_beamX = x;
     m_beamY = y;
+    m_beamFromAlignment = false;
   }
+  double beamX() const { return m_beamFromAlignment ? m_alignment.referenceBeamX() : m_beamX; }
+  double beamY() const { return m_beamFromAlignment ? m_alignment.referenceBeamY() : m_beamY; }
   void setBz(double tesla) { m_bz = tesla; }
 
   // ---- matching
@@ -107,6 +115,7 @@ class SiTpcTrackMatcher : public SubsysReco
   SiTpcBeamAlignment m_alignment;
   double m_beamX = 0.0;
   double m_beamY = 0.0;
+  bool m_beamFromAlignment = true;
   double m_bz = 1.4;
 
   double m_dphiWindow = 0.05;

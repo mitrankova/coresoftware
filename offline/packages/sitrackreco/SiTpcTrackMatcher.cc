@@ -94,8 +94,8 @@ int SiTpcTrackMatcher::InitRun(PHCompositeNode* topNode)
     }
     std::cout << (m_sameCharge ? ", same charge" : "") << "; refit weights xy (MVTX/INTT/TPC) " << m_wxy[0] << "/"
               << m_wxy[1] << "/" << m_wxy[2] << ", z " << m_wz[0] << "/" << m_wz[1] << "/" << m_wz[2]
-              << ", TPC z offset " << (m_fitTpcZOffset ? "free" : "fixed") << ", beam alignment "
-              << (m_alignment.enabled() ? "on" : "off") << std::endl;
+              << ", TPC z offset " << (m_fitTpcZOffset ? "free" : "fixed") << ", Si halves on TPC beam axis "
+              << (m_alignment.enabled() ? "on" : "off") << ", beam (" << beamX() << ", " << beamY() << ") cm" << std::endl;
   }
   return createNodes(topNode);
 }
@@ -172,7 +172,7 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
     si.push_back(s);
   }
 
-  // ---- TPC side: clusters per assembled track, beam-axis frame, TPC-only helix
+  // ---- TPC side: clusters per assembled track, TPC frame, TPC-only helix
   std::map<unsigned int, std::vector<TpcPoint>> clustersById;
   for (unsigned int i = 0; i < clusters->size(); ++i)
   {
@@ -181,7 +181,8 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
     {
       continue;
     }
-    const auto b = m_alignment.tpcToBeamAxis(c->get_centroid_x(), c->get_centroid_y(), c->get_centroid_z());
+    // TPC = reference frame: clusters as measured
+    const auto b = m_alignment.tpcToTpcFrame(c->get_centroid_x(), c->get_centroid_y(), c->get_centroid_z());
     if (!std::isfinite(b.x) || !std::isfinite(b.y) || !std::isfinite(b.z))
     {
       continue;
@@ -197,8 +198,8 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
   }
 
   SiTpcHelixFit::Config tpcCfg;
-  tpcCfg.beamX = m_beamX;
-  tpcCfg.beamY = m_beamY;
+  tpcCfg.beamX = beamX();
+  tpcCfg.beamY = beamY();
   tpcCfg.bz = m_bz;
   std::vector<TpcInfo> tpc;
   for (unsigned int i = 0; i < tracks->size(); ++i)
@@ -273,8 +274,8 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
   std::vector<char> siUsed(si.size(), 0), tpcUsed(tpc.size(), 0);
 
   SiTpcHelixFit::Config cfg;
-  cfg.beamX = m_beamX;
-  cfg.beamY = m_beamY;
+  cfg.beamX = beamX();
+  cfg.beamY = beamY();
   cfg.bz = m_bz;
   cfg.groupZOffset = m_fitTpcZOffset;
   cfg.beamWeight = m_beamConstraint ? m_beamWeight : 0.0;

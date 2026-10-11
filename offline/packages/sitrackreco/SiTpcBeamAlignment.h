@@ -8,24 +8,32 @@
 #include <array>
 #include <cmath>
 
-// Alignment of the TPC and of the two silicon clamshell halves with respect to the beam axis.
+// Beam-axis alignment of the two silicon clamshell halves to the TPC.
 //
-// Each part has its own measured beam line (from the vertex x vs z / y vs z fits):
-//     x_beam(z) = x0 + dxdz * z ,   y_beam(z) = y0 + dydz * z
-// and the correction moves that line onto the z axis:
-//     x' = x - x_beam(z) ,  y' = y - y_beam(z) ,  z' = z
-// (shear form; the slopes are ~1 mrad, so this equals the rotation to O(1e-6)).
-// After the correction the beam is at (0, 0) for every part, so TPC and Si are in one frame.
+// ---- 1. The beam axes (measured, one per part)
+// Every part has its own beam axis, measured from its vertices (linear fits of the vertex
+// x vs z and y vs z):
+//     x_axis(z) = x0 + dxdz * z ,   y_axis(z) = y0 + dydz * z
+//   TPC      : VertexDCAAlignmentQA_All.pdf                                  [cm]
+//   Si half A: si_alignment_new3.pdf, half A, global frame (translated), p. 9 [mm]
+//   Si half B: si_alignment_new3.pdf, half B, global frame (translated), p.10 [mm]
+// The TPC beam axis is the REFERENCE.
 //
-// Silicon transformation chain, every step separate:
-//   1. intrinsic (Uphi, Vz)  -> DETECTOR frame        SiDetectorFrame::toDetector
-//   2. DETECTOR frame        -> GLOBAL frame          SiDetectorFrame::toGlobal: the
-//                                                     independent +6, -1 mm detector shift
-//   3. GLOBAL frame          -> BEAM-AXIS frame       this class, per clamshell half
-// The Si beam lines are therefore given in the GLOBAL (translated) frame, i.e. measured
-// after step 2 (si_alignment_new3.pdf pages 9-10, summary on the last page).  If the
-// detector shift is changed, the Si beam lines have to be re-measured.
-// TPC: TPC coordinates -> BEAM-AXIS frame with the TPC beam line.
+// ---- 2. The transformation (Si half -> TPC beam axis)
+// Each Si clamshell half is moved so that its beam axis coincides with the TPC beam axis:
+//     dx(z) = x_half(z) - x_tpc(z) ,   dy(z) = y_half(z) - y_tpc(z)
+//     x' = x - dx(z) ,  y' = y - dy(z) ,  z' = z
+// (shear form; the slope differences are ~1 mrad, equal to the rotation to O(1e-6)).
+// The TPC is not transformed (identity): the common frame is the TPC frame, the beam is on
+// the TPC beam axis (x_tpc(z), y_tpc(z)), NOT at (0, 0).  Fits use the TPC beam axis as
+// beam position (referenceBeamX/Y).
+//
+// Silicon chain, every step separate:
+//   a. intrinsic (Uphi, Vz) -> DETECTOR frame   SiDetectorFrame::toDetector
+//   b. DETECTOR frame       -> GLOBAL frame     SiDetectorFrame::toGlobal (+6, -1 mm shift)
+//   c. GLOBAL frame         -> TPC frame        this class: half A or B onto the TPC beam axis
+// The Si beam axes are measured in the GLOBAL frame (after step b).  If the detector shift
+// is changed, they have to be re-measured.
 //
 // Clamshell halves as in SiHitSeedQA: half A for Uphi in [B, B+pi), half B for
 // [B+pi, B+2pi), B = clamshell boundary in intrinsic Uphi (default 0).
@@ -54,33 +62,63 @@ class SiTpcBeamAlignment
 
   using Point = SiDetectorFrame::Point;
 
-  // Values from the vertex QA (linear fits of the Crystal-Ball slice centres):
-  //   TPC   : VertexDCAAlignmentQA_All.pdf                       x(z), y(z) [cm]
-  //   Si A/B: si_alignment_new3.pdf, "SiHitSeed half A/B, global frame (translated)",
-  //           pages 9-10 (summary on the last page)               x(z), y(z) [mm]
-  // measured with the Si detector shift (+6, -1) mm and clamshell boundary B = 0.
   SiTpcBeamAlignment()
   {
-    setBeamLineCm(Tpc, -0.106835, 0.267482, 8.478616e-04, -8.041254e-04);
-    setBeamLineMm(SiHalfA, -0.533300, 1.772693, 7.094553e-04, -2.743455e-04);
-    setBeamLineMm(SiHalfB, 0.595174, 1.608226, 2.343532e-03, 6.926381e-04);
+    // ---- 1. beam axes (defaults = vertex QA PDFs, Si shift (+6, -1) mm, boundary B = 0)
+    //                    x0          y0          dx/dz          dy/dz
+    setTpcBeamAxisCm(-0.106835, 0.267482, 8.478616e-04, -8.041254e-04);
+    setSiBeamAxisMm(SiHalfA, -0.533300, 1.772693, 7.094553e-04, -2.743455e-04);
+    setSiBeamAxisMm(SiHalfB, 0.595174, 1.608226, 2.343532e-03, 6.926381e-04);
   }
 
-  // ---- configuration
-  void setEnabled(bool v) { m_enabled = v; }  // false: identity (only the detector shift remains)
-  bool enabled() const { return m_enabled; }
+  // =========================================================================================
+  // 1. beam axes
+  // =========================================================================================
+  void setTpcBeamAxisCm(double x0, double y0, double dxdz, double dydz)
+  {
+    m_axis[Tpc] = {x0, y0, dxdz, dydz};
+  }
+  void setTpcBeamAxisMm(double x0, double y0, double dxdz, double dydz)
+  {
+    setTpcBeamAxisCm(0.1 * x0, 0.1 * y0, dxdz, dydz);
+  }
+  void setSiBeamAxisCm(int half, double x0, double y0, double dxdz, double dydz)
+  {
+    if (half == SiHalfA || half == SiHalfB)
+    {
+      m_axis[half] = {x0, y0, dxdz, dydz};
+    }
+  }
+  void setSiBeamAxisMm(int half, double x0, double y0, double dxdz, double dydz)
+  {
+    setSiBeamAxisCm(half, 0.1 * x0, 0.1 * y0, dxdz, dydz);
+  }
+  // generic form (part = Tpc, SiHalfA, SiHalfB)
   void setBeamLineCm(int part, double x0, double y0, double dxdz, double dydz)
   {
     if (part >= 0 && part < NParts)
     {
-      m_line[part] = {x0, y0, dxdz, dydz};
+      m_axis[part] = {x0, y0, dxdz, dydz};
     }
   }
   void setBeamLineMm(int part, double x0, double y0, double dxdz, double dydz)
   {
     setBeamLineCm(part, 0.1 * x0, 0.1 * y0, dxdz, dydz);
   }
-  const BeamLine& beamLine(int part) const { return m_line[part]; }
+
+  const BeamLine& tpcBeamAxis() const { return m_axis[Tpc]; }
+  const BeamLine& siBeamAxis(int half) const { return m_axis[half]; }
+  const BeamLine& beamLine(int part) const { return m_axis[part]; }
+
+  // Beam position in the common (TPC) frame = TPC beam axis.  Used as beam / perigee
+  // reference by the fits.
+  double referenceBeamX(double z = 0.0) const { return m_axis[Tpc].x(z); }
+  double referenceBeamY(double z = 0.0) const { return m_axis[Tpc].y(z); }
+
+  // ---- other configuration
+  // false: no Si correction (Si stays in the GLOBAL frame after the detector shift)
+  void setEnabled(bool v) { m_enabled = v; }
+  bool enabled() const { return m_enabled; }
   // Clamshell boundary in intrinsic Uphi [rad], must match the one used for the Si fits.
   void setClamshellBoundary(double uphi) { m_boundary = uphi; }
   double clamshellBoundary() const { return m_boundary; }
@@ -96,59 +134,67 @@ class SiTpcBeamAlignment
     }
     return u < M_PI ? SiHalfA : SiHalfB;
   }
-  // half of a point given in the GLOBAL or BEAM-AXIS frame (Uphi from its azimuth around the
-  // detector centre; the alignment moves points by < 1 mm, far from the boundary for hits)
+  // half of a point given in the GLOBAL or TPC frame (Uphi from its azimuth around the
+  // detector centre; the correction moves points by ~1 mm, far from the boundary for hits)
   int siHalfOfGlobal(const SiDetectorFrame& frame, const Point& g) const
   {
     const Point d = frame.toDetectorFromGlobal(g);
     return siHalf(std::atan2(d.y, d.x) - frame.uphiRotation());
   }
 
-  // ---- step 3 and its inverse for one part
-  Point toBeamAxis(int part, const Point& p) const
+  // =========================================================================================
+  // 2. transformation: Si half beam axis -> TPC beam axis
+  // =========================================================================================
+  // Offset of the Si half beam axis from the TPC beam axis at z: dx = x_half - x_tpc, dy = ...
+  double siOffsetX(int half, double z) const { return m_axis[half].x(z) - m_axis[Tpc].x(z); }
+  double siOffsetY(int half, double z) const { return m_axis[half].y(z) - m_axis[Tpc].y(z); }
+
+  // Si point of one half: GLOBAL frame -> TPC frame
+  Point siHalfToTpcAxis(int half, const Point& g) const
   {
-    if (!m_enabled)
+    if (!m_enabled || (half != SiHalfA && half != SiHalfB))
     {
-      return p;
+      return g;
     }
-    const BeamLine& l = m_line[part];
-    return {p.x - l.x(p.z), p.y - l.y(p.z), p.z};
+    return {g.x - siOffsetX(half, g.z), g.y - siOffsetY(half, g.z), g.z};
   }
-  Point fromBeamAxis(int part, const Point& p) const
+  // inverse: TPC frame -> GLOBAL frame
+  Point siHalfFromTpcAxis(int half, const Point& t) const
   {
-    if (!m_enabled)
+    if (!m_enabled || (half != SiHalfA && half != SiHalfB))
     {
-      return p;
+      return t;
     }
-    const BeamLine& l = m_line[part];
-    return {p.x + l.x(p.z), p.y + l.y(p.z), p.z};
+    return {t.x + siOffsetX(half, t.z), t.y + siOffsetY(half, t.z), t.z};
   }
 
-  // ---- full chains
-  // TPC point (TPC/global coordinates) -> beam-axis frame
-  Point tpcToBeamAxis(const Point& p) const { return toBeamAxis(Tpc, p); }
-  Point tpcToBeamAxis(double x, double y, double z) const { return toBeamAxis(Tpc, {x, y, z}); }
+  // TPC point: the TPC frame is the reference, identity (kept so the chain is explicit)
+  Point tpcToTpcFrame(const Point& p) const { return p; }
+  Point tpcToTpcFrame(double x, double y, double z) const { return {x, y, z}; }
 
-  // Si hit on a layer: intrinsic (Uphi, Vz) -> detector -> global (shift) -> beam axis
-  Point siToBeamAxis(const SiDetectorFrame& frame, int layer, double uphi, double vz) const
+  // ---- full Si chains
+  // Si hit: intrinsic (Uphi, Vz) -> a. detector -> b. global (shift) -> c. TPC frame
+  Point siToTpcFrame(const SiDetectorFrame& frame, int layer, double uphi, double vz) const
   {
-    return toBeamAxis(siHalf(uphi), frame.toGlobal(frame.toDetector(layer, uphi, vz)));
+    const Point det = frame.toDetector(layer, uphi, vz);  // a
+    const Point glob = frame.toGlobal(det);               // b
+    return siHalfToTpcAxis(siHalf(uphi), glob);           // c
   }
-  // Si point already in the global frame (after the shift), half from its own Uphi
-  Point siGlobalToBeamAxis(const SiDetectorFrame& frame, const Point& g) const
+  // Si point already in the GLOBAL frame, half from its own Uphi
+  Point siGlobalToTpcFrame(const SiDetectorFrame& frame, const Point& g) const
   {
-    return toBeamAxis(siHalfOfGlobal(frame, g), g);
+    return siHalfToTpcAxis(siHalfOfGlobal(frame, g), g);
   }
-  // Inverse for display: beam-axis frame -> global frame (half from the point's Uphi)
-  Point siBeamAxisToGlobal(const SiDetectorFrame& frame, const Point& b) const
+  // inverse for display: TPC frame -> GLOBAL frame (half from the point's Uphi)
+  Point siTpcFrameToGlobal(const SiDetectorFrame& frame, const Point& t) const
   {
-    return fromBeamAxis(siHalfOfGlobal(frame, b), b);
+    return siHalfFromTpcAxis(siHalfOfGlobal(frame, t), t);
   }
 
  private:
   bool m_enabled = true;
   double m_boundary = 0.0;
-  std::array<BeamLine, NParts> m_line{};
+  std::array<BeamLine, NParts> m_axis{};
 };
 
 #endif

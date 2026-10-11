@@ -12,7 +12,7 @@
 // one TPC poly track, refitted with the Si layer points and the TPC clusters together.
 // The payload is implemented by versioned classes (SiTpc_Trackv1, ...).
 //
-// Frame: beam-axis frame of SiTpcBeamAlignment (beam at (0, 0)).  Units cm, rad, GeV.
+// Frame: TPC frame of SiTpcBeamAlignment (Si halves on the TPC beam axis, beam on it).  Units cm, rad, GeV.
 // Helix conventions as Si_Trajectory / SiTpcHelixFit (helicity, charge, signed dca, z(s)).
 // TPC z: the refit can have a free z offset for the TPC points (bunch crossing / t0 not
 // known): TPC point z = z0 + tanl * s + tpc_z_offset.
@@ -120,7 +120,7 @@ class SiTpc_Track : public PHObject
   double get_theta() const { return std::atan2(1.0, get_tanl()); }
   double get_p() const { return get_pt() * std::sqrt(1.0 + get_tanl() * get_tanl()); }
 
-  // ---- fit points (beam-axis frame, TPC z as measured, i.e. without the offset)
+  // ---- fit points (TPC frame, TPC z as measured, i.e. without the offset)
   //   type SiPoint : layer 0-6, source = Si_Trajectory point index
   //   type TpcPoint: layer = TPC layer, source = index in TPC_POLYCLUSTERS
   virtual void add_point(int /*type*/, int /*layer*/, unsigned int /*source*/, float /*x*/, float /*y*/, float /*z*/) {}
