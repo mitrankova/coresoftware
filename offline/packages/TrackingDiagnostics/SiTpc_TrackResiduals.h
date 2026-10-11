@@ -24,10 +24,10 @@ class TTree;
 //     delta_phi = phi_point - phi_state, residual_rphi = r * delta_phi,
 //     residual_z = z_point - [tpc_z_offset for TPC points] - z_state;
 //     cluster_adc, cluster_pad_size (TPC points, from TPC_POLYCLUSTERS if present).
-//   Frame: beam-axis frame of the matcher (TPC z as measured, offset in residual_z).
+//   Frame: TPC frame of the matcher (Si halves on the TPC beam axis) (TPC z as measured, offset in residual_z).
 //   Per track also:
 //     n_mvtx, n_intt, n_tpc          number of fit points per detector
-//     x0, y0, z0                     point of closest approach to the beam (beam-axis frame)
+//     x0, y0, z0                     point of closest approach to the beam (TPC frame)
 //     res_rphi_layer[55], res_z_layer[55]
 //                                    residual of the fit at each layer, index = layer
 //                                    (0-2 MVTX, 3-6 INTT, 7-54 TPC); NaN if the track has no
