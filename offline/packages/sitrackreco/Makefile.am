@@ -33,7 +33,17 @@ pkginclude_HEADERS = \
   SiTrajectoryFitter.h \
   SiHitSeedData.h \
   SiHitSeedReco.h \
-  SiHitSeedQA.h
+  SiHitSeedQA.h \
+  SiHitGeometryTable.h \
+  SiHitIndex.h \
+  SiTpcChainMath.h \
+  SiTpcHitMatch.h \
+  SiTpcHitMatchv1.h \
+  SiTpcHitMatchContainer.h \
+  SiTpcHitMatchContainerv1.h \
+  SiTpcHitChainMatcher.h \
+  SiTpcHitChainResolver.h \
+  SiTpcHitChainQA.h
 
 ROOTDICTS = \
   Si_Chain_Dict.cc \
@@ -47,7 +57,11 @@ ROOTDICTS = \
   SiTpc_Track_Dict.cc \
   SiTpc_Trackv1_Dict.cc \
   SiTpc_TrackContainer_Dict.cc \
-  SiTpc_TrackContainerv1_Dict.cc
+  SiTpc_TrackContainerv1_Dict.cc \
+  SiTpcHitMatch_Dict.cc \
+  SiTpcHitMatchv1_Dict.cc \
+  SiTpcHitMatchContainer_Dict.cc \
+  SiTpcHitMatchContainerv1_Dict.cc
 
 pcmdir = $(libdir)
 nobase_dist_pcm_DATA = $(ROOTDICTS:.cc=_rdict.pcm)
@@ -66,6 +80,11 @@ libsitrackreco_la_SOURCES = \
   SiTpcTrackMatcher.cc \
   SiHitSeedReco.cc \
   SiHitSeedQA.cc \
+  SiTpcHitMatchv1.cc \
+  SiTpcHitMatchContainerv1.cc \
+  SiTpcHitChainMatcher.cc \
+  SiTpcHitChainResolver.cc \
+  SiTpcHitChainQA.cc \
   $(ROOTDICTS)
 
 libsitrackreco_la_LIBADD = \
