@@ -1,6 +1,7 @@
 #ifndef SIHITSEEDRECO_H
 #define SIHITSEEDRECO_H
 
+#include "SiAlignmentTransform.h"
 #include "SiHitSeedData.h"
 
 #include <fun4all/SubsysReco.h>
@@ -30,6 +31,21 @@ class SiHitSeedReco : public SubsysReco
   void setMinMvtxLayers(int v) { m_minMvtxLayers = v; }
   void setMinInttLayers(int v) { m_minInttLayers = v; }
   void setRefitWithIntt(bool v) { m_refitWithIntt = v; }
+
+  // ---------------------------------------------------------------------------
+  // Silicon alignment (no ACTS): same parameters and transform as
+  // trackbase/AlignmentTransformation, applied to every MVTX/INTT hit and cluster
+  // before (Uphi, Vz) are used.  See SiAlignmentTransform.h.
+  //   setApplySiAlignment(true)                      -> enable (default off)
+  //   setSiAlignmentParamsFile("params.txt")         -> parameter file (required)
+  //   setUseNewSiliconRotationOrder(true)            -> as AlignmentTransformation flag
+  // The aligned 3D point is projected back onto the nominal layer cylinder:
+  //   Uphi = atan2(y', x') - rotation,  Vz = z'.
+  // ---------------------------------------------------------------------------
+  void setApplySiAlignment(bool v) { m_applyAlignment = v; }
+  void setSiAlignmentParamsFile(const std::string& f) { m_alignmentFile = f; }
+  void setUseNewSiliconRotationOrder(bool v) { m_alignment.setUseNewSiliconRotationOrder(v); }
+  const SiAlignmentTransform& alignment() const { return m_alignment; }
 
   // ---------------------------------------------------------------------------
   // Seed z window (outer MVTX hit -> next inner layer), in z bins:
@@ -130,6 +146,8 @@ class SiHitSeedReco : public SubsysReco
   };
 
   int createNodes(PHCompositeNode*);
+  int loadAlignment();
+  void alignPoint(TrkrDefs::hitsetkey hskey, int layer, double& z, double& phi) const;
   bool fillHits(PHCompositeNode*);
   void fillClusters(PHCompositeNode*);
   void buildBlobs();
@@ -168,6 +186,11 @@ class SiHitSeedReco : public SubsysReco
   int m_minMvtxLayers = 2;
   int m_minInttLayers = 0;
   bool m_refitWithIntt = false;
+
+  // silicon alignment
+  bool m_applyAlignment = false;
+  std::string m_alignmentFile;
+  SiAlignmentTransform m_alignment;
 
   // seed windows
   double m_seedPhiHalf = 2.0;
