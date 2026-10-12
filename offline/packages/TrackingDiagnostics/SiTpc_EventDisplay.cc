@@ -13,6 +13,8 @@
 #include <sitrackreco/SiTpcHelixFit.h>
 #include <sitrackreco/SiTpc_Track.h>
 #include <sitrackreco/SiTpc_TrackContainer.h>
+#include <sitrackreco/SiTpcHitMatch.h>
+#include <sitrackreco/SiTpcHitMatchContainer.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phool/PHCompositeNode.h>
@@ -36,11 +38,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <format>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace
@@ -593,6 +597,7 @@ void SiTpc_EventDisplay::get_nodes(PHCompositeNode* topNode)
   m_tpcTracks = m_drawTpc ? findNode::getClass<Tpc_PolyTrackContainer>(topNode, m_tpcTrackNodeName) : nullptr;
   m_tpcVertices = m_drawTpc ? findNode::getClass<Tpc_PolyTrackVertexContainer>(topNode, m_tpcVertexNodeName) : nullptr;
   m_siTpcTracks = findNode::getClass<SiTpc_TrackContainer>(topNode, m_siTpcTrackNodeName);
+  m_hitMatches = m_drawTpcDriven ? findNode::getClass<SiTpcHitMatchContainer>(topNode, m_tpcDrivenNodeName) : nullptr;
 
   if (Verbosity() > 0)
   {
@@ -600,7 +605,8 @@ void SiTpc_EventDisplay::get_nodes(PHCompositeNode* topNode)
               << ", Si trajectories " << (m_siTraj ? "yes" : "no")
               << ", TPC clusters " << (m_tpcClusters ? "yes" : "no")
               << ", TPC tracks " << (m_tpcTracks ? "yes" : "no")
-              << ", TPC vertices " << (m_tpcVertices ? "yes" : "no") << std::endl;
+              << ", TPC vertices " << (m_tpcVertices ? "yes" : "no")
+              << ", TPC-driven chains " << (m_hitMatches ? "yes" : "no") << std::endl;
   }
 }
 
@@ -691,6 +697,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
 
   struct TpcLine
   {
+    unsigned int id = 0;  // assembled track id
     int color = 0;
     std::vector<XYZ> pts;  // over the clusters (solid)
     std::vector<XYZ> ext;  // inward extension through the silicon (dashed), if requested
@@ -698,6 +705,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   std::map<unsigned int, std::vector<XYZ>> tpcClustersById;  // assembled track id -> clusters
   std::vector<TpcLine> tpcLines;
   std::vector<std::pair<int, XYZ>> tpcPca;
+  std::vector<unsigned int> tpcPcaId;  // assembled track id of each tpcPca entry
   std::vector<XYZ> tpcCollision;
   if (m_tpcClusters)
   {
@@ -763,6 +771,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       const double rev = cluster_line_residual2(trk, it->second, m_bz, -1.0, straight);
       const double arc = fwd <= rev ? 1.0 : -1.0;
       TpcLine line;
+      line.id = trk->get_source_assembled_track_id();
       line.color = tpcColor(trk->get_source_assembled_track_id());
       line.pts = sample_poly_track(trk, zlo, zhi, m_xymax, m_bz, arc, straight);
       if (line.pts.size() < 2)
@@ -791,6 +800,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z))
       {
         tpcPca.emplace_back(tpcColor(v->get_source_assembled_track_id()), p);
+        tpcPcaId.push_back(v->get_source_assembled_track_id());
       }
     }
     const unsigned int ncoll = (m_tpcVertices && m_tpcVertices->get_collision_vertex_valid())
@@ -1332,6 +1342,461 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
   }
 
+  // ==================================================================
+  // 3. TPC-driven silicon hit chains (SiTpcHitChainMatcher, SI_TPC_HITMATCHES)
+  //    The same canvases as above with the suffix "_tpcdriven"; the independent chaining above
+  //    is not changed.  Chain (solid) = attached hit groups; trajectory (dashed beyond the
+  //    silicon) = silicon chain helix with TPC radius / helicity / tan(lambda), anchored on the
+  //    groups (TPC frame, like the Si trajectories).
+  // ==================================================================
+  std::string hcSummary;
+  if (m_drawTpcDriven && m_hitMatches)
+  {
+    struct HcChain
+    {
+      const SiTpcHitMatch* m = nullptr;
+      int id = 0;
+      int color = 0;
+      Helix helix;
+      bool lowPt = false;
+      std::vector<P3> det;     // group centroids, detector coordinates, outermost layer first
+      std::vector<XYZ> points;  // group centroids, TPC frame (all groups, overlaps included)
+    };
+    std::vector<HcChain> hcChains;
+    std::map<unsigned int, int> tpcHcChain;  // assembled track id -> TPC-driven chain id
+    std::map<int, std::vector<XYZ>> hcChainHits;
+    std::vector<XYZ> hcFreeHits;
+    std::vector<char> hcOnChain(m_siSeeds ? m_siSeeds->hits.size() : 0, 0);
+    std::vector<int> hcChainOfHit(hcOnChain.size(), -1);
+    unsigned int nHcLowPt = 0, nHcHits = 0;
+
+    std::unordered_map<uint64_t, int> hitIndex;
+    if (m_siSeeds)
+    {
+      hitIndex.reserve(m_siSeeds->hits.size());
+      for (std::size_t i = 0; i < m_siSeeds->hits.size(); ++i)
+      {
+        const auto& h = m_siSeeds->hits[i];
+        hitIndex[(static_cast<uint64_t>(h.hitsetkey) << 32) | static_cast<uint64_t>(h.hitkey)] = static_cast<int>(i);
+      }
+    }
+
+    for (unsigned int i = 0; i < m_hitMatches->size(); ++i)
+    {
+      const SiTpcHitMatch* m = m_hitMatches->get_match(i);
+      if (!m || !m->isValid() || (m_tpcDrivenBestOnly && m->get_rank() != 0) ||
+          (m_tpcDrivenOnlySelected && !m->get_selected()))
+      {
+        continue;
+      }
+      HcChain c;
+      c.m = m;
+      c.id = static_cast<int>(m->get_id());
+      c.color = palette_color(c.id);
+      c.lowPt = m->get_tpc_pt() < m_siMinPt;  // same convention as the Si trajectories
+      nHcLowPt += c.lowPt;
+      if (c.lowPt && !m_drawLowPtSi)
+      {
+        continue;
+      }
+      c.helix.cx = m->get_si_circle_x();
+      c.helix.cy = m->get_si_circle_y();
+      c.helix.R = m->get_si_radius();
+      c.helix.h = m->get_si_helicity();
+      c.helix.z0 = m->get_si_z0();
+      c.helix.tanl = m->get_tpc_tanl();
+      c.helix.ok = std::isfinite(c.helix.cx) && std::isfinite(c.helix.cy) && std::isfinite(c.helix.R) && c.helix.R > 0 &&
+                   c.helix.h != 0 && std::isfinite(c.helix.z0) && std::isfinite(c.helix.tanl) &&
+                   std::isfinite(m->get_si_pca_x()) && std::isfinite(m->get_si_pca_y());
+      if (c.helix.ok)
+      {
+        c.helix.a0 = std::atan2(m->get_si_pca_y() - c.helix.cy, m->get_si_pca_x() - c.helix.cx);
+      }
+      // groups: detector-view chain from the main groups (no overlaps), outermost layer first
+      std::vector<SiTpcHitMatchStep> steps;
+      for (unsigned int k = 0; k < m->size_steps(); ++k)
+      {
+        steps.push_back(m->get_step(k));
+      }
+      std::sort(steps.begin(), steps.end(), [](const auto& a, const auto& b) { return a.layer > b.layer; });
+      for (const auto& st : steps)
+      {
+        if (!std::isfinite(st.u) || !std::isfinite(st.z) || st.layer < 0 || st.layer >= SiDetectorFrame::kNLayers)
+        {
+          continue;
+        }
+        const auto g = m_alignment.siToTpcFrame(m_frame, st.layer, st.u, st.z);
+        c.points.push_back({g.x, g.y, g.z});
+        if (!(st.flags & SiTpcHitMatchStep::Overlap))
+        {
+          c.det.push_back({st.z, st.u, static_cast<double>(st.layer)});
+        }
+      }
+      // hits
+      for (const auto& hk : m->get_hit_indices())
+      {
+        const auto it = hitIndex.find((static_cast<uint64_t>(hk.first) << 32) | static_cast<uint64_t>(hk.second));
+        if (it == hitIndex.end())
+        {
+          continue;
+        }
+        hcOnChain[it->second] = 1;
+        hcChainOfHit[it->second] = c.id;
+        ++nHcHits;
+      }
+      tpcHcChain[m->get_tpc_assembled_track_id()] = c.id;
+      hcChains.push_back(std::move(c));
+    }
+    if (m_siSeeds)
+    {
+      for (std::size_t i = 0; i < m_siSeeds->hits.size(); ++i)
+      {
+        const auto& h = m_siSeeds->hits[i];
+        if (h.layer < 0 || h.layer >= SiDetectorFrame::kNLayers)
+        {
+          continue;
+        }
+        const auto g = m_alignment.siToTpcFrame(m_frame, h.layer, h.phi, h.z);
+        if (hcOnChain[i])
+        {
+          hcChainHits[hcChainOfHit[i]].push_back({g.x, g.y, g.z});
+        }
+        else
+        {
+          hcFreeHits.push_back({g.x, g.y, g.z});
+        }
+      }
+    }
+    auto hcTpcColor = [&](unsigned int assembledId)
+    {
+      const auto it = tpcHcChain.find(assembledId);
+      return it != tpcHcChain.end() ? palette_color(it->second) : static_cast<int>(kGray + 1);
+    };
+    hcSummary = std::format("{} TPC-driven chains ({} hits), {} below {:.2f} GeV{}", hcChains.size(), nHcHits, nHcLowPt,
+                            m_siMinPt, m_drawLowPtSi ? " (dotted)" : " (hidden)");
+    const std::string sfx = "_tpcdriven";
+    const std::string hcTitle = title + " TPC-driven chains";
+
+    // ---- 3a. DETECTOR coordinates
+    if (m_drawDetector && m_siSeeds && !m_siSeeds->hits.empty())
+    {
+      struct DetTraj
+      {
+        std::vector<P3> layers;
+        P3 vertex{0, 0, kVertexLayer};
+        bool hasVertex = false;
+        int color = 0;
+        bool lowPt = false;
+      };
+      std::vector<DetTraj> detTrajs;
+      auto toDet = [&](const XYZ& p)
+      {
+        const auto dp = m_frame.toDetectorFromGlobal(m_alignment.siTpcFrameToGlobal(m_frame, {p.x, p.y, p.z}));
+        return XYZ{dp.x, dp.y, dp.z};
+      };
+      for (const auto& c : hcChains)
+      {
+        DetTraj dt;
+        dt.color = c.color;
+        dt.lowPt = c.lowPt;
+        for (int l = SiDetectorFrame::kNLayers - 1; l >= 0; --l)
+        {
+          XYZ g;
+          if (!helix_at_radius_mapped(c.helix, toDet, SiDetectorFrame::layerRadius(l), g))
+          {
+            continue;
+          }
+          const XYZ det = toDet(g);
+          dt.layers.push_back({det.z, wrap2pi(std::atan2(det.y, det.x) - m_frame.uphiRotation()), static_cast<double>(l)});
+        }
+        if (!dt.layers.empty() && c.helix.ok)
+        {
+          dt.vertex = {c.helix.z0 - center[2], dt.layers.back().phi, kVertexLayer};
+          dt.hasVertex = true;
+        }
+        detTrajs.push_back(std::move(dt));
+      }
+
+      const double myVz = m_siSeeds->vertex_z;
+      const auto [zlo, zhi] = std::minmax_element(m_siSeeds->hits.begin(), m_siSeeds->hits.end(),
+                                                  [](const auto& a, const auto& b) { return a.z < b.z; });
+      double zlow = zlo->z, zhigh = zhi->z;
+      if (std::isfinite(myVz))
+      {
+        zlow = std::min(zlow, myVz);
+        zhigh = std::max(zhigh, myVz);
+      }
+      for (const auto& dt : detTrajs)
+      {
+        if (dt.hasVertex)
+        {
+          zlow = std::min(zlow, dt.vertex.z);
+          zhigh = std::max(zhigh, dt.vertex.z);
+        }
+      }
+      const double span = std::max(0.01, zhigh - zlow);
+      const double zmin = zlow - std::max(0.02 * span, 0.01);
+      const double zmax = zhigh + std::max(0.02 * span, 0.01);
+      const double dphi = kTwoPi / m_nphi;
+      const double b = std::round(wrap2pi(m_boundary) / dphi) * dphi;
+
+      TH3F* hHits = make_det_hist("h3_" + tag + "_det_hits" + sfx,
+                                  hcTitle + ": Si hits, solid chains / dashed chain helices;"
+                                            "nominal V_{z} [cm];intrinsic U_{#phi} [rad];layer",
+                                  m_nz, zmin, zmax, m_nphi, b, b + kTwoPi);
+      int nAssoc = 0, nFree = 0;
+      for (std::size_t i = 0; i < m_siSeeds->hits.size(); ++i)
+      {
+        const auto& hit = m_siSeeds->hits[i];
+        if (!hcOnChain[i] && !m_drawUnassociated)
+        {
+          continue;
+        }
+        hHits->Fill(hit.z, toU(hit.phi, b), hit.layer);
+        ++(hcOnChain[i] ? nAssoc : nFree);
+      }
+      auto* c = make_det_canvas("c3_" + tag + "_det_hits_chains_traj" + sfx, hHits->GetTitle());
+      hHits->Draw("BOX2Z");
+      auto drawPath = [&](const std::vector<P3>& pts, int color, int style)
+      {
+        for (const auto& piece : splitAtSeam(pts, b))
+        {
+          make_det_line(piece, color, style)->Draw("same");
+        }
+      };
+      for (const auto& ch : hcChains)
+      {
+        drawPath(ch.det, ch.color, 1);
+      }
+      for (const auto& dt : detTrajs)
+      {
+        drawPath(dt.layers, dt.color, dt.lowPt ? 3 : 2);
+        if (dt.hasVertex)
+        {
+          drawPath({dt.layers.back(), dt.vertex}, dt.color, 3);
+        }
+      }
+      if (std::isfinite(myVz))
+      {
+        auto* l = owned(new TPolyLine3D(2));
+        l->SetPoint(0, myVz, b, kVertexLayer);
+        l->SetPoint(1, myVz, b + kTwoPi, kVertexLayer);
+        l->SetLineColor(kBlue + 1);
+        l->SetLineWidth(3);
+        l->Draw("same");
+      }
+      auto* legend = owned(new TLegend(0.12, 0.76, 0.68, 0.92));
+      legend->SetBorderSize(0);
+      legend->SetFillStyle(0);
+      auto* chainStyle = new TLine();
+      chainStyle->SetLineColor(kRed + 1);
+      chainStyle->SetLineWidth(3);
+      auto* trajStyle = new TLine();
+      trajStyle->SetLineColor(kRed + 1);
+      trajStyle->SetLineStyle(2);
+      trajStyle->SetLineWidth(2);
+      auto* vtxStyle = new TLine();
+      vtxStyle->SetLineColor(kBlue + 1);
+      vtxStyle->SetLineWidth(3);
+      legendStyles.insert(legendStyles.end(), {chainStyle, trajStyle, vtxStyle});
+      legend->AddEntry(chainStyle, std::format("TPC-driven chains: {} ({} chain hits, {} other hits)",
+                                               hcChains.size(), nAssoc, nFree).c_str(), "l");
+      legend->AddEntry(trajStyle, "chain helices: TPC radius + tan#lambda, anchored on the groups (dotted: to z0 at layer -1)", "l");
+      legend->AddEntry(vtxStyle, std::isfinite(myVz) ? std::format("tracklet vertex z = {:.2f} cm (layer -1)", myVz).c_str()
+                                                     : "tracklet vertex: not found",
+                       "l");
+      legend->Draw();
+      write_and_delete(c);
+    }
+
+    // ---- 3b. PHYSICS space
+    std::vector<std::vector<XYZ>> hcCurveIn, hcCurveExt;
+    for (const auto& ch : hcChains)
+    {
+      const double rEnd = extendSi ? m_siExtrapR : kSiZoomR;
+      const double rSolid = std::min(kSiZoomR, rEnd);
+      const auto full = sample_helix(ch.helix, 0.0, 0.0, rEnd, zabs);
+      std::size_t nIn = 0;
+      while (nIn < full.size() && radius_of(full[nIn]) <= rSolid)
+      {
+        ++nIn;
+      }
+      hcCurveIn.emplace_back(full.begin(), full.begin() + static_cast<long>(nIn));
+      std::vector<XYZ> ext;
+      if (extendSi && nIn > 0 && nIn < full.size())
+      {
+        ext.assign(full.begin() + static_cast<long>(nIn - 1), full.end());
+      }
+      hcCurveExt.push_back(std::move(ext));
+    }
+    std::vector<XYZ> hcPoints;
+    for (const auto& ch : hcChains)
+    {
+      hcPoints.insert(hcPoints.end(), ch.points.begin(), ch.points.end());
+    }
+
+    auto drawHc3D = [&](const bool zoom)
+    {
+      for (const auto& l : tpcLines)
+      {
+        const int col = hcTpcColor(l.id);
+        for (const auto& seg : tpcCurves(l, zoom, false))
+        {
+          draw_line_zxy(seg, col, 1, 3);
+        }
+        for (const auto& seg : tpcCurves(l, zoom, true))
+        {
+          draw_line_zxy(seg, col, 2, 2);
+        }
+      }
+      for (const auto& [id, pts] : tpcClustersById)
+      {
+        draw_markers_zxy(pts, hcTpcColor(id), tpcClusterStyle, zoom ? 0.8 : 1.0);
+      }
+      for (std::size_t i = 0; i < tpcPca.size(); ++i)
+      {
+        draw_markers_zxy({tpcPca[i].second}, hcTpcColor(tpcPcaId[i]), 20, 1.2);
+      }
+      draw_markers_zxy(tpcCollision, kBlack, 29, 2.0);
+      draw_markers_zxy(hcFreeHits, kGray + 1, siHitStyle, zoom ? 0.4 : 0.3);
+      for (const auto& [id, pts] : hcChainHits)
+      {
+        draw_markers_zxy(pts, palette_color(id), siHitStyle, zoom ? 0.8 : 0.6);
+      }
+      for (std::size_t i = 0; i < hcChains.size(); ++i)
+      {
+        const bool low = hcChains[i].lowPt;
+        if (!zoom)
+        {
+          draw_line_zxy(hcCurveExt[i], hcChains[i].color, low ? 3 : 2, low ? 1 : 2);
+        }
+        draw_line_zxy(hcCurveIn[i], hcChains[i].color, low ? 3 : 1, low ? 2 : 3);
+      }
+    };
+
+    if (m_drawPhysics)
+    {
+      {
+        auto* c = new TCanvas(("c3_" + tag + "_phys_z_x_y" + sfx).c_str(), (hcTitle + ": TPC poly clusters/tracks + Si hits/chain helices").c_str(), 1200, 900);
+        auto* h3 = owned(new TH3D(("h3_" + tag + "_phys_z_x_y" + sfx).c_str(),
+                                  (hcTitle + ": TPC (circles) + Si (squares);z [cm];x [cm];y [cm]").c_str(),
+                                  204, m_zmin, m_zmax, 170, -m_xymax, m_xymax, 170, -m_xymax, m_xymax));
+        h3->SetDirectory(nullptr);
+        h3->SetStats(false);
+        h3->Draw();
+        drawHc3D(false);
+        write_and_delete(c);
+      }
+      {
+        auto* c = new TCanvas(("c3_" + tag + "_phys_si_z_x_y" + sfx).c_str(), (hcTitle + ": silicon").c_str(), 1200, 900);
+        auto* h3 = owned(new TH3D(("h3_" + tag + "_phys_si_z_x_y" + sfx).c_str(),
+                                  (hcTitle + ": silicon zoom;z [cm];x [cm];y [cm]").c_str(),
+                                  60, -30, 30, 52, -kSiZoomR, kSiZoomR, 52, -kSiZoomR, kSiZoomR));
+        h3->SetDirectory(nullptr);
+        h3->SetStats(false);
+        h3->Draw();
+        drawHc3D(true);
+        draw_markers_zxy({{beamX(), beamY(), 0.0}}, kBlack, 29, 1.5);
+        write_and_delete(c);
+      }
+    }
+
+    if (m_drawProjections)
+    {
+      auto drawHc2D = [&](const int proj, const bool zoom)
+      {
+        for (const auto& l : tpcLines)
+        {
+          const int col = hcTpcColor(l.id);
+          for (const auto& seg : tpcCurves(l, zoom, false))
+          {
+            draw_line_2d(seg, proj, col, 1, 2);
+          }
+          for (const auto& seg : tpcCurves(l, zoom, true))
+          {
+            draw_line_2d(seg, proj, col, 2, 2);
+          }
+        }
+        for (const auto& [id, pts] : tpcClustersById)
+        {
+          draw_markers_2d(pts, proj, hcTpcColor(id), tpcClusterStyle, 0.5);
+        }
+        for (std::size_t i = 0; i < tpcPca.size(); ++i)
+        {
+          draw_markers_2d({tpcPca[i].second}, proj, hcTpcColor(tpcPcaId[i]), 24, 1.2);
+        }
+        draw_markers_2d(tpcCollision, proj, kBlack, 29, 2.0);
+        draw_markers_2d(hcFreeHits, proj, kGray + 1, siHitStyle, zoom ? 0.4 : 0.25);
+        for (const auto& [id, pts] : hcChainHits)
+        {
+          draw_markers_2d(pts, proj, palette_color(id), siHitStyle, zoom ? 0.8 : 0.5);
+        }
+        for (std::size_t i = 0; i < hcChains.size(); ++i)
+        {
+          const bool low = hcChains[i].lowPt;
+          if (!zoom)
+          {
+            draw_line_2d(hcCurveExt[i], proj, hcChains[i].color, low ? 3 : 2, low ? 1 : 2);
+          }
+          draw_line_2d(hcCurveIn[i], proj, hcChains[i].color, low ? 3 : 1, low ? 1 : 2);
+        }
+        if (zoom)
+        {
+          draw_markers_2d(hcPoints, proj, kBlack, 24, 1.2);  // group centroids
+        }
+      };
+      {
+        auto* c = new TCanvas(("c_" + tag + "_phys_xy" + sfx).c_str(), (hcTitle + ": x-y").c_str(), 1000, 1000);
+        c->DrawFrame(-m_xymax, -m_xymax, m_xymax, m_xymax, (hcTitle + ": TPC (circles) + Si (squares);x [cm];y [cm]").c_str());
+        drawHc2D(0, false);
+        write_and_delete(c);
+      }
+      {
+        auto* c = new TCanvas(("c_" + tag + "_phys_xy_si" + sfx).c_str(), (hcTitle + ": x-y silicon").c_str(), 1000, 1000);
+        c->DrawFrame(-kSiZoomR, -kSiZoomR, kSiZoomR, kSiZoomR, (hcTitle + (m_alignment.enabled() ? ": silicon (TPC frame, Si halves on TPC beam axis)" : ": silicon (global frame)") + ";x [cm];y [cm]").c_str());
+        const double phiA = (m_alignment.clamshellBoundary() + m_frame.uphiRotation()) * 180.0 / kPi;
+        for (int half = SiTpcBeamAlignment::SiHalfA; half <= SiTpcBeamAlignment::SiHalfB; ++half)
+        {
+          const auto cen = m_alignment.siHalfToTpcAxis(half, {center[0], center[1], 0.0});
+          const double phi0 = phiA + (half == SiTpcBeamAlignment::SiHalfA ? 0.0 : 180.0);
+          for (int l = 0; l < SiDetectorFrame::kNLayers; ++l)
+          {
+            const double r = SiDetectorFrame::layerRadius(l);
+            auto* e = owned(new TEllipse(cen.x, cen.y, r, r, phi0, phi0 + 180.0));
+            e->SetFillStyle(0);
+            e->SetLineColor(half == SiTpcBeamAlignment::SiHalfA ? kGray + 1 : kGray);
+            e->SetLineStyle(3);
+            e->SetNoEdges(true);
+            e->Draw("same");
+          }
+          auto* det = owned(new TMarker(cen.x, cen.y, half == SiTpcBeamAlignment::SiHalfA ? 5 : 2));
+          det->SetMarkerColor(kGray + 2);
+          det->SetMarkerSize(2.0);
+          det->Draw();
+        }
+        drawHc2D(0, true);
+        auto* beam = owned(new TMarker(beamX(), beamY(), 29));
+        beam->SetMarkerSize(2.0);
+        beam->Draw();
+        auto* tx = owned(new TLatex(0.12, 0.92, std::format("#star beam (TPC beam axis)   #times/+ detector centre half A/B   #circ group centroids   {}", hcSummary).c_str()));
+        tx->SetNDC();
+        tx->SetTextSize(0.025);
+        tx->Draw();
+        auto* tx2 = owned(new TLatex(0.12, 0.89, "TPC tracks in the colour of their TPC-driven chain, unmatched grey"));
+        tx2->SetNDC();
+        tx2->SetTextSize(0.025);
+        tx2->Draw();
+        write_and_delete(c);
+      }
+      {
+        auto* c = new TCanvas(("c_" + tag + "_phys_z_r" + sfx).c_str(), (hcTitle + ": z vs r").c_str(), 1200, 800);
+        c->DrawFrame(0, m_zmin, m_xymax, m_zmax, (hcTitle + ": TPC (circles) + Si (squares);r [cm];z [cm]").c_str());
+        drawHc2D(1, false);
+        write_and_delete(c);
+      }
+    }
+  }
+
   for (auto* o : legendStyles)
   {
     delete o;
@@ -1343,7 +1808,8 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     nTpcClusters += pts.size();
   }
   std::cout << Name() << " - saved event " << m_evt << ": Si " << siSummary << "; " << siTpcSummary << "; TPC clusters " << nTpcClusters
-            << ", TPC poly tracks " << tpcLines.size() << ", TPC collision vertices " << tpcCollision.size() << std::endl;
+            << ", TPC poly tracks " << tpcLines.size() << ", TPC collision vertices " << tpcCollision.size()
+            << (hcSummary.empty() ? std::string() : "; " + hcSummary) << std::endl;
   ++m_eventsSaved;
   return Fun4AllReturnCodes::EVENT_OK;
 }
