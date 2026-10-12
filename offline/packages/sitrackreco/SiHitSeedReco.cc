@@ -76,7 +76,90 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
     std::cout << "; seed phi +-" << m_seedPhiHalf << " bins; propagation phi +-" << m_propPhiHalf
               << ", z +-" << m_propZHalf << " bins" << std::endl;
   }
+  if (m_applyAlignment)
+  {
+    const int ret = loadAlignment();
+    if (ret != Fun4AllReturnCodes::EVENT_OK)
+    {
+      return ret;
+    }
+  }
   return createNodes(topNode);
+}
+
+int SiHitSeedReco::loadAlignment()
+{
+  std::unordered_map<TrkrDefs::hitsetkey, SiAlignmentTransform::Params> params;
+  const std::string& source = m_alignmentFile;
+  const int nread = source.empty() ? -1 : m_alignment.readFile(source, params, Verbosity());
+  if (nread < 0)
+  {
+    std::cerr << Name() << ": cannot read silicon alignment parameters from '" << source
+              << "' (set it with setSiAlignmentParamsFile)" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  // Ideal sensor centres/axes in the DETECTOR frame, from the same nominal geometry that
+  // fillHits uses: centre = local (0, 0) of the sensor, local x along +Uphi (tilted by the
+  // MVTX stave tilt), local y along +z.  The axes matter only for the new rotation order.
+  m_alignment.clear();
+  const double rot = mvtx_phi0[2];
+  for (const auto& [key, p] : params)
+  {
+    const int layer = TrkrDefs::getLayer(key);
+    if (layer < 0 || layer >= nlayers)
+    {
+      continue;
+    }
+    const bool mvtx = layer <= 2;
+    const int stave = mvtx ? MvtxDefs::getStaveId(key) : -1;
+    const int chip = mvtx ? MvtxDefs::getChipId(key) : -1;
+    const int ladderphi = mvtx ? -1 : InttDefs::getLadderPhiId(key);
+    const int ladderz = mvtx ? -1 : InttDefs::getLadderZId(key);
+    if ((mvtx && (stave >= nstaves[layer] || chip > 8)) ||
+        (!mvtx && (ladderphi >= intt_nladder[layer - 3] || ladderz > 3)))
+    {
+      continue;
+    }
+
+    const double phi = intrinsicPhi(layer, stave, ladderphi, 0.0) + rot;
+    const double z = longitudinalZ(layer, chip, ladderz, 0.0);
+    const Eigen::Vector3d centre(m_radius[layer] * std::cos(phi), m_radius[layer] * std::sin(phi), z);
+
+    const Eigen::Vector3d rhat(std::cos(phi), std::sin(phi), 0.0);
+    const Eigen::Vector3d phihat(-std::sin(phi), std::cos(phi), 0.0);
+    const double tilt = mvtx ? mvtx_tilt[layer] : 0.0;
+    const Eigen::Vector3d ex = std::cos(tilt) * phihat + std::sin(tilt) * rhat;
+    const Eigen::Vector3d ey = Eigen::Vector3d::UnitZ();
+    Eigen::Matrix3d ideal;
+    ideal.col(0) = ex;
+    ideal.col(1) = ey;
+    ideal.col(2) = ex.cross(ey);
+
+    m_alignment.addSensor(SiAlignmentTransform::sensorId(key), p, centre, ideal);
+  }
+
+  std::cout << Name() << ": silicon alignment ON, " << m_alignment.size() << " sensors from " << source
+            << (m_alignment.useNewSiliconRotationOrder() ? " (new" : " (old") << " rotation order)" << std::endl;
+  return Fun4AllReturnCodes::EVENT_OK;
+}
+
+void SiHitSeedReco::alignPoint(TrkrDefs::hitsetkey hskey, int layer, double& z, double& phi) const
+{
+  if (!m_applyAlignment)
+  {
+    return;
+  }
+  const double rot = mvtx_phi0[2];
+  const double p = phi + rot;
+  const SiAlignmentTransform::Point det{m_radius[layer] * std::cos(p), m_radius[layer] * std::sin(p), z};
+  const auto a = m_alignment.apply(SiAlignmentTransform::sensorId(hskey), det);
+  z = a.z;
+  phi = std::fmod(std::atan2(a.y, a.x) - rot, twopi);
+  if (phi < 0)
+  {
+    phi += twopi;
+  }
 }
 
 int SiHitSeedReco::createNodes(PHCompositeNode* topNode)
@@ -280,6 +363,7 @@ bool SiHitSeedReco::fillHits(PHCompositeNode* topNode)
         h.ly = ly;
         h.z = longitudinalZ(layer, chip, ladderz, ly);
         h.phi = intrinsicPhi(layer, stave, ladderphi, lx);
+        alignPoint(hskey, layer, h.z, h.phi);
         m_eventData->hits.push_back(h);
       }
     }
@@ -330,6 +414,7 @@ void SiHitSeedReco::fillClusters(PHCompositeNode* topNode)
         }
         p.z = longitudinalZ(layer, p.chip, p.ladderz, p.ly);
         p.phi = intrinsicPhi(layer, p.stave, p.ladderphi, p.lx);
+        alignPoint(hskey, layer, p.z, p.phi);
         m_eventData->clusters.push_back(p);
       }
     }
