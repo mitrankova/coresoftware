@@ -16,6 +16,11 @@
 #include <phool/PHObject.h>
 #include <phool/getClass.h>
 
+#include <TFile.h>
+#include <TH2F.h>
+#include <TString.h>
+#include <TTree.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -58,6 +63,10 @@ int SiTpcHitChainMatcher::InitRun(PHCompositeNode* topNode)
               << m_ddTheta[1] << " rad"
               << "\n  branches/layer " << m_maxBranchesPerLayer[0] << " / " << m_maxBranchesPerLayer[1] << ", chains " << m_maxChains << ", group slack "
               << m_groupSlack << " pitches, overlap groups " << (m_attachOverlap ? "on" : "off") << std::endl;
+  }
+  if (!m_diagFile.empty())
+  {
+    bookDiagnostics();
   }
   return createNodes(topNode);
 }
@@ -115,7 +124,7 @@ std::vector<SiTpcHitChainMatcher::TrackInput> SiTpcHitChainMatcher::collectTpcTr
     {
       continue;
     }
-    byTrack[c->get_source_assembled_track_id()].push_back({p.x, p.y, p.z, 1.0, 1.0, 1});
+    byTrack[c->get_source_assembled_track_id()].push_back({p.x, p.y, p.z + m_tpcZOffset, 1.0, 1.0, 1});
   }
   SiTpcHelixFit::Config cfg;
   cfg.beamX = m_alignment.referenceBeamX();
@@ -128,23 +137,25 @@ std::vector<SiTpcHitChainMatcher::TrackInput> SiTpcHitChainMatcher::collectTpcTr
     {
       continue;
     }
-    auto it = byTrack.find(t->get_source_assembled_track_id());
-    if (it == byTrack.end() || it->second.size() < m_minTpcClusters)
-    {
-      continue;
-    }
-    auto& pts = it->second;
-    std::sort(pts.begin(), pts.end(), [](const auto& a, const auto& b)
-              { return a.x * a.x + a.y * a.y < b.x * b.x + b.y * b.y; });
+    // every track is returned (status codes for the diagnostics); processTrack skips the
+    // ones without enough clusters or without a good helix fit
     TrackInput in;
     in.index = i;
     in.id = t->get_track_id();
     in.sourceId = t->get_source_assembled_track_id();
-    in.fit = SiTpcHelixFit::fit(pts, cfg);
-    if (in.fit.status == SiTpcHelixFit::Ok)
+    auto it = byTrack.find(t->get_source_assembled_track_id());
+    if (it != byTrack.end())
     {
-      out.push_back(std::move(in));
+      auto& pts = it->second;
+      in.nClusters = static_cast<unsigned int>(pts.size());
+      if (pts.size() >= m_minTpcClusters)
+      {
+        std::sort(pts.begin(), pts.end(), [](const auto& a, const auto& b)
+                  { return a.x * a.x + a.y * a.y < b.x * b.x + b.y * b.y; });
+        in.fit = SiTpcHelixFit::fit(pts, cfg);
+      }
     }
+    out.push_back(std::move(in));
   }
   return out;
 }
@@ -183,9 +194,17 @@ int SiTpcHitChainMatcher::process_event(PHCompositeNode* topNode)
 
   Counters counters;
   counters.tpcTracks = static_cast<unsigned int>(tracks.size());
+  std::array<unsigned int, 7> status{};
   for (const auto& track : tracks)
   {
-    processTrack(track, counters);
+    TrackDiag diag;
+    processTrack(track, counters, diag);
+    if (diag.status >= 0 && diag.status < 7)
+    {
+      ++status[diag.status];
+      ++m_statusCount[diag.status];
+    }
+    fillDiagnostics(track, diag);
   }
   const auto t3 = std::chrono::steady_clock::now();
   m_timeIndex += seconds(t0, t1);
@@ -205,12 +224,36 @@ int SiTpcHitChainMatcher::process_event(PHCompositeNode* topNode)
     }
     std::cout << " t_index=" << seconds(t0, t1) << " t_tpc=" << seconds(t1, t2) << " t_match=" << seconds(t2, t3)
               << " s" << std::endl;
+    std::cout << Name() << ": event " << m_nEvents << " TPC track status: matched=" << status[0]
+              << " few_clusters=" << status[1] << " fit_not_ok=" << status[2] << " no_reference=" << status[3]
+              << " no_layer_in_si=" << status[4] << " no_group_accepted=" << status[5]
+              << " below_min_layers=" << status[6] << std::endl;
   }
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
 int SiTpcHitChainMatcher::End(PHCompositeNode*)
 {
+  std::cout << Name() << ": TPC track status over the run: matched=" << m_statusCount[0]
+            << " few_clusters=" << m_statusCount[1] << " fit_not_ok=" << m_statusCount[2]
+            << " no_reference=" << m_statusCount[3] << " no_layer_in_si=" << m_statusCount[4]
+            << " no_group_accepted=" << m_statusCount[5] << " below_min_layers=" << m_statusCount[6] << std::endl;
+  if (m_diagTFile)
+  {
+    m_diagTFile->cd();
+    m_tTpc->Write();
+    m_tProbe->Write();
+    for (int layer = 0; layer < 7; ++layer)
+    {
+      m_hRdphiDz[layer]->Write();
+      m_hDzVsZ[layer]->Write();
+      m_hRdphiVsPhi[layer]->Write();
+    }
+    m_diagTFile->Close();
+    delete m_diagTFile;
+    m_diagTFile = nullptr;
+    std::cout << Name() << ": diagnostics written to " << m_diagFile << std::endl;
+  }
   if (Verbosity() > 0 && m_nEvents > 0)
   {
     std::cout << Name() << ": " << m_nEvents << " events, mean time per event: index " << m_timeIndex / m_nEvents
@@ -633,15 +676,59 @@ bool SiTpcHitChainMatcher::extendBranch(const SiTpcChainMath::TpcReference& ref,
   return true;
 }
 
-void SiTpcHitChainMatcher::processTrack(const TrackInput& track, Counters& counters)
+void SiTpcHitChainMatcher::processTrack(const TrackInput& track, Counters& counters, TrackDiag& diag)
 {
+  diag = TrackDiag();
+  if (track.nClusters < m_minTpcClusters)
+  {
+    diag.status = 1;
+    return;
+  }
+  if (track.fit.status != SiTpcHelixFit::Ok)
+  {
+    diag.status = 2;
+    return;
+  }
   SiTpcChainMath::TpcReference ref;
   if (!SiTpcChainMath::buildTpcReference(track.fit, m_map, ref, m_boundaryMargin))
   {
+    diag.status = 3;
     return;
   }
   ++counters.references;
   m_groups.clear();
+
+  // probes: nearest hit around the TPC prediction on every layer, independent of the cuts
+  const bool wantProbe = m_tProbe || Verbosity() > 1;
+  for (int layer = 0; layer < 7; ++layer)
+  {
+    const auto& tp = ref.layers[layer];
+    if (!tp.valid || std::abs(tp.z) > SiHitGeometryTable::halfLengthZ(layer) + m_zAcceptanceMargin)
+    {
+      continue;
+    }
+    ++diag.nPredicted;
+    if (!wantProbe)
+    {
+      continue;
+    }
+    probeLayer(ref, tp, diag.probe[layer]);
+    if (ref.alt[layer].valid)
+    {
+      Probe pa;
+      probeLayer(ref, ref.alt[layer], pa);
+      if (pa.nWindow > 0 && (!(diag.probe[layer].nearMetric <= pa.nearMetric)))
+      {
+        pa.alt = true;
+        diag.probe[layer] = pa;
+      }
+    }
+  }
+  if (diag.nPredicted == 0)
+  {
+    diag.status = 4;
+    return;
+  }
 
   std::vector<Branch> branches(1);
   std::vector<Branch> next;
@@ -785,6 +872,12 @@ void SiTpcHitChainMatcher::processTrack(const TrackInput& track, Counters& count
   }
   if (good.empty())
   {
+    bool anyStep = false;
+    for (const auto& br : branches)
+    {
+      anyStep = anyStep || !br.steps.empty();
+    }
+    diag.status = anyStep ? 6 : 5;
     return;
   }
   std::stable_sort(good.begin(), good.end(), [](const Branch* a, const Branch* b)
@@ -793,6 +886,25 @@ void SiTpcHitChainMatcher::processTrack(const TrackInput& track, Counters& count
                      if (a->nMvtx != b->nMvtx) return a->nMvtx > b->nMvtx;
                      return a->chi2 < b->chi2;
                    });
+  diag.status = 0;
+  diag.nMvtx = good.front()->nMvtx;
+  diag.nIntt = good.front()->nIntt;
+  diag.chi2 = static_cast<float>(good.front()->chi2);
+  for (const auto& st : good.front()->steps)
+  {
+    if (st.rec.flags & SiTpcHitMatchStep::Overlap)
+    {
+      continue;
+    }
+    Probe& p = diag.probe[st.rec.layer];
+    p.attached = 1;
+    p.attRdphi = static_cast<float>(st.rec.dphi_tpc * st.rec.r);
+    p.attDz = st.rec.dz_tpc;
+    p.attDtheta = st.rec.dtheta_tpc;
+    p.attDdphi = st.rec.ddphi;
+    p.attDdtheta = st.rec.ddtheta;
+    p.attNHits = st.rec.n_hits;
+  }
   ++counters.matched;
   for (const auto& st : good.front()->steps)
   {
@@ -869,4 +981,203 @@ void SiTpcHitChainMatcher::storeBranch(const TrackInput& track, const SiTpcChain
     }
   }
   m_container->add_match(m);
+}
+
+// Nearest and second-nearest hit to the TPC prediction on layer tp.layer in a wide window
+// (setProbeWindow), metric (r dphi / 0.05 cm)^2 + (dz / sz)^2, sz = 0.2 cm MVTX, 1 cm INTT.
+void SiTpcHitChainMatcher::probeLayer(const SiTpcChainMath::TpcReference& ref, const SiTpcChainMath::LayerPrediction& tp,
+                                      Probe& p) const
+{
+  p = Probe();
+  p.valid = true;
+  p.predU = static_cast<float>(tp.u);
+  p.predZ = static_cast<float>(tp.z);
+  p.predS = static_cast<float>(tp.s);
+  p.cosA = static_cast<float>(tp.cosA);
+  const int layer = tp.layer;
+  const int det = detIndex(layer);
+  const double R = tp.R;
+  const double sz = det == 0 ? 0.2 : 1.0;
+  const double du = m_probeRphi / R;
+  const auto& hits = m_index.hits(layer);
+  double best = 1e30, best2 = 1e30;
+  int kb = -1, kb2 = -1;
+  m_index.forEachInWindow(layer, tp.u, du, tp.z - m_probeZ[det], tp.z + m_probeZ[det], [&](int k)
+  {
+    const auto& h = hits[k];
+    const double dr = h.r - R;
+    const double rdphi = R * SiTpcChainMath::wrapPi(h.u - (tp.u + tp.dudr * dr));
+    if (std::abs(rdphi) > m_probeRphi)
+    {
+      return;
+    }
+    ++p.nWindow;
+    const double dz = h.z - (tp.z + tp.dzdr * dr);
+    if (m_hRdphiDz[layer])
+    {
+      m_hRdphiDz[layer]->Fill(rdphi, dz);
+      m_hDzVsZ[layer]->Fill(tp.z, dz);
+      m_hRdphiVsPhi[layer]->Fill(SiTpcChainMath::wrapPi(tp.u + m_frame.uphiRotation()), rdphi);
+    }
+    const double metric = (rdphi / 0.05) * (rdphi / 0.05) + (dz / sz) * (dz / sz);
+    if (metric < best)
+    {
+      best2 = best;
+      kb2 = kb;
+      best = metric;
+      kb = k;
+    }
+    else if (metric < best2)
+    {
+      best2 = metric;
+      kb2 = k;
+    }
+  });
+  auto fill = [&](int k, float& rdphi, float& dz, float* dtheta)
+  {
+    const auto& h = hits[k];
+    const double dr = h.r - R;
+    rdphi = static_cast<float>(R * SiTpcChainMath::wrapPi(h.u - (tp.u + tp.dudr * dr)));
+    dz = static_cast<float>(h.z - (tp.z + tp.dzdr * dr));
+    if (dtheta)
+    {
+      *dtheta = static_cast<float>(SiTpcChainMath::thetaFromVertex(tp.s + tp.dsdr * dr, h.z, ref.z0) - ref.theta);
+    }
+  };
+  if (kb >= 0)
+  {
+    fill(kb, p.nearRdphi, p.nearDz, &p.nearDtheta);
+    p.nearMetric = static_cast<float>(best);
+  }
+  if (kb2 >= 0)
+  {
+    fill(kb2, p.near2Rdphi, p.near2Dz, nullptr);
+    p.near2Metric = static_cast<float>(best2);
+  }
+}
+
+void SiTpcHitChainMatcher::bookDiagnostics()
+{
+  m_diagTFile = new TFile(m_diagFile.c_str(), "RECREATE");
+  for (int layer = 0; layer < 7; ++layer)
+  {
+    const double zw = m_probeZ[detIndex(layer)];
+    const double zl = SiHitGeometryTable::halfLengthZ(layer) + 1.0;
+    m_hRdphiDz[layer] = new TH2F(Form("h_probe_L%d_rdphi_dz", layer),
+                                 Form("layer %d: all hits around the TPC prediction;r#Delta#phi [cm];#Deltaz [cm]", layer),
+                                 200, -m_probeRphi, m_probeRphi, 200, -zw, zw);
+    m_hDzVsZ[layer] = new TH2F(Form("h_probe_L%d_dz_vs_z", layer),
+                               Form("layer %d: all hits around the TPC prediction;predicted z [cm];#Deltaz [cm]", layer),
+                               60, -zl, zl, 200, -zw, zw);
+    m_hRdphiVsPhi[layer] = new TH2F(Form("h_probe_L%d_rdphi_vs_phi", layer),
+                                    Form("layer %d: all hits around the TPC prediction;predicted #phi [rad];r#Delta#phi [cm]", layer),
+                                    72, -M_PI, M_PI, 200, -m_probeRphi, m_probeRphi);
+  }
+  m_tTpc = new TTree("tpc", "SiTpcHitChainMatcher: one row per TPC track");
+  m_tProbe = new TTree("probe", "SiTpcHitChainMatcher: one row per TPC track and layer with a prediction");
+  for (TTree* t : {m_tTpc, m_tProbe})
+  {
+    t->Branch("event", &m_row.event, "event/I");
+    t->Branch("tpc_index", &m_row.tpcIndex, "tpc_index/I");
+    t->Branch("n_clusters", &m_row.nClusters, "n_clusters/I");
+    t->Branch("status", &m_row.status, "status/I");
+    t->Branch("pt", &m_row.pt, "pt/F");
+    t->Branch("charge", &m_row.charge, "charge/I");
+    t->Branch("phi", &m_row.phi, "phi/F");
+    t->Branch("tanl", &m_row.tanl, "tanl/F");
+    t->Branch("z0", &m_row.z0, "z0/F");
+    t->Branch("dca", &m_row.dca, "dca/F");
+  }
+  m_tTpc->Branch("fit_status", &m_row.fitStatus, "fit_status/I");
+  m_tTpc->Branch("radius", &m_row.radius, "radius/F");
+  m_tTpc->Branch("n_predicted", &m_row.nPredicted, "n_predicted/I");
+  m_tTpc->Branch("n_mvtx", &m_row.nMvtx, "n_mvtx/I");
+  m_tTpc->Branch("n_intt", &m_row.nIntt, "n_intt/I");
+  m_tTpc->Branch("chi2", &m_row.chi2, "chi2/F");
+  auto& p = m_row.p;
+  m_tProbe->Branch("layer", &m_row.layer, "layer/I");
+  m_tProbe->Branch("pred_u", &p.predU, "pred_u/F");
+  m_tProbe->Branch("pred_z", &p.predZ, "pred_z/F");
+  m_tProbe->Branch("pred_s", &p.predS, "pred_s/F");
+  m_tProbe->Branch("cos_alpha", &p.cosA, "cos_alpha/F");
+  m_tProbe->Branch("alt_half", &p.alt, "alt_half/O");
+  m_tProbe->Branch("n_window", &p.nWindow, "n_window/I");
+  m_tProbe->Branch("near_rdphi", &p.nearRdphi, "near_rdphi/F");
+  m_tProbe->Branch("near_dz", &p.nearDz, "near_dz/F");
+  m_tProbe->Branch("near_dtheta", &p.nearDtheta, "near_dtheta/F");
+  m_tProbe->Branch("near_metric", &p.nearMetric, "near_metric/F");
+  m_tProbe->Branch("near2_rdphi", &p.near2Rdphi, "near2_rdphi/F");
+  m_tProbe->Branch("near2_dz", &p.near2Dz, "near2_dz/F");
+  m_tProbe->Branch("near2_metric", &p.near2Metric, "near2_metric/F");
+  m_tProbe->Branch("attached", &p.attached, "attached/I");
+  m_tProbe->Branch("att_rdphi", &p.attRdphi, "att_rdphi/F");
+  m_tProbe->Branch("att_dz", &p.attDz, "att_dz/F");
+  m_tProbe->Branch("att_dtheta", &p.attDtheta, "att_dtheta/F");
+  m_tProbe->Branch("att_ddphi", &p.attDdphi, "att_ddphi/F");
+  m_tProbe->Branch("att_ddtheta", &p.attDdtheta, "att_ddtheta/F");
+  m_tProbe->Branch("att_n_hits", &p.attNHits, "att_n_hits/I");
+}
+
+void SiTpcHitChainMatcher::fillDiagnostics(const TrackInput& track, const TrackDiag& diag)
+{
+  if (!m_tTpc && Verbosity() < 2)
+  {
+    return;
+  }
+  const auto& f = track.fit;
+  m_row.event = static_cast<int>(m_nEvents);
+  m_row.tpcIndex = static_cast<int>(track.index);
+  m_row.nClusters = static_cast<int>(track.nClusters);
+  m_row.status = diag.status;
+  m_row.fitStatus = f.status;
+  m_row.pt = static_cast<float>(f.pt);
+  m_row.charge = f.charge;
+  m_row.phi = static_cast<float>(f.phi);
+  m_row.tanl = static_cast<float>(f.tanl);
+  m_row.z0 = static_cast<float>(f.z0);
+  m_row.dca = static_cast<float>(f.dca);
+  m_row.radius = static_cast<float>(f.R);
+  m_row.nPredicted = static_cast<int>(diag.nPredicted);
+  m_row.nMvtx = static_cast<int>(diag.nMvtx);
+  m_row.nIntt = static_cast<int>(diag.nIntt);
+  m_row.chi2 = diag.chi2;
+  if (m_tTpc)
+  {
+    m_tTpc->Fill();
+    for (int layer = 0; layer < 7; ++layer)
+    {
+      if (!diag.probe[layer].valid)
+      {
+        continue;
+      }
+      m_row.layer = layer;
+      m_row.p = diag.probe[layer];
+      m_tProbe->Fill();
+    }
+  }
+  if (Verbosity() > 1)
+  {
+    std::cout << Name() << " tpc " << track.index << " ncl=" << track.nClusters << " status=" << diag.status
+              << " pt=" << f.pt << " tanl=" << f.tanl << " z0=" << f.z0 << " dca=" << f.dca
+              << " layers mvtx/intt=" << diag.nMvtx << "/" << diag.nIntt << " chi2=" << diag.chi2;
+    for (int layer = 0; layer < 7; ++layer)
+    {
+      const auto& p = diag.probe[layer];
+      if (!p.valid)
+      {
+        continue;
+      }
+      std::cout << " | L" << layer << " nwin=" << p.nWindow;
+      if (p.nWindow > 0)
+      {
+        std::cout << " near(rdphi=" << 1e4 * p.nearRdphi << "um dz=" << p.nearDz << "cm dth=" << p.nearDtheta << ")";
+      }
+      if (p.attached)
+      {
+        std::cout << " ATT(rdphi=" << 1e4 * p.attRdphi << "um dz=" << p.attDz << " ddphi=" << p.attDdphi
+                  << " ddth=" << p.attDdtheta << " n=" << p.attNHits << ")";
+      }
+    }
+    std::cout << std::endl;
+  }
 }
