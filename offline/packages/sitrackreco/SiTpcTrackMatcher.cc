@@ -1,5 +1,6 @@
 #include "SiTpcTrackMatcher.h"
 
+#include "SiHitSeedData.h"
 #include "SiTpcHelixFit.h"
 #include "SiTpc_TrackContainerv1.h"
 #include "SiTpc_Trackv1.h"
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -49,6 +51,7 @@ namespace
   {
     unsigned int index = 0;
     const Si_Trajectory* t = nullptr;
+    bool fitted = false;
     double phi = 0, eta = 0, z0 = 0;
     int charge = 0;  // 0 for straight-line fits
   };
@@ -73,6 +76,7 @@ namespace
   {
     std::size_t si = 0, tpc = 0;  // indices in the local vectors
     double dphi = 0, deta = 0, dz0 = 0, chi2 = 0;
+    int rank = 0;  // chain rank (FromSiChains)
     bool eligible = false;
     std::size_t store = 0;  // index in the container's candidate list
   };
@@ -87,7 +91,12 @@ int SiTpcTrackMatcher::InitRun(PHCompositeNode* topNode)
 {
   if (Verbosity() > 0)
   {
-    std::cout << Name() << ": windows |dphi| < " << m_dphiWindow << " rad, |deta| < " << m_detaWindow;
+    std::cout << Name() << ": association "
+              << (m_association == Association::FromSiChains
+                      ? std::string("from the TPC-driven Si chains (") + m_siSeedNodeName + ", selected chains" +
+                            (m_windowOnChains ? " inside the windows)" : ")")
+                      : std::string("phi/eta windows"))
+              << "; windows |dphi| < " << m_dphiWindow << " rad, |deta| < " << m_detaWindow;
     if (m_dz0Window > 0)
     {
       std::cout << ", |dz0| < " << m_dz0Window << " cm";
@@ -142,32 +151,41 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
   auto* siTraj = findNode::getClass<Si_TrajectoryContainer>(topNode, m_siTrajNodeName);
   auto* clusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_tpcClusterNodeName);
   auto* tracks = findNode::getClass<Tpc_PolyTrackContainer>(topNode, m_tpcTrackNodeName);
-  if (!siTraj || !clusters || !tracks)
+  const bool fromChains = m_association == Association::FromSiChains;
+  auto* seeds = fromChains ? findNode::getClass<SiHitSeedEvent>(topNode, m_siSeedNodeName) : nullptr;
+  if (!siTraj || !clusters || !tracks || (fromChains && !seeds))
   {
     if (Verbosity() > 0)
     {
       std::cout << Name() << ": missing input (" << m_siTrajNodeName << " " << (siTraj ? "ok" : "missing") << ", "
                 << m_tpcClusterNodeName << " " << (clusters ? "ok" : "missing") << ", " << m_tpcTrackNodeName << " "
-                << (tracks ? "ok" : "missing") << ")" << std::endl;
+                << (tracks ? "ok" : "missing");
+      if (fromChains)
+      {
+        std::cout << ", " << m_siSeedNodeName << " " << (seeds ? "ok" : "missing");
+      }
+      std::cout << ")" << std::endl;
     }
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  // ---- silicon side
+  // ---- silicon side (chain mode: unfitted trajectories are kept, their points still go into
+  // the combined refit; the matching variables are then NaN)
   std::vector<SiInfo> si;
   for (unsigned int i = 0; i < siTraj->size(); ++i)
   {
     const Si_Trajectory* t = siTraj->get_trajectory(i);
-    if (!t || !t->is_fitted())
+    if (!t || (!fromChains && !t->is_fitted()) || t->size_points() == 0)
     {
       continue;
     }
     SiInfo s;
     s.index = i;
     s.t = t;
-    s.phi = t->get_phi();
-    s.eta = std::asinh(t->get_tanl());
-    s.z0 = t->get_z0();
+    s.fitted = t->is_fitted();
+    s.phi = s.fitted ? t->get_phi() : std::numeric_limits<double>::quiet_NaN();
+    s.eta = s.fitted ? std::asinh(t->get_tanl()) : std::numeric_limits<double>::quiet_NaN();
+    s.z0 = s.fitted ? t->get_z0() : std::numeric_limits<double>::quiet_NaN();
     s.charge = t->get_fit_status() == Si_Trajectory::Ok ? t->get_charge() : 0;
     si.push_back(s);
   }
@@ -202,6 +220,7 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
   tpcCfg.beamY = beamY();
   tpcCfg.bz = m_bz;
   std::vector<TpcInfo> tpc;
+  std::map<unsigned int, std::size_t> tpcByIndex;  // TPC_POLYTRACKS index -> position in tpc
   for (unsigned int i = 0; i < tracks->size(); ++i)
   {
     const Tpc_PolyTrack* t = tracks->get_track(i);
@@ -230,38 +249,76 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
       continue;
     }
     info.eta = std::asinh(info.fit.tanl);
+    tpcByIndex[i] = tpc.size();
     tpc.push_back(std::move(info));
   }
 
   // ---- candidates
   const bool useDz0 = m_dz0Window > 0;
   std::vector<Candidate> cands;
-  for (std::size_t a = 0; a < si.size(); ++a)
+  auto makeCandidate = [&](std::size_t a, std::size_t b, Candidate& c)
   {
-    for (std::size_t b = 0; b < tpc.size(); ++b)
+    c.si = a;
+    c.tpc = b;
+    c.dphi = wrapPi(si[a].phi - tpc[b].fit.phi);
+    c.deta = si[a].eta - tpc[b].eta;
+    c.dz0 = si[a].z0 - tpc[b].fit.z0;
+    const double ndphi = c.dphi / m_dphiWindow, ndeta = c.deta / m_detaWindow;
+    const double ndz0 = useDz0 ? c.dz0 / m_dz0Window : 0.0;
+    c.chi2 = ndphi * ndphi + ndeta * ndeta + ndz0 * ndz0;
+    const bool chargeOk = !m_sameCharge || si[a].charge == 0 || si[a].charge == tpc[b].fit.charge;
+    const bool inWindow = std::abs(ndphi) <= 1 && std::abs(ndeta) <= 1 && std::abs(ndz0) <= 1 && chargeOk;
+    const bool inCandWindow = std::abs(ndphi) <= m_candScale && std::abs(ndeta) <= m_candScale && std::abs(ndz0) <= m_candScale;
+    return std::make_pair(inWindow, inCandWindow);
+  };
+
+  if (fromChains)
+  {
+    // every trajectory belongs to the TPC track of its chain
+    for (std::size_t a = 0; a < si.size(); ++a)
     {
-      Candidate c;
-      c.si = a;
-      c.tpc = b;
-      c.dphi = wrapPi(si[a].phi - tpc[b].fit.phi);
-      c.deta = si[a].eta - tpc[b].eta;
-      c.dz0 = si[a].z0 - tpc[b].fit.z0;
-      const double ndphi = c.dphi / m_dphiWindow, ndeta = c.deta / m_detaWindow;
-      const double ndz0 = useDz0 ? c.dz0 / m_dz0Window : 0.0;
-      if (std::abs(ndphi) > m_candScale || std::abs(ndeta) > m_candScale || std::abs(ndz0) > m_candScale)
+      const int cid = si[a].t->get_chain_id();
+      if (cid < 0 || cid >= static_cast<int>(seeds->chains.size()) || seeds->chains[cid].id != cid)
       {
         continue;
       }
-      c.chi2 = ndphi * ndphi + ndeta * ndeta + ndz0 * ndz0;
-      const bool chargeOk = !m_sameCharge || si[a].charge == 0 || si[a].charge == tpc[b].fit.charge;
-      c.eligible = std::abs(ndphi) <= 1 && std::abs(ndeta) <= 1 && std::abs(ndz0) <= 1 && chargeOk;
+      const SiHitChain& chain = seeds->chains[cid];
+      const auto it = tpcByIndex.find(static_cast<unsigned int>(chain.tpc_track_index));
+      if (chain.tpc_track_index < 0 || it == tpcByIndex.end())
+      {
+        continue;
+      }
+      Candidate c;
+      const auto [inWindow, inCandWindow] = makeCandidate(a, it->second, c);
+      (void) inCandWindow;  // chain pairs are always stored
+      c.rank = chain.rank;
+      c.eligible = chain.selected && (!m_windowOnChains || inWindow);
       c.store = m_container->size_candidates();
-      m_container->add_candidate(si[a].index, tpc[b].index, c.dphi, c.deta, c.dz0, c.chi2, 0);
+      m_container->add_candidate(si[a].index, tpc[it->second].index, c.dphi, c.deta, c.dz0, c.chi2, 0);
       cands.push_back(c);
     }
   }
+  else
+  {
+    for (std::size_t a = 0; a < si.size(); ++a)
+    {
+      for (std::size_t b = 0; b < tpc.size(); ++b)
+      {
+        Candidate c;
+        const auto [inWindow, inCandWindow] = makeCandidate(a, b, c);
+        if (!inCandWindow)
+        {
+          continue;
+        }
+        c.eligible = inWindow;
+        c.store = m_container->size_candidates();
+        m_container->add_candidate(si[a].index, tpc[b].index, c.dphi, c.deta, c.dz0, c.chi2, 0);
+        cands.push_back(c);
+      }
+    }
+  }
 
-  // ---- assignment: best chi2 first, each track once
+  // ---- assignment
   std::vector<const Candidate*> order;
   for (const auto& c : cands)
   {
@@ -270,7 +327,19 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
       order.push_back(&c);
     }
   }
-  std::sort(order.begin(), order.end(), [](const auto* a, const auto* b) { return a->chi2 < b->chi2; });
+  std::sort(order.begin(), order.end(), [](const auto* a, const auto* b)
+  {
+    if (a->rank != b->rank)
+    {
+      return a->rank < b->rank;
+    }
+    const bool fa = std::isfinite(a->chi2), fb = std::isfinite(b->chi2);
+    if (fa != fb)
+    {
+      return fa;
+    }
+    return a->chi2 < b->chi2;
+  });
   std::vector<char> siUsed(si.size(), 0), tpcUsed(tpc.size(), 0);
 
   SiTpcHelixFit::Config cfg;
@@ -282,6 +351,8 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
 
   for (const Candidate* c : order)
   {
+    // one Si+TPC track per TPC track; a Si trajectory is used once (window mode: its hits are
+    // exclusive; chain mode: one trajectory per chain, chains of different TPC tracks may share hits)
     if (siUsed[c->si] || tpcUsed[c->tpc])
     {
       continue;
@@ -359,8 +430,8 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
   if (Verbosity() > 0)
   {
     std::cout << Name() << ": event " << m_nEvents << " Si trajectories " << si.size() << ", TPC tracks " << tpc.size()
-              << ", candidates " << m_container->size_candidates() << " (in window " << order.size() << ")"
-              << ", matched " << m_container->size() << std::endl;
+              << ", candidates " << m_container->size_candidates() << " (eligible " << order.size() << ")"
+              << ", Si+TPC tracks " << m_container->size() << std::endl;
   }
   return Fun4AllReturnCodes::EVENT_OK;
 }

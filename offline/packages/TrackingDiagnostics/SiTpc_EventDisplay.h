@@ -16,7 +16,6 @@ class Tpc_PolyClusterContainer;
 class Tpc_PolyTrackContainer;
 class Tpc_PolyTrackVertexContainer;
 class SiTpc_TrackContainer;
-class SiTpcHitMatchContainer;
 
 // Event display of the silicon seeds / trajectories together with the TPC poly clusters and
 // poly tracks.  One TDirectory per event (events/event_NNNNNN), only canvases are written.
@@ -30,11 +29,13 @@ class SiTpcHitMatchContainer;
 //
 // ---- DETECTOR coordinates (as SiHitSeedDisplay): axes nominal Vz, intrinsic Uphi, layer.
 //   c3_evtN_det_hits_chains_traj : one histogram (BOX2Z) with all Si hits over the full Uphi
-//                                  turn [B, B+2pi) (B = setClamshellBoundary), every chain as a
-//                                  solid line, every Si trajectory as a dashed line (crossing of
-//                                  the fitted helix with each nominal layer), and the vertex
-//                                  plane at layer -1 (R = 0): tracklet vertex_z (blue) and each
-//                                  trajectory's z0 (dotted, chain colour).
+//                                  turn [B, B+2pi) (B = setClamshellBoundary), every TPC-driven
+//                                  chain selected by SiHitSeedReco as a solid line (candidates
+//                                  dotted with setDrawCandidateChains), every Si trajectory as a
+//                                  dashed line (crossing of the fitted helix with each nominal
+//                                  layer), and the vertex plane at layer -1 (R = 0): the pca z of
+//                                  each chain's TPC seed (triangle) and each trajectory's z0
+//                                  (dotted, chain colour).
 //   Lines crossing the Uphi seam at B are split there.
 //   setDrawUnassociatedHits(false) keeps only the chain hits in the histogram.
 //
@@ -58,16 +59,6 @@ class SiTpcHitMatchContainer;
 // Colours: Si seed and its trajectory share a colour (chain id); a TPC poly cluster and its
 // poly track share a colour (assembled track id).  Si hits are squares, TPC clusters circles.
 //
-// ---- TPC-driven silicon hit chains (SiTpcHitChainMatcher, node SI_TPC_HITMATCHES), optional:
-//   the same canvases again with the suffix "_tpcdriven", the independent chaining above unchanged:
-//     c3_evtN_det_hits_chains_traj_tpcdriven, c3_evtN_phys_z_x_y_tpcdriven,
-//     c3_evtN_phys_si_z_x_y_tpcdriven, c_evtN_phys_xy_tpcdriven, c_evtN_phys_xy_si_tpcdriven,
-//     c_evtN_phys_z_r_tpcdriven
-//   chain (solid)      = its attached hit groups (detector view: group centroids per layer)
-//   trajectory (dashed)= the silicon chain helix: TPC radius / helicity / tan(lambda), centre and
-//                        z0 anchored on the groups (dashed beyond the silicon, as the Si trajectories)
-//   Si hits in the colour of their TPC-driven chain, other hits grey; group centroids = open
-//   circles in the zooms; TPC tracks in the colour of their TPC-driven chain, unmatched grey.
 class SiTpc_EventDisplay : public SubsysReco
 {
  public:
@@ -108,12 +99,9 @@ class SiTpc_EventDisplay : public SubsysReco
   // colour of that Si chain, unmatched TPC in grey (default).  false: colour by assembled id.
   void setColorTpcByMatch(bool v) { m_colorTpcByMatch = v; }
 
-  // ---- TPC-driven silicon hit chains (SiTpcHitChainMatcher): "_tpcdriven" canvases
-  void setDrawTpcDrivenChains(bool v) { m_drawTpcDriven = v; }  // default on (drawn if the node exists)
-  void setTpcDrivenNodeName(const std::string& s) { m_tpcDrivenNodeName = s; }
-  // only rank-0 chains (best per TPC track, default) / only chains selected by SiTpcHitChainResolver
-  void setTpcDrivenBestOnly(bool v) { m_tpcDrivenBestOnly = v; }
-  void setTpcDrivenOnlySelected(bool v) { m_tpcDrivenOnlySelected = v; }
+  // ---- TPC-driven Si chains (SiHitSeedReco): only the selected chain of every TPC track
+  // (default) or also all candidate chains (dotted in the detector view)
+  void setDrawCandidateChains(bool v) { m_drawCandidateChains = v; }
 
   // ---- Si frame (must match SiTrajectoryFitter)
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
@@ -209,11 +197,7 @@ class SiTpc_EventDisplay : public SubsysReco
   bool m_drawSiTpcTracks = false;
   bool m_colorTpcByMatch = true;
   int m_siTpcTrackColor = 1;  // kBlack
-  SiTpcHitMatchContainer* m_hitMatches = nullptr;
-  std::string m_tpcDrivenNodeName = "SI_TPC_HITMATCHES";
-  bool m_drawTpcDriven = true;
-  bool m_tpcDrivenBestOnly = true;
-  bool m_tpcDrivenOnlySelected = false;
+  bool m_drawCandidateChains = false;
 
   bool m_drawDetector = true;
   bool m_drawPhysics = true;
