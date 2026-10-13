@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+// Silicon hit in HARDWARE (intrinsic) coordinates, as decoded and aligned by SiHitSeedReco.
 struct SiHitPoint
 {
   int layer = -1;
@@ -24,25 +25,10 @@ struct SiHitPoint
   float adc = 0;
   double lx = 0;
   double ly = 0;
-  double z = 0;       // notebook nominal Vz [cm]
-  double phi = 0;     // notebook intrinsic Uphi [rad]
+  double z = 0;       // nominal Vz [cm]
+  double phi = 0;     // intrinsic Uphi [rad]
   double zbin = 0;
   double phibin = 0;
-};
-
-struct SiClusterPoint
-{
-  TrkrDefs::cluskey key = TrkrDefs::CLUSKEYMAX;
-  int layer = -1;
-  int stave = -1;
-  int chip = -1;
-  int ladderphi = -1;
-  int ladderz = -1;
-  float adc = 0;
-  double lx = 0;
-  double ly = 0;
-  double z = 0;
-  double phi = 0;
 };
 
 struct SiBlob
@@ -87,23 +73,77 @@ struct SiChainStep
   double score = 0;
 };
 
+// One silicon chain found for one TPC track.  Hits may be shared between chains (of the same or
+// of different TPC tracks): the chaining is TPC-driven and does not mask used hits.
+// Per-layer vectors (layers, blob_ids, point_hit_ids, z, phi, phys_*, res_*) are ordered
+// outermost layer first.
 struct SiHitChain
 {
-  int id = -1;
+  int id = -1;  // index in SiHitSeedEvent::chains
   std::vector<int> blob_ids;
-  std::vector<int> hit_ids;
+  std::vector<int> hit_ids;  // all hits of the member blobs
   std::vector<int> layers;
   std::vector<int> point_hit_ids;
-  std::vector<double> z;
-  std::vector<double> phi;
+  std::vector<double> z;    // hardware Vz of the representative hit [cm]
+  std::vector<double> phi;  // hardware Uphi of the representative hit [rad]
   std::vector<SiChainStep> steps;
   int n_mvtx = 0;
   int n_intt = 0;
-  double score = 0;
+  double score = 0;  // sum of the step scores (window-normalised)
+
+  // ---- TPC association
+  int tpc_track_index = -1;  // index in TPC_POLYTRACKS
+  unsigned int tpc_track_id = 0;
+  unsigned int tpc_assembled_track_id = 0;
+  int seed_outer_layer = -1;  // outer layer of the seed pair (2: pair 2->1, 1: pair 1->0)
+  int anchor_blob = -1;       // blob in the TPC anchor window on the outer seed layer
+
+  // ---- physics space: one point per layer, TPC frame (detector -> global -> clamshell half on
+  // the TPC beam axis), blob centroid projected on the nominal layer cylinder
+  std::vector<double> phys_x;
+  std::vector<double> phys_y;
+  std::vector<double> phys_z;
+  // residuals of those points to the TPC helix at the same radius [cm]
+  std::vector<double> res_rdphi;
+  std::vector<double> res_dz;
+  double tpc_dz_offset = 0;  // weighted mean dz (subtracted in tpc_chi2 if the z offset is free)
+  double tpc_chi2 = std::numeric_limits<double>::quiet_NaN();  // chi2 / ndf of the agreement
+  int tpc_ndf = 0;
+  int rank = -1;          // 0 = best chain of its TPC track (most layers, then best tpc_chi2)
+  bool selected = false;  // rank 0 and passing the agreement cut
+  int n_layers() const { return n_mvtx + n_intt; }
 };
 
-// Transient Fun4All node payload produced by SiHitSeedReco and consumed by
-// SiHitSeedQA / SiHitSeedDisplay.  It is not written to DST.
+// One entry per TPC track seen by SiHitSeedReco.
+struct SiTpcSeedInfo
+{
+  enum Status
+  {
+    Chained = 0,
+    TooFewClusters = 1,
+    FitFailed = 2,
+    NoPrediction = 3,   // TPC helix does not reach the outer seed layers
+    NoAnchor = 4,       // no silicon hit in the anchor window
+    NoChain = 5,        // anchors found, no chain passing the layer requirements
+    Rejected = 6        // chains found, best one fails the agreement cut
+  };
+  int tpc_track_index = -1;
+  unsigned int tpc_track_id = 0;
+  unsigned int tpc_assembled_track_id = 0;
+  unsigned int n_clusters = 0;
+  int status = TooFewClusters;
+  double pt = std::numeric_limits<double>::quiet_NaN();
+  double phi = std::numeric_limits<double>::quiet_NaN();
+  double tanl = std::numeric_limits<double>::quiet_NaN();
+  double z0 = std::numeric_limits<double>::quiet_NaN();  // pca z [cm], TPC frame
+  int charge = 0;
+  int n_anchors = 0;
+  int n_chains = 0;
+  int selected_chain = -1;  // SiHitChain::id, -1 if none
+};
+
+// Transient Fun4All node payload produced by SiHitSeedReco and consumed by SiTrajectoryFitter,
+// SiTpcTrackMatcher and SiTpc_EventDisplay.  It is not written to DST.
 class SiHitSeedEvent : public PHObject
 {
  public:
@@ -111,48 +151,35 @@ class SiHitSeedEvent : public PHObject
 
   void identify(std::ostream& os = std::cout) const override
   {
+    unsigned int nSel = 0;
+    for (const auto& c : chains)
+    {
+      nSel += c.selected;
+    }
     os << "SiHitSeedEvent: event=" << event
        << " hits=" << hits.size()
-       << " clusters=" << clusters.size()
        << " blobs=" << blobs.size()
+       << " tpc_seeds=" << tpc_seeds.size()
        << " chains=" << chains.size()
+       << " selected=" << nSel
        << std::endl;
   }
 
   void Reset() override
   {
     hits.clear();
-    clusters.clear();
     blobs.clear();
     chains.clear();
-    vertex_z = std::numeric_limits<double>::quiet_NaN();
-    vertex_z_linefit = std::numeric_limits<double>::quiet_NaN();
-    vertex_tracklet_npairs = 0;
-    vertex_tracklet_npeak = 0;
-    dz_vs_z_intercept_bins = std::numeric_limits<double>::quiet_NaN();
-    dz_vs_z_slope_bins_per_cm = std::numeric_limits<double>::quiet_NaN();
-    n_vertex_links = 0;
+    tpc_seeds.clear();
   }
 
   int isValid() const override { return 1; }
 
   unsigned long long event = 0;
   std::vector<SiHitPoint> hits;
-  std::vector<SiClusterPoint> clusters;
   std::vector<SiBlob> blobs;
   std::vector<SiHitChain> chains;
-
-  // vertex_z [cm, nominal z frame]: tracklet vertex found BEFORE chain finding, independent of
-  // the seed z window (peak of the z0 distribution of all MVTX blob pairs, see SiHitSeedReco).
-  double vertex_z = std::numeric_limits<double>::quiet_NaN();
-  int vertex_tracklet_npairs = 0;  // pairs filled into the z0 histogram
-  int vertex_tracklet_npeak = 0;   // pairs within the peak window
-  // vertex_z_linefit [cm]: z where the line fit of dz[bins] vs z over the ACCEPTED seed links
-  // crosses dz = 0.  Biased by the seed window (it can only see links the window accepted).
-  double vertex_z_linefit = std::numeric_limits<double>::quiet_NaN();
-  double dz_vs_z_intercept_bins = std::numeric_limits<double>::quiet_NaN();
-  double dz_vs_z_slope_bins_per_cm = std::numeric_limits<double>::quiet_NaN();
-  int n_vertex_links = 0;
+  std::vector<SiTpcSeedInfo> tpc_seeds;
 };
 
 #endif
