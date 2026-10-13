@@ -3,6 +3,7 @@
 #include "tpctrackreco/Tpc_PolyCluster.h"
 #include "tpctrackreco/Tpc_PolyClusterContainer.h"
 
+#include <sitrackreco/SiHitSeedData.h>
 #include <sitrackreco/SiTpcHelixFit.h>
 #include <sitrackreco/SiTpc_Track.h>
 #include <sitrackreco/SiTpc_TrackContainer.h>
@@ -12,8 +13,10 @@
 #include <phool/getClass.h>
 
 #include <TFile.h>
+#include <TH3.h>
 #include <TTree.h>
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <iostream>
@@ -36,6 +39,25 @@ namespace
     }
     return phi;
   }
+
+  int charge_index(int charge)
+  {
+    if (charge > 0)
+    {
+      return 1;
+    }
+    if (charge < 0)
+    {
+      return 0;
+    }
+    return -1;
+  }
+
+  // nominal Si layer radii [cm], as in SiHitSeedReco
+  constexpr double kSiRadius[7] = {2.523, 3.336, 4.148, 7.188 - 0.0036, 7.732 - 0.0036, 9.680 - 0.0036, 10.262 - 0.0036};
+
+  constexpr const char* kChargeName[2] = {"neg", "pos"};
+  constexpr const char* kChargeTitle[2] = {"q<0", "q>0"};
 }  // namespace
 
 SiTpc_TrackResiduals::SiTpc_TrackResiduals(const std::string& name, const std::string& outfilename)
@@ -102,6 +124,21 @@ int SiTpc_TrackResiduals::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("n_tpc", &m_nTpcLayers, "n_tpc/i");
   m_tree->Branch("res_rphi_layer", m_resRPhiLayer, std::format("res_rphi_layer[{}]/D", kNLayers).c_str());
   m_tree->Branch("res_z_layer", m_resZLayer, std::format("res_z_layer[{}]/D", kNLayers).c_str());
+  m_tree->Branch("dphi_layer", m_dphiLayer, std::format("dphi_layer[{}]/D", kNLayers).c_str());
+  m_tree->Branch("dphi_prev_layer", m_dphiPrevLayer, std::format("dphi_prev_layer[{}]/D", kNLayers).c_str());
+  m_tree->Branch("prev_layer", m_prevLayer, std::format("prev_layer[{}]/I", kNLayers).c_str());
+  m_tree->Branch("ddphi_layer", m_ddphiLayer, std::format("ddphi_layer[{}]/D", kNLayers).c_str());
+  m_tree->Branch("hw_has_chain", &m_hwHasChain, "hw_has_chain/I");
+  m_tree->Branch("hw_prev_layer", m_hwPrevLayer, std::format("hw_prev_layer[{}]/I", kNSiLayers).c_str());
+  m_tree->Branch("hw_step_kind", m_hwStepKind, std::format("hw_step_kind[{}]/I", kNSiLayers).c_str());
+  m_tree->Branch("hw_uphi", m_hwUphi, std::format("hw_uphi[{}]/D", kNSiLayers).c_str());
+  m_tree->Branch("hw_vz", m_hwVz, std::format("hw_vz[{}]/D", kNSiLayers).c_str());
+  m_tree->Branch("hw_dphi_step", m_hwDphiStep, std::format("hw_dphi_step[{}]/D", kNSiLayers).c_str());
+  m_tree->Branch("hw_dphi_pred", m_hwDphiPred, std::format("hw_dphi_pred[{}]/D", kNSiLayers).c_str());
+  m_tree->Branch("hw_ddphi", m_hwDdphi, std::format("hw_ddphi[{}]/D", kNSiLayers).c_str());
+  m_tree->Branch("hw_dz_step", m_hwDzStep, std::format("hw_dz_step[{}]/D", kNSiLayers).c_str());
+  m_tree->Branch("hw_res_phi", m_hwResPhi, std::format("hw_res_phi[{}]/D", kNSiLayers).c_str());
+  m_tree->Branch("hw_res_z", m_hwResZ, std::format("hw_res_z[{}]/D", kNSiLayers).c_str());
   m_tree->Branch("rms_rphi_mvtx", &m_rmsRPhi[0], "rms_rphi_mvtx/D");
   m_tree->Branch("rms_rphi_intt", &m_rmsRPhi[1], "rms_rphi_intt/D");
   m_tree->Branch("rms_rphi_tpc", &m_rmsRPhi[2], "rms_rphi_tpc/D");
@@ -139,7 +176,236 @@ int SiTpc_TrackResiduals::Init(PHCompositeNode* /*unused*/)
     m_matchTree->Branch("chi2", &m_cChi2, "chi2/F");
     m_matchTree->Branch("accepted", &m_cAccepted, "accepted/I");
   }
+
+  if (m_writeDdphiHists)
+  {
+    book_ddphi_hists();
+  }
+  if (m_writeHwHists)
+  {
+    book_hw_hists();
+  }
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+void SiTpc_TrackResiduals::book_hw_hists()
+{
+  m_outfile->cd();
+  for (int q = 0; q < 2; ++q)
+  {
+    m_h3HwDphiStepVsLayer[q] = new TH3F(
+        std::format("h3_hw_dphi_step_vs_layer_{}", kChargeName[q]).c_str(),
+        std::format("hardware {}: #DeltaU_{{#phi}} step into layer L;U_{{#phi}}(L) - U_{{#phi}}(prev) [rad];layer L;p_{{T}}^{{TPC}} [GeV]",
+                    kChargeTitle[q])
+            .c_str(),
+        m_hwStepBins, -m_hwStepMax, m_hwStepMax,
+        kNSiLayers, -0.5, kNSiLayers - 0.5,
+        m_ptBins, m_ptMin, m_ptMax);
+    for (int l = 0; l < kNSiLayers; ++l)
+    {
+      m_h3HwDphiVsPred[l][q] = new TH3F(
+          std::format("h3_hw_dphi_vs_pred_l{}_{}", l, kChargeName[q]).c_str(),
+          std::format("hardware layer {} {}: #DeltaU_{{#phi}} step vs prediction from previous step (const d#phi/dr);"
+                      "#DeltaU_{{#phi}}^{{pred}} [rad];#DeltaU_{{#phi}}(L{}) [rad];p_{{T}}^{{TPC}} [GeV]",
+                      l, kChargeTitle[q], l)
+              .c_str(),
+          m_hwStepBins, -m_hwStepMax, m_hwStepMax,
+          m_hwStepBins, -m_hwStepMax, m_hwStepMax,
+          m_ptBins, m_ptMin, m_ptMax);
+    }
+    m_h3HwDdphiVsLayer[q] = new TH3F(
+        std::format("h3_hw_ddphi_vs_layer_{}", kChargeName[q]).c_str(),
+        std::format("hardware {}: #Delta#DeltaU_{{#phi}} = #DeltaU_{{#phi}} - #DeltaU_{{#phi}}^{{pred}};#Delta#DeltaU_{{#phi}} [rad];layer L;p_{{T}}^{{TPC}} [GeV]",
+                    kChargeTitle[q])
+            .c_str(),
+        m_hwDdphiBins, -m_hwDdphiMax, m_hwDdphiMax,
+        kNSiLayers, -0.5, kNSiLayers - 0.5,
+        m_ptBins, m_ptMin, m_ptMax);
+    m_h3HwResPhiVsLayer[q] = new TH3F(
+        std::format("h3_hw_res_phi_vs_layer_{}", kChargeName[q]).c_str(),
+        std::format("hardware {}: chain step residual U_{{#phi}} - pred;U_{{#phi}} - U_{{#phi}}^{{pred}} [rad];layer L;p_{{T}}^{{TPC}} [GeV]",
+                    kChargeTitle[q])
+            .c_str(),
+        m_hwResBins, -m_hwResPhiMax, m_hwResPhiMax,
+        kNSiLayers, -0.5, kNSiLayers - 0.5,
+        m_ptBins, m_ptMin, m_ptMax);
+    m_h3HwResZVsLayer[q] = new TH3F(
+        std::format("h3_hw_res_z_vs_layer_{}", kChargeName[q]).c_str(),
+        std::format("hardware {}: chain step residual V_{{z}} - pred;V_{{z}} - V_{{z}}^{{pred}} [cm];layer L;p_{{T}}^{{TPC}} [GeV]",
+                    kChargeTitle[q])
+            .c_str(),
+        m_hwResBins, -m_hwResZMax, m_hwResZMax,
+        kNSiLayers, -0.5, kNSiLayers - 0.5,
+        m_ptBins, m_ptMin, m_ptMax);
+  }
+}
+
+void SiTpc_TrackResiduals::fill_hw(const SiHitChain& chain, double tpcPt, int tpcCharge)
+{
+  m_hwHasChain = 1;
+  const std::size_t n = std::min({chain.layers.size(), chain.phi.size(), chain.z.size()});
+
+  // per-layer hardware position, chain order = outermost first
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    const int l = chain.layers[i];
+    if (l < 0 || l >= kNSiLayers)
+    {
+      continue;
+    }
+    m_hwUphi[l] = chain.phi[i];
+    m_hwVz[l] = chain.z[i];
+  }
+
+  // step-to-step delta-delta-phi
+  for (std::size_t i = 1; i < n; ++i)
+  {
+    const int l = chain.layers[i];
+    const int p = chain.layers[i - 1];
+    if (l < 0 || l >= kNSiLayers || p < 0 || p >= kNSiLayers)
+    {
+      continue;
+    }
+    m_hwPrevLayer[l] = p;
+    m_hwDphiStep[l] = wrap_phi(chain.phi[i] - chain.phi[i - 1]);
+    m_hwDzStep[l] = chain.z[i] - chain.z[i - 1];
+    if (i >= 2)
+    {
+      const int pp = chain.layers[i - 2];
+      const double drPrev = kSiRadius[p] - kSiRadius[pp];
+      if (pp >= 0 && pp < kNSiLayers && std::abs(drPrev) > 1.0e-3 && std::isfinite(m_hwDphiStep[p]))
+      {
+        m_hwDphiPred[l] = m_hwDphiStep[p] * (kSiRadius[l] - kSiRadius[p]) / drPrev;
+        m_hwDdphi[l] = m_hwDphiStep[l] - m_hwDphiPred[l];
+      }
+    }
+  }
+
+  // residuals of the chaining steps themselves
+  for (const auto& st : chain.steps)
+  {
+    const int l = st.to_layer;
+    if (l < 0 || l >= kNSiLayers)
+    {
+      continue;
+    }
+    m_hwStepKind[l] = st.kind;
+    m_hwResPhi[l] = wrap_phi(st.phi - st.pred_phi);
+    m_hwResZ[l] = st.z - st.pred_z;
+  }
+
+  if (!m_writeHwHists || !std::isfinite(tpcPt))
+  {
+    return;
+  }
+  const int q = charge_index(tpcCharge);
+  if (q < 0)
+  {
+    return;
+  }
+  for (int l = 0; l < kNSiLayers; ++l)
+  {
+    if (std::isfinite(m_hwDphiStep[l]))
+    {
+      m_h3HwDphiStepVsLayer[q]->Fill(m_hwDphiStep[l], l, tpcPt);
+    }
+    if (std::isfinite(m_hwDdphi[l]))
+    {
+      m_h3HwDphiVsPred[l][q]->Fill(m_hwDphiPred[l], m_hwDphiStep[l], tpcPt);
+      m_h3HwDdphiVsLayer[q]->Fill(m_hwDdphi[l], l, tpcPt);
+    }
+    if (std::isfinite(m_hwResPhi[l]))
+    {
+      m_h3HwResPhiVsLayer[q]->Fill(m_hwResPhi[l], l, tpcPt);
+    }
+    if (std::isfinite(m_hwResZ[l]))
+    {
+      m_h3HwResZVsLayer[q]->Fill(m_hwResZ[l], l, tpcPt);
+    }
+  }
+}
+
+void SiTpc_TrackResiduals::book_ddphi_hists()
+{
+  // booked while m_outfile is the current directory, so the file owns them
+  m_outfile->cd();
+  for (int q = 0; q < 2; ++q)
+  {
+    for (int l = 0; l < kNSiLayers; ++l)
+    {
+      m_h3DphiVsPrev[l][q] = new TH3F(
+          std::format("h3_dphi_vs_prev_l{}_{}", l, kChargeName[q]).c_str(),
+          std::format("layer {} {}: #Delta#phi vs #Delta#phi of previous (outer) layer;"
+                      "#Delta#phi_{{prev}} [rad];#Delta#phi_{{L{}}} [rad];p_{{T}} [GeV]",
+                      l, kChargeTitle[q], l)
+              .c_str(),
+          m_dphiBins, -m_dphiMax, m_dphiMax,
+          m_dphiBins, -m_dphiMax, m_dphiMax,
+          m_ptBins, m_ptMin, m_ptMax);
+    }
+    m_h3DdphiVsLayer[q] = new TH3F(
+        std::format("h3_ddphi_vs_layer_{}", kChargeName[q]).c_str(),
+        std::format("{}: #Delta#Delta#phi = #Delta#phi_{{L}} - #Delta#phi_{{prev}};"
+                    "#Delta#Delta#phi [rad];layer;p_{{T}} [GeV]",
+                    kChargeTitle[q])
+            .c_str(),
+        m_ddphiBins, -m_ddphiMax, m_ddphiMax,
+        kNLayers, -0.5, kNLayers - 0.5,
+        m_ptBins, m_ptMin, m_ptMax);
+    m_h3DdphiVsDphiPrev[q] = new TH3F(
+        std::format("h3_ddphi_vs_dphi_prev_{}", kChargeName[q]).c_str(),
+        std::format("{}: #Delta#Delta#phi vs #Delta#phi_{{prev}} per Si layer;"
+                    "#Delta#phi_{{prev}} [rad];#Delta#Delta#phi [rad];layer",
+                    kChargeTitle[q])
+            .c_str(),
+        m_dphiBins, -m_dphiMax, m_dphiMax,
+        m_ddphiBins, -m_ddphiMax, m_ddphiMax,
+        kNSiLayers, -0.5, kNSiLayers - 0.5);
+  }
+}
+
+void SiTpc_TrackResiduals::fill_ddphi_hists()
+{
+  // per-layer chain from the outside in, as in TpcSiliconCrossingMatcher:
+  // the "previous" residual of a layer is the one of the next outer layer that has a point
+  int prev = -1;
+  for (int l = kNLayers - 1; l >= 0; --l)
+  {
+    if (!std::isfinite(m_dphiLayer[l]))
+    {
+      continue;
+    }
+    if (prev >= 0)
+    {
+      m_prevLayer[l] = prev;
+      m_dphiPrevLayer[l] = m_dphiLayer[prev];
+      m_ddphiLayer[l] = wrap_phi(m_dphiLayer[l] - m_dphiLayer[prev]);
+    }
+    prev = l;
+  }
+
+  if (!m_writeDdphiHists || m_fitStatus != SiTpcHelixFit::Ok || !std::isfinite(m_pt))
+  {
+    return;
+  }
+  const int q = charge_index(m_charge);
+  if (q < 0)
+  {
+    return;
+  }
+  for (int l = 0; l < kNLayers; ++l)
+  {
+    if (m_prevLayer[l] < 0 || !std::isfinite(m_ddphiLayer[l]))
+    {
+      continue;
+    }
+    m_h3DdphiVsLayer[q]->Fill(m_ddphiLayer[l], l, m_pt);
+    if (l < kNSiLayers)
+    {
+      m_h3DphiVsPrev[l][q]->Fill(m_dphiPrevLayer[l], m_dphiLayer[l], m_pt);
+      m_h3DdphiVsDphiPrev[q]->Fill(m_dphiPrevLayer[l], m_ddphiLayer[l], l);
+    }
+  }
 }
 
 void SiTpc_TrackResiduals::reset_tree_values()
@@ -165,6 +431,19 @@ void SiTpc_TrackResiduals::reset_tree_values()
   {
     m_resRPhiLayer[l] = kNaN;
     m_resZLayer[l] = kNaN;
+    m_dphiLayer[l] = kNaN;
+    m_dphiPrevLayer[l] = kNaN;
+    m_prevLayer[l] = -1;
+    m_ddphiLayer[l] = kNaN;
+  }
+  m_hwHasChain = 0;
+  for (int l = 0; l < kNSiLayers; ++l)
+  {
+    m_hwPrevLayer[l] = -1;
+    m_hwStepKind[l] = -1;
+    m_hwUphi[l] = m_hwVz[l] = kNaN;
+    m_hwDphiStep[l] = m_hwDphiPred[l] = m_hwDdphi[l] = m_hwDzStep[l] = kNaN;
+    m_hwResPhi[l] = m_hwResZ[l] = kNaN;
   }
   for (int d = 0; d < 3; ++d)
   {
@@ -195,6 +474,7 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
   m_clusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_clusterNodeName);
+  m_siSeeds = findNode::getClass<SiHitSeedEvent>(topNode, m_siSeedNodeName);
 
   // ---- matching tree
   m_event = m_evt;
@@ -269,7 +549,7 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
     m_pcaY = t->get_pca_y();
 
     const SiTpcHelixFit::Result helix = SiTpcHelixFit::fromTrack(*t);
-    double layerSumRPhi[kNLayers] = {}, layerSumZ[kNLayers] = {};
+    double layerSumRPhi[kNLayers] = {}, layerSumZ[kNLayers] = {}, layerSumDphi[kNLayers] = {};
     int layerN[kNLayers] = {};
     double detSumRPhi[3] = {}, detSumZ[3] = {};
     int detN[3] = {};
@@ -312,6 +592,7 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
         {
           layerSumRPhi[layer] += r * dphi;
           layerSumZ[layer] += z - st.z;
+          layerSumDphi[layer] += dphi;
           ++layerN[layer];
         }
         detSumRPhi[det] += r * dphi * r * dphi;
@@ -347,6 +628,34 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
       {
         m_resRPhiLayer[l] = layerSumRPhi[l] / layerN[l];
         m_resZLayer[l] = layerSumZ[l] / layerN[l];
+        m_dphiLayer[l] = layerSumDphi[l] / layerN[l];
+      }
+    }
+    fill_ddphi_hists();
+
+    // hardware chain of this track
+    if (m_siSeeds && m_siChainId >= 0)
+    {
+      const SiHitChain* chain = nullptr;
+      if (static_cast<std::size_t>(m_siChainId) < m_siSeeds->chains.size() &&
+          m_siSeeds->chains[m_siChainId].id == m_siChainId)
+      {
+        chain = &m_siSeeds->chains[m_siChainId];
+      }
+      else
+      {
+        for (const auto& c : m_siSeeds->chains)
+        {
+          if (c.id == m_siChainId)
+          {
+            chain = &c;
+            break;
+          }
+        }
+      }
+      if (chain)
+      {
+        fill_hw(*chain, m_tpcPt, m_tpcCharge);
       }
     }
     for (int d = 0; d < 3; ++d)
@@ -381,11 +690,67 @@ int SiTpc_TrackResiduals::End(PHCompositeNode* /*unused*/)
     {
       m_matchTree->Write();
     }
+    if (m_writeDdphiHists)
+    {
+      for (int q = 0; q < 2; ++q)
+      {
+        for (int l = 0; l < kNSiLayers; ++l)
+        {
+          if (m_h3DphiVsPrev[l][q])
+          {
+            m_h3DphiVsPrev[l][q]->Write();
+          }
+        }
+        if (m_h3DdphiVsLayer[q])
+        {
+          m_h3DdphiVsLayer[q]->Write();
+        }
+        if (m_h3DdphiVsDphiPrev[q])
+        {
+          m_h3DdphiVsDphiPrev[q]->Write();
+        }
+      }
+    }
+    if (m_writeHwHists)
+    {
+      for (int q = 0; q < 2; ++q)
+      {
+        for (TH3F* h : {m_h3HwDphiStepVsLayer[q], m_h3HwDdphiVsLayer[q], m_h3HwResPhiVsLayer[q], m_h3HwResZVsLayer[q]})
+        {
+          if (h)
+          {
+            h->Write();
+          }
+        }
+        for (int l = 0; l < kNSiLayers; ++l)
+        {
+          if (m_h3HwDphiVsPred[l][q])
+          {
+            m_h3HwDphiVsPred[l][q]->Write();
+          }
+        }
+      }
+    }
     m_outfile->Close();
     delete m_outfile;
     m_outfile = nullptr;
     m_tree = nullptr;
     m_matchTree = nullptr;
+    // histograms were owned by the file and deleted by Close()
+    for (int q = 0; q < 2; ++q)
+    {
+      for (int l = 0; l < kNSiLayers; ++l)
+      {
+        m_h3DphiVsPrev[l][q] = nullptr;
+      }
+      m_h3DdphiVsLayer[q] = nullptr;
+      m_h3DdphiVsDphiPrev[q] = nullptr;
+      m_h3HwDphiStepVsLayer[q] = m_h3HwDdphiVsLayer[q] = m_h3HwResPhiVsLayer[q] = m_h3HwResZVsLayer[q] = nullptr;
+      for (int l = 0; l < kNSiLayers; ++l)
+      {
+        m_h3HwDphiVsPred[l][q] = nullptr;
+      }
+    }
   }
   return Fun4AllReturnCodes::EVENT_OK;
 }

@@ -300,8 +300,46 @@ int SiHitSeedReco::End(PHCompositeNode*)
       std::cout << " " << statusName(s) << " " << m_statusCount[s] << (s < 6 ? "," : "");
     }
     std::cout << std::endl;
+    if (m_hwDdphiProp0 || m_hwDdphiCheck[0] || m_hwDdphiCheck[1])
+    {
+      std::cout << Name() << ": hw delta-delta-phi (" << m_hwDdphiNSigma << " sigma): layer-0 propagation windows "
+                << m_hwDdphiProp0Used;
+      for (int l = 0; l < 2; ++l)
+      {
+        if (m_hwDdphiCheck[l])
+        {
+          std::cout << ", layer " << l << " checked " << m_hwDdphiChecked[l]
+                    << (m_hwDdphiReject ? " rejected " : " outside window ") << m_hwDdphiRejected[l];
+        }
+      }
+      std::cout << std::endl;
+    }
   }
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+bool SiHitSeedReco::hwDdphiTerms(int layer, const std::map<int, double>& uphiByLayer, double& dphi, double& dphiPred) const
+{
+  const int p = layer + 1;
+  const auto iL = uphiByLayer.find(layer);
+  const auto iP = uphiByLayer.find(p);
+  if (iL == uphiByLayer.end() || iP == uphiByLayer.end())
+  {
+    return false;
+  }
+  const auto iPP = uphiByLayer.upper_bound(p);  // next outer layer of the chain
+  if (iPP == uphiByLayer.end())
+  {
+    return false;
+  }
+  const double drPrev = m_radius[p] - m_radius[iPP->first];
+  if (std::abs(drPrev) < 1e-3)
+  {
+    return false;
+  }
+  dphi = wrapDelta(iL->second - iP->second, twopi);
+  dphiPred = wrapDelta(iP->second - iPP->second, twopi) * (m_radius[layer] - m_radius[p]) / drPrev;
+  return true;
 }
 
 double SiHitSeedReco::wrapDelta(double x, double period)
@@ -909,9 +947,23 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
     {
       return false;
     }
+    double phiHalf = m_propPhiHalf;
+    if (layer == 0 && m_hwDdphiProp0 && acc.count(1) && acc.count(2))
+    {
+      // phi window from the step-to-step correlation instead of the straight line (z unchanged)
+      // layer-0 Uphi is not known yet: only dUphi_pred(0) is used, the dUphi(0) entry is a dummy
+      const std::map<int, double> uphi{{0, acc.at(1).phi}, {1, acc.at(1).phi}, {2, acc.at(2).phi}};
+      double dummy = 0, pred = 0;
+      if (hwDdphiTerms(0, uphi, dummy, pred))
+      {
+        pp = acc.at(1).phi + m_hwDdphiOffset[0] + m_hwDdphiSlope[0] * pred;
+        phiHalf = m_hwDdphiNSigma * m_hwDdphiSigma[0] / dp;
+        ++m_hwDdphiProp0Used;
+      }
+    }
     int bestBlob = -1, bestHit = -1;
     double bestScore = 1e99, bz = 0, bp = 0, rz = 0, rp = 0;
-    forEachHitNear(layer, (pz - m_zmin) / dz, m_propZHalf, pp / dp, m_propPhiHalf, [&](int hid)
+    forEachHitNear(layer, (pz - m_zmin) / dz, m_propZHalf, pp / dp, phiHalf, [&](int hid)
     {
       const int b = m_hitBlob[hid];
       if (b < 0 || isUsed(b))
@@ -921,11 +973,11 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
       const auto& h = m_eventData->hits[hid];
       const double rrphi = wrapDelta(h.phi - pp, twopi) / dp;
       const double rrz = (h.z - pz) / dz;
-      if (std::abs(rrphi) > m_propPhiHalf || std::abs(rrz) > m_propZHalf)
+      if (std::abs(rrphi) > phiHalf || std::abs(rrz) > m_propZHalf)
       {
         return;
       }
-      const double sc = (rrphi / m_propPhiHalf) * (rrphi / m_propPhiHalf) + (rrz / m_propZHalf) * (rrz / m_propZHalf);
+      const double sc = (rrphi / phiHalf) * (rrphi / phiHalf) + (rrz / m_propZHalf) * (rrz / m_propZHalf);
       if (sc < bestScore)
       {
         bestScore = sc;
@@ -960,7 +1012,7 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
     st.res_z_bins = rz;
     st.res_phi_bins = rp;
     st.z_half_window_bins = m_propZHalf;
-    st.phi_half_window_bins = m_propPhiHalf;
+    st.phi_half_window_bins = phiHalf;
     st.score = bestScore;
     out.steps.push_back(st);
     return true;
@@ -1002,6 +1054,37 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
     propagateTo(SiChainStep::InttPropagation, l, fit);
   }
 
+  // step-to-step delta-delta-phi check on the complete chain (layers 0, 1)
+  double ddphiScore = 0;
+  if (m_hwDdphiCheck[0] || m_hwDdphiCheck[1])
+  {
+    std::map<int, double> uphi;
+    for (const auto& [l, a] : acc)
+    {
+      uphi[l] = a.phi;
+    }
+    for (int l = 0; l < 2; ++l)
+    {
+      double d = 0, pred = 0;
+      if (!m_hwDdphiCheck[l] || !hwDdphiTerms(l, uphi, d, pred) || m_hwDdphiSigma[l] <= 0)
+      {
+        continue;
+      }
+      const double pull = (d - m_hwDdphiOffset[l] - m_hwDdphiSlope[l] * pred) / m_hwDdphiSigma[l];
+      out.hw_ddphi_pull[l] = pull;
+      ++m_hwDdphiChecked[l];
+      if (std::abs(pull) > m_hwDdphiNSigma)
+      {
+        ++m_hwDdphiRejected[l];
+        if (m_hwDdphiReject)
+        {
+          return false;
+        }
+      }
+      ddphiScore += pull * pull;
+    }
+  }
+
   out.n_mvtx = 0;
   out.n_intt = 0;
   for (auto it = acc.rbegin(); it != acc.rend(); ++it)
@@ -1024,7 +1107,7 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
       out.hit_ids.push_back(h);
     }
   }
-  out.score = 0;
+  out.score = ddphiScore;
   for (auto& st : out.steps)
   {
     out.score += st.score;
