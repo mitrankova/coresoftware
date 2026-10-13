@@ -91,6 +91,12 @@ struct SiHitChain
   int n_intt = 0;
   double score = 0;  // sum of the step scores (window-normalised)
 
+  // ---- step-to-step delta-delta-phi in hardware coordinates (SiHitSeedReco::setHwDdphi*), for
+  // layers 0 and 1: pull = (dUphi(L) - offset_L - slope_L * dUphi_pred(L)) / sigma_L with
+  // dUphi(L) = Uphi(L) - Uphi(L+1), dUphi_pred = dUphi(L+1) * (r_L - r_{L+1}) / (r_{L+1} - r_PP),
+  // PP = next outer chain layer.  NaN if not evaluated (check off, or L, L+1 or PP missing).
+  double hw_ddphi_pull[2] = {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
+
   // ---- TPC association
   int tpc_track_index = -1;  // index in TPC_POLYTRACKS
   unsigned int tpc_track_id = 0;
