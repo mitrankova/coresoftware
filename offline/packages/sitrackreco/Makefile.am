@@ -13,10 +13,6 @@ AM_LDFLAGS = \
 # Headers installed under $(prefix)/include/sitrackreco
 pkgincludedir = $(includedir)/sitrackreco
 pkginclude_HEADERS = \
-  Si_Chain.h \
-  Si_Chainv1.h \
-  Si_ChainContainer.h \
-  Si_ChainContainerv1.h \
   Si_Trajectory.h \
   Si_Trajectoryv1.h \
   Si_TrajectoryContainer.h \
@@ -25,6 +21,7 @@ pkginclude_HEADERS = \
   SiDetectorFrame.h \
   SiTpcBeamAlignment.h \
   SiTpcHelixFit.h \
+  SiTpcReference.h \
   SiTpc_Track.h \
   SiTpc_Trackv1.h \
   SiTpc_TrackContainer.h \
@@ -32,24 +29,9 @@ pkginclude_HEADERS = \
   SiTpcTrackMatcher.h \
   SiTrajectoryFitter.h \
   SiHitSeedData.h \
-  SiHitSeedReco.h \
-  SiHitSeedQA.h \
-  SiHitGeometryTable.h \
-  SiHitIndex.h \
-  SiTpcChainMath.h \
-  SiTpcHitMatch.h \
-  SiTpcHitMatchv1.h \
-  SiTpcHitMatchContainer.h \
-  SiTpcHitMatchContainerv1.h \
-  SiTpcHitChainMatcher.h \
-  SiTpcHitChainResolver.h \
-  SiTpcHitChainQA.h
+  SiHitSeedReco.h
 
 ROOTDICTS = \
-  Si_Chain_Dict.cc \
-  Si_Chainv1_Dict.cc \
-  Si_ChainContainer_Dict.cc \
-  Si_ChainContainerv1_Dict.cc \
   Si_Trajectory_Dict.cc \
   Si_Trajectoryv1_Dict.cc \
   Si_TrajectoryContainer_Dict.cc \
@@ -57,11 +39,7 @@ ROOTDICTS = \
   SiTpc_Track_Dict.cc \
   SiTpc_Trackv1_Dict.cc \
   SiTpc_TrackContainer_Dict.cc \
-  SiTpc_TrackContainerv1_Dict.cc \
-  SiTpcHitMatch_Dict.cc \
-  SiTpcHitMatchv1_Dict.cc \
-  SiTpcHitMatchContainer_Dict.cc \
-  SiTpcHitMatchContainerv1_Dict.cc
+  SiTpc_TrackContainerv1_Dict.cc
 
 pcmdir = $(libdir)
 nobase_dist_pcm_DATA = $(ROOTDICTS:.cc=_rdict.pcm)
@@ -69,8 +47,6 @@ nobase_dist_pcm_DATA = $(ROOTDICTS:.cc=_rdict.pcm)
 lib_LTLIBRARIES = libsitrackreco.la
 
 libsitrackreco_la_SOURCES = \
-  Si_Chainv1.cc \
-  Si_ChainContainerv1.cc \
   Si_Trajectoryv1.cc \
   Si_TrajectoryContainerv1.cc \
   SiTrajectoryFitter.cc \
@@ -79,12 +55,6 @@ libsitrackreco_la_SOURCES = \
   SiTpc_TrackContainerv1.cc \
   SiTpcTrackMatcher.cc \
   SiHitSeedReco.cc \
-  SiHitSeedQA.cc \
-  SiTpcHitMatchv1.cc \
-  SiTpcHitMatchContainerv1.cc \
-  SiTpcHitChainMatcher.cc \
-  SiTpcHitChainResolver.cc \
-  SiTpcHitChainQA.cc \
   $(ROOTDICTS)
 
 libsitrackreco_la_LIBADD = \

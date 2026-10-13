@@ -33,6 +33,7 @@ int SiTrajectoryFitter::InitRun(PHCompositeNode* topNode)
               << ", detector centre (" << 10 * c[0] << ", " << 10 * c[1] << ", " << 10 * c[2] << ") mm"
               << ", beam (" << beamX() << ", " << beamY() << ") cm" << (m_beamFromAlignment ? " (TPC beam axis)" : "")
               << ", Bz " << m_bz << " T"
+              << ", chains " << (m_selectedOnly ? "selected only" : "all candidates")
               << ", use INTT " << m_useIntt << ", min points " << m_minPoints
               << ", straight line if radial lever arm < " << m_minCurvatureLeverArm << " cm"
               << ", beam constraint " << (m_beamConstraint ? "on" : "off")
@@ -116,8 +117,14 @@ int SiTrajectoryFitter::process_event(PHCompositeNode* topNode)
 
   std::array<unsigned int, 5> nStatus{};  // NotFitted, Ok, TooFewPoints, Degenerate, StraightLine
   unsigned int nLowPt = 0;
+  unsigned int nChains = 0;
   for (const auto& chain : event->chains)
   {
+    if (m_selectedOnly && !chain.selected)
+    {
+      continue;
+    }
+    ++nChains;
     auto* trajectory = new Si_Trajectoryv1();
     trajectory->set_id(m_container->size());
     trajectory->set_chain_id(chain.id);
@@ -172,7 +179,7 @@ int SiTrajectoryFitter::process_event(PHCompositeNode* topNode)
 
   if (Verbosity() > 0)
   {
-    std::cout << Name() << ": event " << event->event << " chains=" << event->chains.size()
+    std::cout << Name() << ": event " << event->event << " chains=" << event->chains.size() << " fitted=" << nChains
               << " circle=" << nStatus[Si_Trajectory::Ok] << " (pt<" << m_reportPt << " GeV: " << nLowPt << ")"
               << " straight=" << nStatus[Si_Trajectory::StraightLine]
               << " too_few_points=" << nStatus[Si_Trajectory::TooFewPoints]

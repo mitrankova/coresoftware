@@ -17,29 +17,31 @@ class Tpc_PolyTrackContainer;
 
 // SiTpcTrackMatcher
 //
-// Matches silicon trajectories (SI_TRAJECTORY, SiTrajectoryFitter) to TPC poly tracks
-// (TPC_POLYTRACKS + their TPC_POLYCLUSTERS) in phi and eta, and refits every matched pair
-// with all its points.  Output: SiTpc_TrackContainerv1 "SITPC_TRACKS" under DST/SVTX.
+// Pairs silicon trajectories (SI_TRAJECTORY, SiTrajectoryFitter) with TPC poly tracks
+// (TPC_POLYTRACKS + their TPC_POLYCLUSTERS) and refits every pair with all its points (full Si +
+// TPC trajectory).  Output: SiTpc_TrackContainerv1 "SITPC_TRACKS" under DST/SVTX.
 //
 // Frame: TPC frame (SiTpcBeamAlignment).  The TPC clusters are used as measured; the Si
 // trajectories are already in it (SiTrajectoryFitter moves both clamshell halves onto the TPC
 // beam axis - use the same alignment object there).  Beam = TPC beam axis.
 //
-// 1. TPC-only helix: SiTpcHelixFit on the track's clusters (same model as the Si fit), so
-//    both sides are described the same way at their point of closest approach to the beam.
-// 2. Matching variables, all at the pca:
-//      dphi = phi_Si - phi_TPC (direction of motion, wrapped),  deta = eta_Si - eta_TPC,
-//      dz0  = z0_Si - z0_TPC (optional: TPC z depends on the bunch crossing / t0).
-//    A pair is a candidate if |dphi| < dphiWindow and |deta| < detaWindow [and |dz0| <
-//    dz0Window, and same charge if requested and both are circle fits].
-//    chi2 = (dphi/dphiWindow)^2 + (deta/detaWindow)^2 [+ (dz0/dz0Window)^2].
-//    Assignment: best chi2 first, every Si and TPC track used at most once.
+// 1. TPC-only helix: SiTpcHelixFit on the track's clusters (same model as the Si fit).
+// 2. Association
+//    FromSiChains (default): the chaining is TPC-driven (SiHitSeedReco), so every Si chain already
+//      belongs to a TPC track (SiHitChain::tpc_track_index, read from SI_HIT_SEED_EVENT, which
+//      must be in the same job).  A pair is accepted if its chain was SELECTED by SiHitSeedReco
+//      (and, with setApplyMatchWindowToChains(true), also inside the phi/eta windows below).
+//      One Si+TPC track per TPC track; Si hits may be shared by different TPC tracks.
+//    PhiEtaWindow: independent matching at the pca as before,
+//      dphi = phi_Si - phi_TPC, deta = eta_Si - eta_TPC, dz0 = z0_Si - z0_TPC (optional),
+//      candidate if |dphi| < dphiWindow and |deta| < detaWindow [and |dz0| < dz0Window, same
+//      charge if requested]; chi2 = sum of the squared normalised differences; best chi2 first,
+//      every Si and TPC track used at most once.
+//    In both modes the matching variables are stored for every pair (candidate list, "accepted"
+//    flag) so SiTpc_TrackResiduals can write its matching tree.
 // 3. Refit: SiTpcHelixFit on Si layer points + TPC clusters with per-detector weights (xy and z
 //    separately; INTT z is a strip length, so its z weight is small by default), optional free
 //    TPC z offset, optional beam constraint.
-//
-// All pairs within setCandidateWindowScale x the windows are stored in the container (with an
-// "accepted" flag) to tune the windows, see SiTpc_TrackResiduals.
 class SiTpcTrackMatcher : public SubsysReco
 {
  public:
@@ -49,15 +51,23 @@ class SiTpcTrackMatcher : public SubsysReco
   int InitRun(PHCompositeNode*) override;
   int process_event(PHCompositeNode*) override;
 
+  enum class Association
+  {
+    FromSiChains,
+    PhiEtaWindow
+  };
+  void setAssociation(Association a) { m_association = a; }
+  // FromSiChains: also require the pair to be inside the phi/eta(/z0) windows (default false)
+  void setApplyMatchWindowToChains(bool v) { m_windowOnChains = v; }
+
   // ---- nodes
   void setSiTrajectoryNodeName(const std::string& s) { m_siTrajNodeName = s; }
+  void setSiSeedNodeName(const std::string& s) { m_siSeedNodeName = s; }
   void setTpcClusterNodeName(const std::string& s) { m_tpcClusterNodeName = s; }
   void setTpcTrackNodeName(const std::string& s) { m_tpcTrackNodeName = s; }
   void setOutputNodeName(const std::string& s) { m_outputNodeName = s; }
 
   // ---- frame (same object as in SiTrajectoryFitter / SiTpc_EventDisplay)
-  // Common frame = TPC frame: TPC clusters are used as measured, the Si trajectories come from
-  // SiTrajectoryFitter with both clamshell halves already moved onto the TPC beam axis.
   void setBeamAlignment(const SiTpcBeamAlignment& a) { m_alignment = a; }
   void setApplyBeamAlignment(bool v) { m_alignment.setEnabled(v); }
   // Beam position for the perigee / beam constraint.  Default: TPC beam axis at z = 0 from the
@@ -72,7 +82,7 @@ class SiTpcTrackMatcher : public SubsysReco
   double beamY() const { return m_beamFromAlignment ? m_alignment.referenceBeamY() : m_beamY; }
   void setBz(double tesla) { m_bz = tesla; }
 
-  // ---- matching
+  // ---- matching windows (PhiEtaWindow; FromSiChains only with setApplyMatchWindowToChains)
   void setMatchWindow(double dphi, double deta)
   {
     m_dphiWindow = dphi;
@@ -106,7 +116,11 @@ class SiTpcTrackMatcher : public SubsysReco
  private:
   int createNodes(PHCompositeNode*);
 
+  Association m_association = Association::FromSiChains;
+  bool m_windowOnChains = false;
+
   std::string m_siTrajNodeName = "SI_TRAJECTORY";
+  std::string m_siSeedNodeName = "SI_HIT_SEED_EVENT";
   std::string m_tpcClusterNodeName = "TPC_POLYCLUSTERS";
   std::string m_tpcTrackNodeName = "TPC_POLYTRACKS";
   std::string m_outputNodeName = "SITPC_TRACKS";
