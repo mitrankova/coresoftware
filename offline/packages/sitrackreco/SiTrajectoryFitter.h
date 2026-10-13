@@ -21,7 +21,11 @@ class Si_TrajectoryContainer;
 //
 // Input : SiHitSeedEvent (transient, from SiHitSeedReco), node "SI_HIT_SEED_EVENT".
 // Output: Si_TrajectoryContainerv1 of Si_Trajectoryv1, persistent node "SI_TRAJECTORY"
-//         under DST/SVTX.
+//         under DST/SVTX.  Si_Trajectory::get_chain_id() = SiHitChain::id.
+//
+// SiHitSeedReco is TPC-driven and keeps several candidate chains per TPC track (hits may be
+// shared); by default only the SELECTED chain of every TPC track is fitted
+// (setFitSelectedChainsOnly(false): all candidate chains).
 //
 // For every chain:
 //   1. every hit on the chain -> DETECTOR frame   (SiDetectorFrame::toDetector)
@@ -68,6 +72,8 @@ class SiTrajectoryFitter : public SubsysReco
   // solenoid field [T], signed: only used for pt and charge
   void setBz(double tesla) { m_bz = tesla; }
 
+  // default true: only the chain selected by SiHitSeedReco for every TPC track
+  void setFitSelectedChainsOnly(bool v) { m_selectedOnly = v; }
   void setUseIntt(bool v) { m_useIntt = v; }
   void setMinPoints(unsigned int n) { m_minPoints = n; }
   // The curvature of a short track is not measurable: three MVTX points span only 1.6 cm, so
@@ -134,6 +140,7 @@ class SiTrajectoryFitter : public SubsysReco
   double m_beamY = 0.0;
   bool m_beamFromAlignment = true;
   double m_bz = 1.4;
+  bool m_selectedOnly = true;
   bool m_useIntt = true;
   unsigned int m_minPoints = 3;
   double m_minCurvatureLeverArm = 3.0;
