@@ -12,6 +12,7 @@
 #include <Eigen/Core>
 
 #include <array>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -126,6 +127,40 @@ class SiHitSeedReco : public SubsysReco
   void setPropagationZHalfWindowBins(double v) { m_propZHalf = v; }
 
   // ---------------------------------------------------------------------------
+  // Step-to-step delta-delta-phi constraint in hardware coordinates (layers 0 and 1), from the
+  // fits of h3_hw_dphi_vs_pred_l{L} (SiTpc_TrackResiduals + FitHwDphiCorrelation.C):
+  //   dUphi(L)      = Uphi(L) - Uphi(L+1)
+  //   dUphi_pred(L) = dUphi(L+1) * (r_L - r_{L+1}) / (r_{L+1} - r_PP)   PP = next outer chain layer
+  //   expected dUphi(L) = offset_L + slope_L * dUphi_pred(L),  width sigma_L  [rad]
+  // Used in two places (both off by default):
+  //   setHwDdphiLayer0Propagation(true): when layer 0 is reached by MVTX propagation from layers
+  //     2 and 1, its Uphi window is centred on the expected dUphi(0) with half width
+  //     nSigma * sigma_0 (instead of the straight line and setPropagationPhiHalfWindowBins);
+  //     z window unchanged.
+  //   setHwDdphiCheck(l0, l1): after the chain is complete (INTT attached), the pull of layer 0
+  //     (needs layers 1, 2) and/or layer 1 (needs layer 2 and an outer layer: INTT, or none) is
+  //     computed and stored in SiHitChain::hw_ddphi_pull; with setHwDdphiReject(true) a chain
+  //     with |pull| > nSigma is dropped, otherwise pull^2 is added to the chain score.
+  // ---------------------------------------------------------------------------
+  void setHwDdphiParams(int layer, double offset, double slope, double sigma)
+  {
+    if (layer == 0 || layer == 1)
+    {
+      m_hwDdphiOffset[layer] = offset;
+      m_hwDdphiSlope[layer] = slope;
+      m_hwDdphiSigma[layer] = sigma;
+    }
+  }
+  void setHwDdphiNSigma(double v) { m_hwDdphiNSigma = v; }
+  void setHwDdphiLayer0Propagation(bool v) { m_hwDdphiProp0 = v; }
+  void setHwDdphiCheck(bool layer0, bool layer1)
+  {
+    m_hwDdphiCheck[0] = layer0;
+    m_hwDdphiCheck[1] = layer1;
+  }
+  void setHwDdphiReject(bool v) { m_hwDdphiReject = v; }
+
+  // ---------------------------------------------------------------------------
   // Selection (physics space): agreement with the TPC helix
   //   chi2/ndf = [sum (rdphi/sigRphi)^2 + sum ((dz - offset)/sigZ)^2] / ndf
   //   offset = weighted mean dz if setTpcAgreementFreeZOffset(true) (TPC z depends on t0)
@@ -197,6 +232,9 @@ class SiHitSeedReco : public SubsysReco
                   double& zCenterBins, double& zHalfBins, double& phiCenterBins) const;
   std::vector<Candidate> seedCandidates(const SiBlob& seed, int innerLayer, const SiTpcReference::TpcReference&) const;
   bool buildChain(const SiBlob& seed, const Candidate& cand, SiHitChain& out) const;
+  // dUphi(L) and dUphi_pred(L) for L = 0, 1 from the hardware hits per layer (layer -> Uphi);
+  // false if L, L+1 or the next outer layer is missing
+  bool hwDdphiTerms(int layer, const std::map<int, double>& uphiByLayer, double& dphi, double& dphiPred) const;
   void toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& chain) const;
 
   // nodes
@@ -242,6 +280,18 @@ class SiHitSeedReco : public SubsysReco
   // propagation windows
   double m_propPhiHalf = 2.0;  // [Uphi bins]
   double m_propZHalf = 5.0;    // [z bins]
+
+  // step-to-step delta-delta-phi, layers 0 and 1 [rad]; defaults from the run-2025 fit (both charges)
+  std::array<double, 2> m_hwDdphiOffset{{-0.00497, 0.00240}};
+  std::array<double, 2> m_hwDdphiSlope{{1.4863, 1.5387}};
+  std::array<double, 2> m_hwDdphiSigma{{0.02029, 0.01824}};
+  double m_hwDdphiNSigma = 3.0;
+  bool m_hwDdphiProp0 = false;
+  std::array<bool, 2> m_hwDdphiCheck{{false, false}};
+  bool m_hwDdphiReject = false;
+  mutable std::array<unsigned long, 2> m_hwDdphiChecked{};
+  mutable std::array<unsigned long, 2> m_hwDdphiRejected{};
+  mutable unsigned long m_hwDdphiProp0Used = 0;
 
   // selection
   double m_sigRphi = 0.1;                       // [cm]
