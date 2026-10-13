@@ -21,6 +21,9 @@
 class PHCompositeNode;
 class SiHitSeedEvent;
 class SiTpcHitMatchContainer;
+class TFile;
+class TH2F;
+class TTree;
 
 // SiTpcHitChainMatcher
 //
@@ -75,6 +78,21 @@ class SiTpcHitMatchContainer;
 //      residuals, so the delta-delta cuts can be tuned from the output.
 //
 // All cuts are LOOSE by default (see the defaults below): tune ddphi / ddtheta from SiTpcHitChainQA.
+//
+// Diagnostics (setDiagnosticsFile): one TTree row per TPC track ("tpc": status code, why no chain)
+// and per TPC track x layer ("probe": residuals of the NEAREST hit in a wide window around the TPC
+// prediction, independent of all cuts, plus what the best chain attached there).  Verbosity 2
+// prints the same per track.
+// Histograms of ALL hits in the probe window, per layer L (the true hits form a peak on a flat
+// combinatorial background; in dense events the nearest hit is often background, so offsets are
+// seen here, not in the nearest-hit residuals):
+//   h_probe_L<L>_rdphi_dz       r*dphi [cm] vs dz [cm]                 -> phi / z offsets, windows
+//   h_probe_L<L>_dz_vs_z        dz vs predicted z                     -> TPC t0 (offset) / v_drift (slope)
+//   h_probe_L<L>_rdphi_vs_phi   r*dphi vs predicted global phi        -> Si-TPC rotation (flat) / shift (sine)
+// Status codes:
+//   0 matched   1 too few TPC clusters   2 TPC helix fit not Ok   3 reference invalid
+//   4 no layer prediction inside the silicon   5 no group accepted at any layer
+//   6 chain below setMinLayers / setMinMvtxLayers
 class SiTpcHitChainMatcher : public SubsysReco
 {
  public:
@@ -101,6 +119,17 @@ class SiTpcHitChainMatcher : public SubsysReco
   // translations of both halves (the halves are displaced by ~1 mm)
   void setClamshellBoundaryMargin(double cm) { m_boundaryMargin = cm; }
   void setMinTpcClusters(unsigned int n) { m_minTpcClusters = n; }
+  // added to every TPC cluster z before the TPC helix fit [cm] (TPC t0 / drift velocity offset)
+  void setTpcZOffset(double cm) { m_tpcZOffset = cm; }
+  // diagnostics trees ("tpc", "probe"), see above; empty = off
+  void setDiagnosticsFile(const std::string& f) { m_diagFile = f; }
+  // probe window around the TPC prediction: |r dphi| < rphi, |dz| < z (MVTX / INTT) [cm]
+  void setProbeWindow(double rphi, double zMvtx, double zIntt)
+  {
+    m_probeRphi = rphi;
+    m_probeZ[0] = zMvtx;
+    m_probeZ[1] = zIntt;
+  }
 
   // ---- hit geometry (SiHitGeometryTable)
   void setHitModelPlanar(bool v) { m_geometry.setModel(v ? SiHitGeometryTable::Planar : SiHitGeometryTable::Linear); }
@@ -216,7 +245,30 @@ class SiTpcHitChainMatcher : public SubsysReco
     unsigned int index = 0;
     unsigned int id = 0;
     unsigned int sourceId = 0;
+    unsigned int nClusters = 0;
     SiTpcHelixFit::Result fit;
+  };
+
+  // per-track diagnostics (setDiagnosticsFile / Verbosity 2)
+  struct Probe
+  {
+    bool valid = false;  // TPC prediction inside the layer
+    bool alt = false;    // nearest hit found with the other clamshell half's translation
+    int nWindow = 0;     // hits in the probe window
+    float predU = NAN, predZ = NAN, predS = NAN, cosA = NAN;
+    float nearRdphi = NAN, nearDz = NAN, nearDtheta = NAN, nearMetric = NAN;
+    float near2Rdphi = NAN, near2Dz = NAN, near2Metric = NAN;
+    int attached = 0;  // best chain has a (non-overlap) group on this layer
+    float attRdphi = NAN, attDz = NAN, attDtheta = NAN, attDdphi = NAN, attDdtheta = NAN;
+    int attNHits = 0;
+  };
+  struct TrackDiag
+  {
+    int status = -1;
+    unsigned int nPredicted = 0;
+    unsigned int nMvtx = 0, nIntt = 0;
+    float chi2 = NAN;
+    std::array<Probe, 7> probe{};
   };
 
   struct Group
@@ -291,7 +343,10 @@ class SiTpcHitChainMatcher : public SubsysReco
 
   int createNodes(PHCompositeNode*);
   std::vector<TrackInput> collectTpcTracks(PHCompositeNode*) const;
-  void processTrack(const TrackInput&, Counters&);
+  void processTrack(const TrackInput&, Counters&, TrackDiag&);
+  void probeLayer(const SiTpcChainMath::TpcReference&, const SiTpcChainMath::LayerPrediction&, Probe&) const;
+  void fillDiagnostics(const TrackInput&, const TrackDiag&);
+  void bookDiagnostics();
   Window makeWindow(const SiTpcChainMath::TpcReference&, const SiTpcChainMath::LayerPrediction&, const Branch&) const;
   void collectGroups(int layer, const std::vector<Window>&, const Limits&, std::vector<int>& groups, Counters&);
   bool evaluateGroup(const SiTpcChainMath::TpcReference&, const Window&, int group, const Limits&, Candidate&) const;
@@ -315,6 +370,7 @@ class SiTpcHitChainMatcher : public SubsysReco
   SiTpcBeamAlignment m_alignment;
   SiTpcChainMath::FrameMap m_map;
   double m_bz = 1.4;
+  double m_tpcZOffset = 0.0;
   double m_boundaryMargin = 0.3;
   unsigned int m_minTpcClusters = 10;
   SiHitGeometryTable m_geometry;
@@ -363,6 +419,25 @@ class SiTpcHitChainMatcher : public SubsysReco
   uint32_t m_curStamp = 0;
   std::vector<Group> m_groups;
   unsigned int m_nextMatchId = 0;
+
+  // diagnostics
+  std::string m_diagFile;
+  double m_probeRphi = 1.0;                   // [cm]
+  std::array<double, 2> m_probeZ{{3.0, 6.0}};  // [cm] MVTX, INTT
+  TFile* m_diagTFile = nullptr;
+  TTree* m_tTpc = nullptr;
+  TTree* m_tProbe = nullptr;
+  std::array<TH2F*, 7> m_hRdphiDz{};
+  std::array<TH2F*, 7> m_hDzVsZ{};
+  std::array<TH2F*, 7> m_hRdphiVsPhi{};
+  struct DiagRow
+  {
+    int event = 0, tpcIndex = 0, nClusters = 0, fitStatus = 0, charge = 0, status = 0;
+    int nPredicted = 0, nMvtx = 0, nIntt = 0, layer = 0, half = 0;
+    float pt = 0, phi = 0, tanl = 0, z0 = 0, dca = 0, radius = 0, chi2 = 0;
+    Probe p;
+  } m_row;
+  std::array<unsigned int, 7> m_statusCount{};
 
   // run summary
   unsigned long m_nEvents = 0;

@@ -59,6 +59,12 @@ class SiTpcHitMatchv1 : public SiTpcHitMatch
   float get_chi2() const override { return m_chi2; }
   float get_si_z0() const override { return m_si_z0; }
   float get_si_dca() const override { return m_si_dca; }
+  float get_si_circle_x() const override { return m_si_circle_x; }
+  float get_si_circle_y() const override { return m_si_circle_y; }
+  float get_si_radius() const override { return m_si_radius; }
+  int get_si_helicity() const override { return m_si_helicity; }
+  float get_si_pca_x() const override { return m_si_pca_x; }
+  float get_si_pca_y() const override { return m_si_pca_y; }
   float get_delta_phi_dir() const override { return m_delta_phi_dir; }
   float get_delta_z0() const override { return m_delta_z0; }
   float get_delta_dca() const override { return m_delta_dca; }
@@ -69,6 +75,12 @@ class SiTpcHitMatchv1 : public SiTpcHitMatch
   void set_chi2(float v) override { m_chi2 = v; }
   void set_si_z0(float v) override { m_si_z0 = v; }
   void set_si_dca(float v) override { m_si_dca = v; }
+  void set_si_circle_x(float v) override { m_si_circle_x = v; }
+  void set_si_circle_y(float v) override { m_si_circle_y = v; }
+  void set_si_radius(float v) override { m_si_radius = v; }
+  void set_si_helicity(int v) override { m_si_helicity = v; }
+  void set_si_pca_x(float v) override { m_si_pca_x = v; }
+  void set_si_pca_y(float v) override { m_si_pca_y = v; }
   void set_delta_phi_dir(float v) override { m_delta_phi_dir = v; }
   void set_delta_z0(float v) override { m_delta_z0 = v; }
   void set_delta_dca(float v) override { m_delta_dca = v; }
@@ -111,6 +123,12 @@ class SiTpcHitMatchv1 : public SiTpcHitMatch
   float m_chi2{NAN};
   float m_si_z0{NAN};
   float m_si_dca{NAN};
+  float m_si_circle_x{NAN};
+  float m_si_circle_y{NAN};
+  float m_si_radius{NAN};
+  int m_si_helicity{0};
+  float m_si_pca_x{NAN};
+  float m_si_pca_y{NAN};
   float m_delta_phi_dir{NAN};
   float m_delta_z0{NAN};
   float m_delta_dca{NAN};
