@@ -11,6 +11,7 @@
 #include <fun4all/SubsysReco.h>
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <string>
@@ -41,13 +42,23 @@ class PHCompositeNode;
 //        Chain building exactly as before, in hardware coordinates: straight line through the
 //        MVTX points (R_layer, Uphi, Vz), propagation to the missing MVTX layer and the INTT,
 //        windows in Uphi / z bins (setPropagationPhiHalfWindowBins / setPropagationZHalfWindowBins).
-//        Hits are NOT masked: chains of one TPC track may share hits, and so may chains of
-//        different TPC tracks.  Identical chains (same blobs) are stored once per TPC track.
+//        INTT window centre (default): TPC prediction + straight-line fit of the MVTX offsets to
+//        it (setInttCentre).  Candidate chains of one TPC track may share hits.
 //   4. every chain -> PHYSICS space (TPC frame, as SiTrajectoryFitter: blob centroid per layer ->
 //      detector -> global -> its clamshell half onto the TPC beam axis), residuals to the TPC
-//      helix at the radius of each point, agreement chi2/ndf (optional free common z offset).
-//      Ranking per TPC track: most silicon layers first, then the smallest chi2/ndf.
-//      Rank 0 is SELECTED if its chi2/ndf <= setMaxTpcChi2 (<= 0: no cut).
+//      helix at the radius of each point, agreement chi2/ndf with per-layer sigmas, free common
+//      z offset, z weight 0.25.
+//      Ranking per TPC track (default AgreementFirst): chains with chi2/ndf <= 3 first, most
+//      layers among them; layer-0/1 hardware delta-delta-phi pull^2 as tie-breaker.
+//   5. exclusive arbitration across TPC tracks (default on): a chain sharing >= 2 blobs with a
+//      chain already taken by a better-agreeing TPC track is not used; the track falls back to
+//      its next chain or is Rejected.
+//
+// Defaults (run-25 Au+Au tuning, Oct 2026): anchor window 1 cm r*phi x 5 cm z (z not used for
+// ordering); seed window +-2 Uphi bins, +-1 cm; propagation +-2 Uphi bins, +-5 z bins; chains
+// >= 3 layers, >= 2 MVTX; sigmas per layer from the End() residual-width printout; agreement
+// cut 3; INTT centre TpcOffsetSlope; ddphi check layers 0 and 1 at 2 sigma, score only.
+// Frames, beam alignment, Bz and debug settings are NOT defaulted here: set them in the macro.
 class SiHitSeedReco : public SubsysReco
 {
  public:
@@ -99,11 +110,15 @@ class SiHitSeedReco : public SubsysReco
   // Anchor window on the outer seed layer, around the TPC prediction [cm].
   // Large: it only limits the search space (Si-TPC misalignment, TPC extrapolation, t0).
   // ---------------------------------------------------------------------------
+  // zCm <= 0: no z cut at all (the TPC z is not used for the anchor; whole z range searched)
   void setAnchorWindow(double rphiCm, double zCm)
   {
     m_anchorRphi = rphiCm;
     m_anchorZ = zCm;
   }
+  // weight of the z term in the anchor ordering metric (rdphi/rphiWin)^2 + w (dz/zWin)^2, which
+  // decides which anchors are tried first and which survive setMaxAnchorsPerTrack; 0 = r*phi only
+  void setAnchorZWeight(double w) { m_anchorZWeight = std::max(0.0, w); }
   void setMaxAnchorsPerTrack(unsigned int n) { m_maxAnchors = n; }
   // seed pairs: (2 -> 1) always; (1 -> 0) on/off (default on)
   void setUseInnerSeedPair(bool v) { m_useInnerPair = v; }
@@ -132,7 +147,8 @@ class SiHitSeedReco : public SubsysReco
   //   dUphi(L)      = Uphi(L) - Uphi(L+1)
   //   dUphi_pred(L) = dUphi(L+1) * (r_L - r_{L+1}) / (r_{L+1} - r_PP)   PP = next outer chain layer
   //   expected dUphi(L) = offset_L + slope_L * dUphi_pred(L),  width sigma_L  [rad]
-  // Used in two places (both off by default):
+  // Used in two places (defaults: check on for layers 0 and 1 at 2 sigma, score only;
+  // layer-0 propagation window off):
   //   setHwDdphiLayer0Propagation(true): when layer 0 is reached by MVTX propagation from layers
   //     2 and 1, its Uphi window is centred on the expected dUphi(0) with half width
   //     nSigma * sigma_0 (instead of the straight line and setPropagationPhiHalfWindowBins);
@@ -165,17 +181,136 @@ class SiHitSeedReco : public SubsysReco
   //   chi2/ndf = [sum (rdphi/sigRphi)^2 + sum ((dz - offset)/sigZ)^2] / ndf
   //   offset = weighted mean dz if setTpcAgreementFreeZOffset(true) (TPC z depends on t0)
   // ---------------------------------------------------------------------------
+  // sigma per Si layer (0-2 MVTX, 3-6 INTT); the residual to the TPC helix is dominated by the
+  // TPC extrapolation, so it depends on the layer radius - measure it with the End() printout
+  // (see setMeasureResidualWidths) and set it per layer.
   void setTpcAgreementSigma(double rphiCm, double zMvtxCm, double zInttCm)
   {
-    m_sigRphi = rphiCm;
-    m_sigZ[0] = zMvtxCm;
-    m_sigZ[1] = zInttCm;
+    setTpcAgreementSigma(rphiCm, rphiCm, zMvtxCm, zInttCm);
   }
-  void setTpcAgreementFreeZOffset(bool v) { m_freeZOffset = v; }
+  void setTpcAgreementSigma(double rphiMvtxCm, double rphiInttCm, double zMvtxCm, double zInttCm)
+  {
+    for (int l = 0; l < 7; ++l)
+    {
+      m_sigRphiL[l] = l <= 2 ? rphiMvtxCm : rphiInttCm;
+      m_sigZL[l] = l <= 2 ? zMvtxCm : zInttCm;
+    }
+  }
+  void setTpcAgreementSigmaLayer(int layer, double rphiCm, double zCm)
+  {
+    if (layer >= 0 && layer < 7)
+    {
+      m_sigRphiL[layer] = rphiCm;
+      m_sigZL[layer] = zCm;
+    }
+  }
+  // End(): robust width (1.4826 * MAD) of the r*phi and z residuals per layer of the SELECTED
+  // chains (all layers with a TPC residual, finite tpc_chi2), printed with the setter lines to
+  // paste (default on; needs Verbosity >= 1).  The selection depends on the sigmas in use, so
+  // iterate once or twice.
+  void setMeasureResidualWidths(bool v) { m_measureWidths = v; }
+
+  // ---------------------------------------------------------------------------
+  // INTT search window centre (propagation to layers 3-6):
+  //   MvtxLine: straight line through the MVTX hits (behaviour before Oct 2026): right
+  //     position and direction, no field curvature.
+  //   TpcOffset: TPC prediction on that INTT layer + the chain's MEAN MVTX offset to the TPC
+  //     prediction (r*phi in cm, z in cm).  Wrong whenever the MVTX segment's direction differs
+  //     from the extrapolated TPC direction.
+  //   TpcOffsetSlope (default): TPC prediction + a straight-line fit of the MVTX offsets to
+  //     the TPC prediction, r*phi offset vs r and z offset vs path length s, extrapolated to the
+  //     INTT layer.  TPC = curvature, MVTX hits = position and direction.  Offset only if the
+  //     MVTX lever arm is too short (one layer).
+  //   All TPC modes fall back to the straight line without a TPC prediction on that layer.
+  // half width in Uphi bins for the TPC-guided window (z half width: setPropagationZHalfWindowBins)
+  // ---------------------------------------------------------------------------
+  enum class InttCentre
+  {
+    MvtxLine,
+    TpcOffset,
+    TpcOffsetSlope
+  };
+  void setInttCentre(InttCentre c) { m_inttCentre = c; }
+  // kept for macros of the previous version: true = TpcOffset, false = MvtxLine
+  void setInttFromTpcPrediction(bool v) { m_inttCentre = v ? InttCentre::TpcOffset : InttCentre::MvtxLine; }
+  void setInttTpcPhiHalfWindowBins(double v) { m_inttTpcPhiHalf = v; }
+  // z model of the Si - TPC agreement (the TPC z can be shifted by the crossing / t0 and its
+  // tanl can be off):
+  //   Fixed:       dz used as is
+  //   Offset:      a free z offset is fitted and subtracted (default; same as FreeZOffset(true))
+  //   OffsetSlope: a free offset and a free slope in path length (dz = a + b*s) are fitted, so a
+  //                TPC tanl error does not count either; needs >= 3 z points to constrain anything
+  enum class TpcZModel
+  {
+    Fixed,
+    Offset,
+    OffsetSlope
+  };
+  void setTpcAgreementZModel(TpcZModel m) { m_zModel = m; }
+  void setTpcAgreementFreeZOffset(bool v) { m_zModel = v ? TpcZModel::Offset : TpcZModel::Fixed; }
+  // weight of the z part relative to r*phi:
+  //   tpc_chi2 = (chi2_rphi + w * chi2_z) / (n_rphi + [w > 0] * (n_z - n_zpar))
+  // w = 1: z as r*phi; 0 < w < 1: z counts less (default 0.25); w = 0: r*phi only (z only stored)
+  void setTpcAgreementZWeight(double w) { m_zWeight = std::max(0.0, w); }
+  // true (default): if the TPC helix does not reach the radius of some chain layer (e.g. a
+  // large-dca / low-pt TPC track with hits on the inner MVTX layers), the chain cannot belong to
+  // that TPC track: tpc_chi2 = NaN.  false: previous behaviour, those layers are skipped and the
+  // chi2/ndf is computed from the rest (can be ndf 1 and a meaningless tiny chi2).
+  void setRequireTpcResidualAllLayers(bool v) { m_requireAllResiduals = v; }
   void setMaxTpcChi2(double v) { m_maxTpcChi2 = v; }  // <= 0: no cut
+
+  // ---------------------------------------------------------------------------
+  // Ranking of the candidate chains of one TPC track (rank 0 = the one passed on):
+  //   LayersFirst (behaviour before Oct 2026): most Si layers, then tpc_chi2, then score.
+  //     A longer chain made of a neighbouring track's hits wins over the correct shorter one.
+  //   AgreementFirst (default): chains with a finite tpc_chi2 <= setAgreementMaxChi2 (default 3) come
+  //     first; among them most layers, then tpc_chi2, then score.  The rest follow, ordered by
+  //     tpc_chi2.  If no chain agrees, rank 0 is the best-chi2 chain and it is NOT selected.
+  // setMaxTpcChi2 still applies on top (rank 0 selected only if it also passes it).
+  // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Exclusive chains across TPC tracks (default ON; off = behaviour before Oct 2026: every TPC track picks
+  // its chain on its own, so the same Si hits can be the selected chain of several TPC tracks,
+  // and a TPC track can take the chain of a nearby track instead of its own).
+  // On: after all TPC tracks of the event are chained, the selections are arbitrated.  TPC
+  // tracks are processed in order of the tpc_chi2 of their selected chain (best agreement
+  // first); each takes the first chain in its own rank order that shares fewer than
+  // setExclusiveMinSharedBlobs blobs with chains already taken by other TPC tracks and passes
+  // the same cuts as the rank-0 selection (setMaxTpcChi2, agreement cut with AgreementFirst).
+  // A TPC track left without such a chain gets status Rejected.  Chain ranks are unchanged;
+  // only the "selected" flags move.  Works with setStoreSelectedOnly (pruned after arbitration).
+  // ---------------------------------------------------------------------------
+  void setExclusiveChains(bool v) { m_exclusiveChains = v; }
+  void setExclusiveMinSharedBlobs(int n) { m_exclusiveMinShared = std::max(1, n); }
+
+  enum class ChainRanking
+  {
+    LayersFirst,
+    AgreementFirst
+  };
+  void setChainRanking(ChainRanking r) { m_chainRanking = r; }
+  void setAgreementMaxChi2(double v) { m_agreementMaxChi2 = v; }
   void setMaxChainsPerTrack(unsigned int n) { m_maxChainsPerTrack = n; }
   // keep only the selected chain of every TPC track in SI_HIT_SEED_EVENT (default: keep all)
   void setStoreSelectedOnly(bool v) { m_storeSelectedOnly = v; }
+
+  // ---------------------------------------------------------------------------
+  // Debug dump of the chaining of selected TPC tracks (printed regardless of Verbosity):
+  //   setDebugEvent(n): event n of THIS module (0 = first event SiHitSeedReco processes; events
+  //     aborted earlier in the chain, e.g. by SkipFirstN, are not counted).  -1 = off.
+  //   setDebugTpcTrack(i): only TPC_POLYTRACKS index i in that event; -1 = every TPC track.
+  //   setDebugTpcAssembledId(id): only the track with this source assembled id (alternative).
+  //   Every other TPC track of the debug event gets a one-line summary (index, pt, phi, z, status)
+  //   so the track of interest can be identified first.
+  // Per track: Tpc_PolyTrack parameters next to the SiTpcHelixFit refit used here, the predicted
+  // (Uphi, z) on every Si layer, every blob on the outer seed layer within 3x the anchor window
+  // (in / out, order), per anchor the seed candidates and the inner-layer blobs within 3x the
+  // seed window, the result of every chain build, and per stored chain the residuals to the
+  // TPC helix per layer, chi2/ndf, rank and selection.
+  // ---------------------------------------------------------------------------
+  void setDebugEvent(long n) { m_debugEvent = n; }
+  void setDebugTpcTrack(int index) { m_debugTpcIndex = index; }
+  void setDebugTpcAssembledId(long id) { m_debugAssembledId = id; }
 
   // ---- binning: number of bins.  The z range is recomputed every event from the hits.
   void setZBins(int n) { m_nz = n; }
@@ -203,6 +338,9 @@ class SiHitSeedReco : public SubsysReco
     unsigned int assembledId = 0;
     unsigned int nClusters = 0;
     SiTpcHelixFit::Result fit;
+    // Tpc_PolyTrack's own parameters (for the debug dump)
+    double polyX = 0, polyY = 0, polyZ = 0, polyPx = 0, polyPy = 0, polyPz = 0, polyCharge = 0;
+    int polyFitStatus = 0;
   };
 
   int createNodes(PHCompositeNode*);
@@ -213,6 +351,12 @@ class SiHitSeedReco : public SubsysReco
   void buildHitGrid();
   std::vector<TpcTrackInput> collectTpcTracks(PHCompositeNode*) const;
   void processTpcTrack(const TpcTrackInput&);
+  void resolveSharedChains();
+  bool debugThisTrack(const TpcTrackInput&) const;
+  void debugTrackHeader(const TpcTrackInput&, const SiTpcReference::TpcReference*) const;
+  void debugAnchors(const SiTpcReference::TpcReference&, int outer, const std::vector<int>& anchors) const;
+  void debugSeed(const SiBlob& seed, int inner, const SiTpcReference::TpcReference&, const std::vector<Candidate>& cands) const;
+  void debugChain(const SiHitChain& ch, const char* tag) const;
 
   static double wrapDelta(double x, double period);
   static double circularMean(const std::vector<double>& values);
@@ -231,7 +375,10 @@ class SiHitSeedReco : public SubsysReco
   void seedWindow(const SiTpcReference::TpcReference&, int outer, int inner, double zOuter,
                   double& zCenterBins, double& zHalfBins, double& phiCenterBins) const;
   std::vector<Candidate> seedCandidates(const SiBlob& seed, int innerLayer, const SiTpcReference::TpcReference&) const;
-  bool buildChain(const SiBlob& seed, const Candidate& cand, SiHitChain& out) const;
+  bool buildChain(const SiBlob& seed, const Candidate& cand, SiHitChain& out,
+                  const SiTpcReference::TpcReference* tpcRef = nullptr) const;
+  void accumulateResidualWidths();
+  void printResidualWidths() const;
   // dUphi(L) and dUphi_pred(L) for L = 0, 1 from the hardware hits per layer (layer -> Uphi);
   // false if L, L+1 or the next outer layer is missing
   bool hwDdphiTerms(int layer, const std::map<int, double>& uphiByLayer, double& dphi, double& dphiPred) const;
@@ -252,7 +399,7 @@ class SiHitSeedReco : public SubsysReco
 
   // silicon (hardware) alignment
   bool m_applyAlignment = false;
-  std::string m_alignmentFile;
+  std::string m_alignmentFile = "mvtx_align_params.txt";  // used only with setApplySiAlignment(true)
   SiAlignmentTransform m_alignment;
 
   // TPC -> silicon frames
@@ -266,7 +413,8 @@ class SiHitSeedReco : public SubsysReco
 
   // anchor
   double m_anchorRphi = 1.0;  // [cm]
-  double m_anchorZ = 3.0;     // [cm]
+  double m_anchorZ = 5.0;     // [cm], <= 0: no z cut
+  double m_anchorZWeight = 0.0;
   unsigned int m_maxAnchors = 16;
   bool m_useInnerPair = true;
 
@@ -281,25 +429,55 @@ class SiHitSeedReco : public SubsysReco
   double m_propPhiHalf = 2.0;  // [Uphi bins]
   double m_propZHalf = 5.0;    // [z bins]
 
-  // step-to-step delta-delta-phi, layers 0 and 1 [rad]; defaults from the run-2025 fit (both charges)
-  std::array<double, 2> m_hwDdphiOffset{{-0.00497, 0.00240}};
-  std::array<double, 2> m_hwDdphiSlope{{1.4863, 1.5387}};
-  std::array<double, 2> m_hwDdphiSigma{{0.02029, 0.01824}};
-  double m_hwDdphiNSigma = 3.0;
+  // step-to-step delta-delta-phi, layers 0 and 1 [rad]; defaults from FitHwDphiCorrelation.C on
+  // run 76905 Au+Au without the TPC track-count cut (both charges)
+  std::array<double, 2> m_hwDdphiOffset{{-0.00149, 0.00082}};
+  std::array<double, 2> m_hwDdphiSlope{{1.4445, 1.7818}};
+  std::array<double, 2> m_hwDdphiSigma{{0.0208, 0.0214}};
+  double m_hwDdphiNSigma = 2.0;
   bool m_hwDdphiProp0 = false;
-  std::array<bool, 2> m_hwDdphiCheck{{false, false}};
+  std::array<bool, 2> m_hwDdphiCheck{{true, true}};
   bool m_hwDdphiReject = false;
   mutable std::array<unsigned long, 2> m_hwDdphiChecked{};
   mutable std::array<unsigned long, 2> m_hwDdphiRejected{};
   mutable unsigned long m_hwDdphiProp0Used = 0;
 
   // selection
-  double m_sigRphi = 0.1;                       // [cm]
-  std::array<double, 2> m_sigZ{{0.2, 0.6}};      // [cm] MVTX, INTT
-  bool m_freeZOffset = true;
+  // [cm] per layer, robust residual widths of selected chains (End() printout, z model Offset)
+  std::array<double, 7> m_sigRphiL{{0.310, 0.340, 0.378, 0.376, 0.389, 0.403, 0.439}};
+  std::array<double, 7> m_sigZL{{0.277, 0.143, 0.287, 1.025, 0.990, 1.057, 0.874}};
+  bool m_measureWidths = true;
+  std::array<std::vector<float>, 7> m_widthRphi;
+  std::array<std::vector<float>, 7> m_widthZ;
+
+  // INTT window from the TPC prediction
+  InttCentre m_inttCentre = InttCentre::TpcOffsetSlope;
+  double m_inttTpcPhiHalf = 2.0;  // [Uphi bins]
+  mutable unsigned long m_inttTpcUsed = 0;
+  mutable unsigned long m_inttTpcFallback = 0;
+  TpcZModel m_zModel = TpcZModel::Offset;
+  double m_zWeight = 0.25;
+  bool m_requireAllResiduals = true;
   double m_maxTpcChi2 = 0.0;
+  ChainRanking m_chainRanking = ChainRanking::AgreementFirst;
+  double m_agreementMaxChi2 = 3.0;
+  // run counters for the ranking
+  unsigned long m_rankChanged = 0;      // AgreementFirst picked a different rank-0 than LayersFirst would
+  unsigned long m_noAgreeingChain = 0;  // AgreementFirst: TPC tracks with chains but none agreeing
   unsigned int m_maxChainsPerTrack = 32;
   bool m_storeSelectedOnly = false;
+
+  // exclusive chains across TPC tracks
+  bool m_exclusiveChains = true;
+  int m_exclusiveMinShared = 2;
+  unsigned long m_exclReassigned = 0;  // TPC tracks moved to another of their chains
+  unsigned long m_exclLost = 0;        // TPC tracks left without a chain
+  unsigned long m_exclKept = 0;        // TPC tracks that kept their rank-0 chain
+
+  // debug dump
+  long m_debugEvent = -1;
+  int m_debugTpcIndex = -1;
+  long m_debugAssembledId = -1;
 
   // binning
   int m_nz = 120;

@@ -99,8 +99,17 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
               << Name() << ":   propagation (hardware coordinates): phi +- " << m_propPhiHalf << " bins, z +- "
               << m_propZHalf << " bins; chains >= " << m_minLayers << " layers, >= "
               << m_minMvtxLayers << " MVTX, >= " << m_minInttLayers << " INTT" << std::endl
-              << Name() << ":   selection: most layers, then chi2/ndf vs TPC (sigma r*phi " << m_sigRphi << ", z "
-              << m_sigZ[0] << "/" << m_sigZ[1] << " cm, z offset " << (m_freeZOffset ? "free" : "fixed")
+              << Name() << ":   selection: " << (m_chainRanking == ChainRanking::AgreementFirst ? "agreeing chains first (chi2/ndf <= " + std::to_string(m_agreementMaxChi2) + "), then most layers" : std::string("most layers, then chi2/ndf"))
+              << (m_exclusiveChains ? ", exclusive across TPC tracks (>= " + std::to_string(m_exclusiveMinShared) + " shared blobs)" : std::string(""))
+              << " (sigma r*phi L0-6 " << m_sigRphiL[0] << " "
+              << m_sigRphiL[1] << " " << m_sigRphiL[2] << " " << m_sigRphiL[3] << " " << m_sigRphiL[4] << " " << m_sigRphiL[5] << " "
+              << m_sigRphiL[6] << ", z L0-6 " << m_sigZL[0] << " " << m_sigZL[1] << " " << m_sigZL[2] << " " << m_sigZL[3] << " "
+              << m_sigZL[4] << " " << m_sigZL[5] << " " << m_sigZL[6] << " cm; INTT window centre "
+              << (m_inttCentre == InttCentre::MvtxLine ? "straight MVTX line"
+                  : (m_inttCentre == InttCentre::TpcOffset ? "TPC prediction + mean MVTX offset" : "TPC prediction + MVTX offset and slope"))
+              << ", z model "
+              << (m_zModel == TpcZModel::Fixed ? "fixed" : (m_zModel == TpcZModel::Offset ? "free offset" : "free offset + slope"))
+              << ", z weight " << m_zWeight << "; anchor z " << (m_anchorZ > 0 ? "window" : "not used") << ", z ordering weight " << m_anchorZWeight
               << ", max chi2/ndf " << (m_maxTpcChi2 > 0 ? std::to_string(m_maxTpcChi2) : std::string("off")) << ")"
               << std::endl;
   }
@@ -260,6 +269,14 @@ int SiHitSeedReco::process_event(PHCompositeNode* topNode)
   {
     processTpcTrack(t);
   }
+  if (m_exclusiveChains)
+  {
+    resolveSharedChains();
+  }
+  if (m_measureWidths)
+  {
+    accumulateResidualWidths();
+  }
 
   if (Verbosity() > 0)
   {
@@ -300,6 +317,27 @@ int SiHitSeedReco::End(PHCompositeNode*)
       std::cout << " " << statusName(s) << " " << m_statusCount[s] << (s < 6 ? "," : "");
     }
     std::cout << std::endl;
+    if (m_inttCentre != InttCentre::MvtxLine)
+    {
+      std::cout << Name() << ": INTT window from the TPC prediction ("
+                << (m_inttCentre == InttCentre::TpcOffsetSlope ? "MVTX offset + slope" : "mean MVTX offset") << "): " << m_inttTpcUsed << " INTT searches, "
+                << m_inttTpcFallback << " fell back to the straight MVTX line (no TPC prediction / MVTX offset)" << std::endl;
+    }
+    if (m_measureWidths)
+    {
+      printResidualWidths();
+    }
+    if (m_exclusiveChains)
+    {
+      std::cout << Name() << ": exclusive chains (conflict = >= " << m_exclusiveMinShared << " shared blobs): kept rank 0 "
+                << m_exclKept << ", moved to another chain " << m_exclReassigned << ", left without chain " << m_exclLost
+                << " TPC tracks" << std::endl;
+    }
+    if (m_chainRanking == ChainRanking::AgreementFirst)
+    {
+      std::cout << Name() << ": agreement-first ranking (tpc_chi2 <= " << m_agreementMaxChi2 << "): rank 0 changed vs layers-first for "
+                << m_rankChanged << " TPC tracks, no agreeing chain for " << m_noAgreeingChain << std::endl;
+    }
     if (m_hwDdphiProp0 || m_hwDdphiCheck[0] || m_hwDdphiCheck[1])
     {
       std::cout << Name() << ": hw delta-delta-phi (" << m_hwDdphiNSigma << " sigma): layer-0 propagation windows "
@@ -316,6 +354,405 @@ int SiHitSeedReco::End(PHCompositeNode*)
     }
   }
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+void SiHitSeedReco::accumulateResidualWidths()
+{
+  constexpr size_t kMaxPerLayer = 200000;
+  for (const auto& c : m_eventData->chains)
+  {
+    if (!c.selected || !std::isfinite(c.tpc_chi2) || c.tpc_nres < static_cast<int>(c.layers.size()))
+    {
+      continue;
+    }
+    for (size_t i = 0; i < c.layers.size(); ++i)
+    {
+      const int l = c.layers[i];
+      if (l < 0 || l > 6)
+      {
+        continue;
+      }
+      if (i < c.res_rdphi.size() && std::isfinite(c.res_rdphi[i]) && m_widthRphi[l].size() < kMaxPerLayer)
+      {
+        m_widthRphi[l].push_back(static_cast<float>(c.res_rdphi[i]));
+      }
+      if (i < c.res_dz_fit.size() && std::isfinite(c.res_dz_fit[i]) && m_widthZ[l].size() < kMaxPerLayer)
+      {
+        m_widthZ[l].push_back(static_cast<float>(c.res_dz_fit[i]));
+      }
+    }
+  }
+}
+
+void SiHitSeedReco::printResidualWidths() const
+{
+  // robust width: 1.4826 * median |x - median|
+  auto robust = [](std::vector<float> v, double& med, double& sig)
+  {
+    med = sig = std::numeric_limits<double>::quiet_NaN();
+    if (v.size() < 5)
+    {
+      return;
+    }
+    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+    med = v[v.size() / 2];
+    for (auto& x : v)
+    {
+      x = static_cast<float>(std::abs(x - med));
+    }
+    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+    sig = 1.4826 * v[v.size() / 2];
+  };
+  std::cout << Name() << ": residual widths of the selected chains to the TPC helix (robust sigma = 1.4826 MAD; z after the z model):" << std::endl;
+  std::array<double, 7> sr{}, sz{};
+  bool all = true;
+  for (int l = 0; l < 7; ++l)
+  {
+    double mr = 0, mz = 0;
+    robust(m_widthRphi[l], mr, sr[l]);
+    robust(m_widthZ[l], mz, sz[l]);
+    std::printf("%s:   layer %d  n %6zu  r*dphi median %+7.4f sigma %7.4f cm (in use %.4f) | z n %6zu median %+7.4f sigma %7.4f cm (in use %.4f)\n",
+                Name().c_str(), l, m_widthRphi[l].size(), mr, sr[l], m_sigRphiL[l], m_widthZ[l].size(), mz, sz[l], m_sigZL[l]);
+    all = all && std::isfinite(sr[l]) && std::isfinite(sz[l]);
+  }
+  std::cout << Name() << ":   to use them (the selection depends on the sigmas in use: iterate once or twice):" << std::endl;
+  for (int l = 0; l < 7; ++l)
+  {
+    if (std::isfinite(sr[l]) && std::isfinite(sz[l]))
+    {
+      std::printf("      si_hit_seed->setTpcAgreementSigmaLayer(%d, %.3f, %.3f);\n", l, sr[l], sz[l]);
+    }
+    else
+    {
+      std::printf("      // layer %d: too few residuals\n", l);
+    }
+  }
+  (void) all;
+}
+
+void SiHitSeedReco::resolveSharedChains()
+{
+  auto& chains = m_eventData->chains;
+  auto& seeds = m_eventData->tpc_seeds;
+  const bool dbgEvent = m_debugEvent >= 0 && static_cast<long>(m_eventData->event) == m_debugEvent;
+
+  // same cuts as for the rank-0 selection in processTpcTrack
+  auto passes = [&](const SiHitChain& c)
+  {
+    if (m_chainRanking == ChainRanking::AgreementFirst && !(std::isfinite(c.tpc_chi2) && c.tpc_chi2 <= m_agreementMaxChi2))
+    {
+      return false;
+    }
+    return m_maxTpcChi2 <= 0 || (std::isfinite(c.tpc_chi2) && c.tpc_chi2 <= m_maxTpcChi2);
+  };
+  auto chi2Key = [](const SiHitChain& c)
+  {
+    return std::isfinite(c.tpc_chi2) ? c.tpc_chi2 : std::numeric_limits<double>::max();
+  };
+
+  // chains of every TPC track (seed entry), in rank order
+  std::vector<std::vector<int>> byTrack(seeds.size());
+  std::unordered_map<int, size_t> seedOfTrack;
+  for (size_t s = 0; s < seeds.size(); ++s)
+  {
+    seedOfTrack[seeds[s].tpc_track_index] = s;
+  }
+  for (size_t c = 0; c < chains.size(); ++c)
+  {
+    const auto it = seedOfTrack.find(chains[c].tpc_track_index);
+    if (it != seedOfTrack.end())
+    {
+      byTrack[it->second].push_back(static_cast<int>(c));
+    }
+  }
+  std::vector<size_t> order;
+  for (size_t s = 0; s < seeds.size(); ++s)
+  {
+    auto& v = byTrack[s];
+    std::sort(v.begin(), v.end(), [&](int a, int b) { return chains[a].rank < chains[b].rank; });
+    if (seeds[s].selected_chain >= 0)
+    {
+      order.push_back(s);
+    }
+  }
+  // best agreement first
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b)
+  {
+    return chi2Key(chains[seeds[a].selected_chain]) < chi2Key(chains[seeds[b].selected_chain]);
+  });
+
+  std::unordered_map<int, size_t> owner;  // blob -> seed entry that took it
+  for (size_t s : order)
+  {
+    auto& info = seeds[s];
+    const int oldSel = info.selected_chain;
+    chains[oldSel].selected = false;
+    int newSel = -1;
+    size_t blocker = seeds.size();
+    int blockShared = 0;
+    for (int c : byTrack[s])
+    {
+      if (!passes(chains[c]) && c != oldSel)
+      {
+        continue;
+      }
+      std::unordered_map<size_t, int> sharedWith;
+      for (int b : chains[c].blob_ids)
+      {
+        const auto it = owner.find(b);
+        if (it != owner.end())
+        {
+          ++sharedWith[it->second];
+        }
+      }
+      size_t worst = seeds.size();
+      int worstN = 0;
+      for (const auto& [o, n] : sharedWith)
+      {
+        if (n > worstN)
+        {
+          worstN = n;
+          worst = o;
+        }
+      }
+      if (worstN >= m_exclusiveMinShared)
+      {
+        if (c == oldSel)
+        {
+          blocker = worst;
+          blockShared = worstN;
+        }
+        continue;
+      }
+      newSel = c;
+      break;
+    }
+
+    const bool dbg = dbgEvent && (m_debugTpcIndex < 0 || info.tpc_track_index == m_debugTpcIndex ||
+                                  (blocker < seeds.size() && seeds[blocker].tpc_track_index == m_debugTpcIndex));
+    if (newSel == oldSel)
+    {
+      ++m_exclKept;
+    }
+    else if (newSel >= 0)
+    {
+      ++m_exclReassigned;
+    }
+    else
+    {
+      ++m_exclLost;
+    }
+    if (dbg && newSel != oldSel)
+    {
+      std::printf("[SiSeedDebug] exclusive: TPC track %d (assembled %u) chain %d (rank 0, chi2/ndf %.3g, %d layers) shares %d blobs with the chain taken by TPC track %d (assembled %u, chi2/ndf %.3g)",
+                  info.tpc_track_index, info.tpc_assembled_track_id, oldSel, chains[oldSel].tpc_chi2, chains[oldSel].n_layers(),
+                  blockShared, blocker < seeds.size() ? seeds[blocker].tpc_track_index : -1,
+                  blocker < seeds.size() ? seeds[blocker].tpc_assembled_track_id : 0u,
+                  blocker < seeds.size() && seeds[blocker].selected_chain >= 0 ? chains[seeds[blocker].selected_chain].tpc_chi2 : NAN);
+      if (newSel >= 0)
+      {
+        std::printf(" -> takes its chain %d (rank %d, chi2/ndf %.3g, %d layers)\n", newSel, chains[newSel].rank,
+                    chains[newSel].tpc_chi2, chains[newSel].n_layers());
+      }
+      else
+      {
+        std::printf(" -> no other chain without conflict: Rejected\n");
+      }
+    }
+
+    if (newSel >= 0)
+    {
+      chains[newSel].selected = true;
+      info.selected_chain = newSel;
+      for (int b : chains[newSel].blob_ids)
+      {
+        owner.emplace(b, s);
+      }
+    }
+    else
+    {
+      info.selected_chain = -1;
+      if (info.status == SiTpcSeedInfo::Chained)
+      {
+        --m_statusCount[SiTpcSeedInfo::Chained];
+        ++m_statusCount[SiTpcSeedInfo::Rejected];
+        info.status = SiTpcSeedInfo::Rejected;
+      }
+    }
+  }
+
+  if (!m_storeSelectedOnly)
+  {
+    return;
+  }
+  // prune the non-selected chains and re-index
+  std::vector<int> newId(chains.size(), -1);
+  std::vector<SiHitChain> kept;
+  for (size_t c = 0; c < chains.size(); ++c)
+  {
+    if (chains[c].selected)
+    {
+      newId[c] = static_cast<int>(kept.size());
+      kept.push_back(std::move(chains[c]));
+      kept.back().id = newId[c];
+    }
+  }
+  m_nChains -= chains.size() - kept.size();
+  chains = std::move(kept);
+  for (auto& info : seeds)
+  {
+    info.selected_chain = info.selected_chain >= 0 ? newId[info.selected_chain] : -1;
+  }
+}
+
+bool SiHitSeedReco::debugThisTrack(const TpcTrackInput& in) const
+{
+  if (m_debugEvent < 0 || !m_eventData || static_cast<long>(m_eventData->event) != m_debugEvent)
+  {
+    return false;
+  }
+  if (m_debugTpcIndex >= 0 && in.index != m_debugTpcIndex)
+  {
+    return false;
+  }
+  if (m_debugAssembledId >= 0 && static_cast<long>(in.assembledId) != m_debugAssembledId)
+  {
+    return false;
+  }
+  return true;
+}
+
+void SiHitSeedReco::debugTrackHeader(const TpcTrackInput& in, const SiTpcReference::TpcReference* ref) const
+{
+  const double polyPt = std::hypot(in.polyPx, in.polyPy);
+  std::printf("[SiSeedDebug] ==================================================\n");
+  std::printf("[SiSeedDebug] event %llu  TPC_POLYTRACKS index %d  track id %u  assembled id %u  clusters %u\n",
+              m_eventData->event, in.index, in.id, in.assembledId, in.nClusters);
+  std::printf("[SiSeedDebug] Tpc_PolyTrack (its own fit, world frame): status %d  pt %.4f  phi %.5f  charge %+.0f  ref point (%.3f, %.3f, %.3f)\n",
+              in.polyFitStatus, polyPt, std::atan2(in.polyPy, in.polyPx), in.polyCharge, in.polyX, in.polyY, in.polyZ);
+  const auto& f = in.fit;
+  std::printf("[SiSeedDebug] SiTpcHelixFit refit used here (raw cluster centroids, TPC frame): status %d  pt %.4f  phi %.5f  charge %+d  helicity %+d\n",
+              f.status, f.pt, f.phi, f.charge, f.helicity);
+  std::printf("[SiSeedDebug]   circle (%.3f, %.3f) R %.2f  pca (%.4f, %.4f)  dca %.4f  z0 %.3f  tanl %.4f  circle rms %.4f  z rms %.4f\n",
+              f.cx, f.cy, f.R, f.pcaX, f.pcaY, f.dca, f.z0, f.tanl, f.circleRms, f.zRms);
+  if (!ref)
+  {
+    std::printf("[SiSeedDebug]   no TPC reference (fit not usable for prediction)\n");
+    return;
+  }
+  const double dz = (m_zmax - m_zmin) / m_nz, dp = twopi / m_nphi;
+  std::printf("[SiSeedDebug] predictions (detector frame; Uphi bin %.4f rad, z bin %.4f cm this event):\n", dp, dz);
+  for (int l = 0; l < nlayers; ++l)
+  {
+    for (int alt = 0; alt < 2; ++alt)
+    {
+      const auto& p = alt ? ref->alt[l] : ref->layers[l];
+      if (!p.valid)
+      {
+        if (!alt)
+        {
+          std::printf("[SiSeedDebug]   layer %d: no prediction\n", l);
+        }
+        continue;
+      }
+      std::printf("[SiSeedDebug]   layer %d%s: half %d  Uphi %8.5f  z %8.3f  s %7.3f  x %7.3f y %7.3f  cosA %.3f\n",
+                  l, alt ? " (other half)" : "", p.half, p.u, p.z, p.s, p.x, p.y, p.cosA);
+    }
+  }
+}
+
+void SiHitSeedReco::debugAnchors(const SiTpcReference::TpcReference& ref, int outer, const std::vector<int>& anchors) const
+{
+  const double R = m_radius[outer];
+  std::printf("[SiSeedDebug]   blobs on layer %d within 3x anchor window (|r dphi| < %.2f, |dz| < %.2f cm); %zu anchors used (max %u):\n",
+              outer, 3 * m_anchorRphi, 3 * m_anchorZ, anchors.size(), m_maxAnchors);
+  int nPrinted = 0;
+  for (const auto& b : m_eventData->blobs)
+  {
+    if (b.layer != outer)
+    {
+      continue;
+    }
+    double bestRphi = NAN, bestDz = NAN;
+    for (const auto* p : {&ref.layers[outer], &ref.alt[outer]})
+    {
+      if (!p->valid)
+      {
+        continue;
+      }
+      const double rphi = R * wrapDelta(b.phi - p->u, twopi);
+      const double dzc = b.z - p->z;
+      const double zs = m_anchorZ > 0 ? m_anchorZ : 10.0;
+      if (!std::isfinite(bestRphi) || std::hypot(rphi / m_anchorRphi, dzc / zs) < std::hypot(bestRphi / m_anchorRphi, bestDz / zs))
+      {
+        bestRphi = rphi;
+        bestDz = dzc;
+      }
+    }
+    const bool zCut = m_anchorZ > 0;
+    if (!std::isfinite(bestRphi) || std::abs(bestRphi) > 3 * m_anchorRphi || (zCut && std::abs(bestDz) > 3 * m_anchorZ))
+    {
+      continue;
+    }
+    const auto it = std::find(anchors.begin(), anchors.end(), b.id);
+    const bool inWin = std::abs(bestRphi) <= m_anchorRphi && (!zCut || std::abs(bestDz) <= m_anchorZ);
+    std::printf("[SiSeedDebug]     blob %5d  Uphi %8.5f Vz %8.3f  nhits %2zu  r*dphi %+7.3f cm  dz %+7.3f cm  %s%s\n",
+                b.id, b.phi, b.z, b.hit_ids.size(), bestRphi, bestDz, inWin ? "IN window" : "outside",
+                it != anchors.end() ? (" -> anchor #" + std::to_string(it - anchors.begin())).c_str() : (inWin ? " (dropped: max anchors)" : ""));
+    ++nPrinted;
+  }
+  if (nPrinted == 0)
+  {
+    std::printf("[SiSeedDebug]     (none)\n");
+  }
+}
+
+void SiHitSeedReco::debugSeed(const SiBlob& seed, int inner, const SiTpcReference::TpcReference& ref,
+                              const std::vector<Candidate>& cands) const
+{
+  double zc = 0, zh = 0, pc = 0;
+  seedWindow(ref, seed.layer, inner, seed.z, zc, zh, pc);
+  std::printf("[SiSeedDebug]   anchor blob %d (layer %d, Uphi %.5f, Vz %.3f): seed window on layer %d  dUphi centre %+.3f bins half %.2f, dz centre %+.3f bins half %.2f; %zu candidates (max %u used)\n",
+              seed.id, seed.layer, seed.phi, seed.z, inner, pc, m_seedPhiHalf, zc, zh, cands.size(), m_maxSeedCand);
+  for (size_t k = 0; k < cands.size(); ++k)
+  {
+    const auto& c = cands[k];
+    std::printf("[SiSeedDebug]     cand #%zu blob %5d  res dUphi %+6.3f bins  res dz %+6.3f bins  score %.3f%s\n",
+                k, c.blob, c.res_phi, c.res_z, c.score, k < m_maxSeedCand ? "" : "  (not used: max candidates)");
+  }
+  // inner-layer blobs near the window (blob centroid, relative to the anchor centroid)
+  for (const auto& b : m_eventData->blobs)
+  {
+    if (b.layer != inner)
+    {
+      continue;
+    }
+    const double dph = wrapDelta(b.phibin - (seed.phibin + pc), m_nphi);
+    const double dzb = b.zbin - (seed.zbin + zc);
+    if (std::abs(dph) > 3 * m_seedPhiHalf || std::abs(dzb) > 3 * zh)
+    {
+      continue;
+    }
+    const bool isCand = std::any_of(cands.begin(), cands.end(), [&](const Candidate& c) { return c.blob == b.id; });
+    std::printf("[SiSeedDebug]       near: blob %5d  Uphi %8.5f Vz %8.3f  dUphi-centre %+6.3f bins  dz-centre %+6.3f bins  %s\n",
+                b.id, b.phi, b.z, dph, dzb, isCand ? "candidate" : "NOT a candidate (outside window, hit level)");
+  }
+}
+
+void SiHitSeedReco::debugChain(const SiHitChain& ch, const char* tag) const
+{
+  std::cout << tag << ": layers " << ch.layers.size() << " (MVTX " << ch.n_mvtx << ", INTT " << ch.n_intt << "), blobs";
+  for (size_t i = 0; i < ch.layers.size(); ++i)
+  {
+    std::cout << " L" << ch.layers[i] << ":" << ch.blob_ids[i];
+  }
+  std::cout << std::endl;
+  for (const auto& st : ch.steps)
+  {
+    std::printf("[SiSeedDebug]       step kind %d  %d->%d  blob %5d  res Uphi %+6.3f bins (half %.2f)  res z %+6.3f bins (half %.2f)\n",
+                st.kind, st.from_layer, st.to_layer, st.blob_id, st.res_phi_bins, st.phi_half_window_bins,
+                st.res_z_bins, st.z_half_window_bins);
+  }
 }
 
 bool SiHitSeedReco::hwDdphiTerms(int layer, const std::map<int, double>& uphiByLayer, double& dphi, double& dphiPred) const
@@ -670,6 +1107,14 @@ std::vector<SiHitSeedReco::TpcTrackInput> SiHitSeedReco::collectTpcTracks(PHComp
     in.index = static_cast<int>(i);
     in.id = t->get_track_id();
     in.assembledId = t->get_source_assembled_track_id();
+    in.polyX = t->get_x();
+    in.polyY = t->get_y();
+    in.polyZ = t->get_z();
+    in.polyPx = t->get_px();
+    in.polyPy = t->get_py();
+    in.polyPz = t->get_pz();
+    in.polyCharge = t->get_charge();
+    in.polyFitStatus = t->get_fit_status();
     auto it = byTrack.find(in.assembledId);
     if (it != byTrack.end())
     {
@@ -700,7 +1145,11 @@ std::vector<int> SiHitSeedReco::anchorBlobs(const SiTpcReference::TpcReference& 
       continue;
     }
     const double R = m_radius[layer];
-    forEachHitNear(layer, (p->z - m_zmin) / dz, m_anchorZ / dz, p->u / dp, (m_anchorRphi / R) / dp, [&](int ih)
+    const bool zCut = m_anchorZ > 0;
+    const double zCenterBins = zCut ? (p->z - m_zmin) / dz : 0.5 * m_nz;
+    const double zHalfBins = zCut ? m_anchorZ / dz : m_nz;  // no z cut: whole z range
+    const double zScale = zCut ? m_anchorZ : 10.0;          // ordering scale if no z window [cm]
+    forEachHitNear(layer, zCenterBins, zHalfBins, p->u / dp, (m_anchorRphi / R) / dp, [&](int ih)
     {
       const int b = m_hitBlob[ih];
       if (b < 0)
@@ -710,11 +1159,11 @@ std::vector<int> SiHitSeedReco::anchorBlobs(const SiTpcReference::TpcReference& 
       const auto& h = m_eventData->hits[ih];
       const double rdphi = R * SiTpcReference::wrapPi(h.phi - p->u);
       const double dzc = h.z - p->z;
-      if (std::abs(rdphi) > m_anchorRphi || std::abs(dzc) > m_anchorZ)
+      if (std::abs(rdphi) > m_anchorRphi || (zCut && std::abs(dzc) > m_anchorZ))
       {
         return;
       }
-      const double m = (rdphi / m_anchorRphi) * (rdphi / m_anchorRphi) + (dzc / m_anchorZ) * (dzc / m_anchorZ);
+      const double m = (rdphi / m_anchorRphi) * (rdphi / m_anchorRphi) + m_anchorZWeight * (dzc / zScale) * (dzc / zScale);
       auto it = metric.find(b);
       if (it == metric.end() || m < it->second)
       {
@@ -876,7 +1325,8 @@ bool SiHitSeedReco::propagate(const Line3D& l, int layer, const Eigen::Vector3d&
 // (rotated by the common Uphi rotation, which a straight line does not care about), the same
 // frame for all hits, so no conversion is needed.  The chain goes to physics space only
 // afterwards (toPhysics).  No global hit mask.
-bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitChain& out) const
+bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitChain& out,
+                               const SiTpcReference::TpcReference* tpcRef) const
 {
   // blobs taken by this chain (at most one per layer)
   std::array<int, nlayers> chainBlobs{};
@@ -942,12 +1392,100 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
         ref = l;
       }
     }
-    double pz, pp;
-    if (!propagate(line, layer, xyz(ref, acc[ref].z, acc[ref].phi), pz, pp))
+    double pz = 0, pp = 0;
+    const bool lineOk = propagate(line, layer, xyz(ref, acc[ref].z, acc[ref].phi), pz, pp);
+    double phiHalf = m_propPhiHalf;
+    bool tpcGuided = false;
+    if (kind == SiChainStep::InttPropagation && m_inttCentre != InttCentre::MvtxLine && tpcRef)
+    {
+      // TPC prediction on this layer + the chain's MVTX offsets to the TPC prediction
+      // (mean, or straight-line fit in r / s extrapolated to this layer)
+      double sRphi = 0, sZ = 0;
+      int nOff = 0, nAlt = 0;
+      std::vector<std::array<double, 4>> offs;  // r, r*phi offset, s, z offset
+      for (const auto& [l, a] : acc)
+      {
+        if (l > 2)
+        {
+          continue;
+        }
+        const auto& p0 = tpcRef->layers[l];
+        const auto& p1 = tpcRef->alt[l];
+        const SiTpcReference::LayerPrediction* p = nullptr;
+        if (p0.valid && p1.valid)
+        {
+          const bool useAlt = std::abs(wrapDelta(a.phi - p1.u, twopi)) < std::abs(wrapDelta(a.phi - p0.u, twopi));
+          p = useAlt ? &p1 : &p0;
+          nAlt += useAlt;
+        }
+        else if (p0.valid)
+        {
+          p = &p0;
+        }
+        if (!p)
+        {
+          continue;
+        }
+        const double oR = m_radius[l] * wrapDelta(a.phi - p->u, twopi);
+        const double oZ = a.z - p->z;
+        sRphi += oR;
+        sZ += oZ;
+        offs.push_back({m_radius[l], oR, p->s, oZ});
+        ++nOff;
+      }
+      const auto& t0 = tpcRef->layers[layer];
+      const auto& t1 = tpcRef->alt[layer];
+      const SiTpcReference::LayerPrediction* tp = (t1.valid && 2 * nAlt > nOff) ? &t1 : (t0.valid ? &t0 : nullptr);
+      if (nOff > 0 && tp)
+      {
+        double offR = sRphi / nOff, offZ = sZ / nOff;
+        if (m_inttCentre == InttCentre::TpcOffsetSlope && nOff >= 2)
+        {
+          // least-squares lines offset(r) and offset(s), evaluated at this layer
+          auto lineAt = [&](int ix, int iy, double x0, double fallback)
+          {
+            double mx = 0, my = 0;
+            for (const auto& o : offs)
+            {
+              mx += o[ix];
+              my += o[iy];
+            }
+            mx /= offs.size();
+            my /= offs.size();
+            double sxx = 0, sxy = 0;
+            for (const auto& o : offs)
+            {
+              sxx += (o[ix] - mx) * (o[ix] - mx);
+              sxy += (o[ix] - mx) * (o[iy] - my);
+            }
+            return sxx > 0.09 ? my + sxy / sxx * (x0 - mx) : fallback;  // lever arm > ~0.3 cm
+          };
+          offR = lineAt(0, 1, m_radius[layer], offR);
+          offZ = lineAt(2, 3, tp->s, offZ);
+        }
+        pp = tp->u + offR / m_radius[layer];
+        if (pp < 0)
+        {
+          pp += twopi;
+        }
+        else if (pp >= twopi)
+        {
+          pp -= twopi;
+        }
+        pz = tp->z + offZ;
+        phiHalf = m_inttTpcPhiHalf;
+        tpcGuided = true;
+        ++m_inttTpcUsed;
+      }
+      else
+      {
+        ++m_inttTpcFallback;
+      }
+    }
+    if (!lineOk && !tpcGuided)
     {
       return false;
     }
-    double phiHalf = m_propPhiHalf;
     if (layer == 0 && m_hwDdphiProp0 && acc.count(1) && acc.count(2))
     {
       // phi window from the step-to-step correlation instead of the straight line (z unchanged)
@@ -1124,6 +1662,8 @@ void SiHitSeedReco::toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& c
   chain.phys_z.clear();
   chain.res_rdphi.clear();
   chain.res_dz.clear();
+  chain.res_dz_fit.clear();
+  std::vector<double> pathS;  // TPC helix path length at every chain layer
   for (size_t i = 0; i < chain.layers.size(); ++i)
   {
     const int layer = chain.layers[i];
@@ -1159,39 +1699,94 @@ void SiHitSeedReco::toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& c
     }
     chain.res_rdphi.push_back(rdphi);
     chain.res_dz.push_back(dzr);
+    pathS.push_back(s);
   }
 
-  double sw = 0, swz = 0;
-  int nphi = 0, nz = 0;
+  // ---- r*phi part
+  double chi2r = 0;
+  int nphi = 0;
   for (size_t i = 0; i < chain.layers.size(); ++i)
   {
-    if (std::isfinite(chain.res_dz[i]))
+    const double r = chain.res_rdphi[i];
+    if (std::isfinite(r))
     {
-      const double sig = m_sigZ[chain.layers[i] <= 2 ? 0 : 1];
-      sw += 1.0 / (sig * sig);
-      swz += chain.res_dz[i] / (sig * sig);
-      ++nz;
-    }
-  }
-  chain.tpc_dz_offset = sw > 0 ? swz / sw : 0.0;
-  const double off = m_freeZOffset ? chain.tpc_dz_offset : 0.0;
-  double chi2 = 0;
-  for (size_t i = 0; i < chain.layers.size(); ++i)
-  {
-    if (std::isfinite(chain.res_rdphi[i]))
-    {
-      chi2 += (chain.res_rdphi[i] / m_sigRphi) * (chain.res_rdphi[i] / m_sigRphi);
+      const double sig = std::max(1e-6, m_sigRphiL[std::clamp(chain.layers[i], 0, 6)]);
+      chi2r += (r / sig) * (r / sig);
       ++nphi;
     }
-    if (std::isfinite(chain.res_dz[i]))
+  }
+
+  // ---- z part: weighted fit of the model dz = a [+ b s]
+  double S = 0, Ss = 0, Sz = 0, Sss = 0, Ssz = 0;
+  int nz = 0;
+  for (size_t i = 0; i < chain.layers.size(); ++i)
+  {
+    if (!std::isfinite(chain.res_dz[i]))
     {
-      const double sig = m_sigZ[chain.layers[i] <= 2 ? 0 : 1];
-      const double d = (chain.res_dz[i] - off) / sig;
-      chi2 += d * d;
+      continue;
+    }
+    const double sig = std::max(1e-6, m_sigZL[std::clamp(chain.layers[i], 0, 6)]);
+    const double w = 1.0 / (sig * sig);
+    S += w;
+    Ss += w * pathS[i];
+    Sz += w * chain.res_dz[i];
+    Sss += w * pathS[i] * pathS[i];
+    Ssz += w * pathS[i] * chain.res_dz[i];
+    ++nz;
+  }
+  double a = 0, b = 0;
+  int nzpar = 0;
+  if (m_zModel == TpcZModel::Offset && nz > 0)
+  {
+    a = Sz / S;
+    nzpar = 1;
+  }
+  else if (m_zModel == TpcZModel::OffsetSlope && nz > 0)
+  {
+    const double D = S * Sss - Ss * Ss;
+    if (nz >= 2 && D > 1e-9 * S * S)
+    {
+      b = (S * Ssz - Ss * Sz) / D;
+      a = (Sz - b * Ss) / S;
+      nzpar = 2;
+    }
+    else
+    {
+      a = Sz / S;
+      nzpar = 1;
     }
   }
-  chain.tpc_ndf = nphi + nz - ((m_freeZOffset && nz > 0) ? 1 : 0);
-  chain.tpc_chi2 = chain.tpc_ndf > 0 ? chi2 / chain.tpc_ndf : std::numeric_limits<double>::quiet_NaN();
+  chain.tpc_dz_offset = a;
+  chain.tpc_dz_slope = b;
+  double chi2z = 0;
+  for (size_t i = 0; i < chain.layers.size(); ++i)
+  {
+    if (std::isfinite(chain.res_dz[i]))
+    {
+      const double sig = std::max(1e-6, m_sigZL[std::clamp(chain.layers[i], 0, 6)]);
+      const double d = (chain.res_dz[i] - a - b * pathS[i]) / sig;
+      chi2z += d * d;
+    }
+  }
+  chain.res_dz_fit.assign(chain.layers.size(), std::numeric_limits<double>::quiet_NaN());
+  for (size_t i = 0; i < chain.layers.size(); ++i)
+  {
+    if (std::isfinite(chain.res_dz[i]))
+    {
+      chain.res_dz_fit[i] = chain.res_dz[i] - a - b * pathS[i];
+    }
+  }
+  chain.tpc_chi2_rphi = chi2r;
+  chain.tpc_chi2_z = chi2z;
+  const int ndfz = m_zWeight > 0 ? std::max(0, nz - nzpar) : 0;
+  chain.tpc_ndf = nphi + ndfz;
+  chain.tpc_nres = nphi;
+  chain.tpc_chi2 = chain.tpc_ndf > 0 ? (chi2r + m_zWeight * chi2z) / chain.tpc_ndf : std::numeric_limits<double>::quiet_NaN();
+  if (m_requireAllResiduals && nphi < static_cast<int>(chain.layers.size()))
+  {
+    // the TPC helix does not reach every chain layer: not this TPC track's chain
+    chain.tpc_chi2 = std::numeric_limits<double>::quiet_NaN();
+  }
 }
 
 void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
@@ -1201,8 +1796,23 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
   info.tpc_track_id = in.id;
   info.tpc_assembled_track_id = in.assembledId;
   info.n_clusters = in.nClusters;
+  const bool dbg = debugThisTrack(in);
+  const bool dbgEvent = m_debugEvent >= 0 && static_cast<long>(m_eventData->event) == m_debugEvent;
   auto finish = [&](int status)
   {
+    if (dbgEvent && !dbg)
+    {
+      std::printf("[SiSeedDebug] event %llu track index %4d assembled %6u clusters %3u  poly pt %.3f phi %+.4f z %+7.2f q %+.0f | refit pt %.3f phi %+.4f z0 %+7.2f | %s, anchors %d chains %d\n",
+                  m_eventData->event, in.index, in.assembledId, in.nClusters, std::hypot(in.polyPx, in.polyPy),
+                  std::atan2(in.polyPy, in.polyPx), in.polyZ, in.polyCharge, info.pt, info.phi, info.z0, statusName(status),
+                  info.n_anchors, info.n_chains);
+    }
+    if (dbg)
+    {
+      std::cout << "[SiSeedDebug] => status " << statusName(status) << ", anchors " << info.n_anchors << ", chains "
+                << info.n_chains << ", selected chain " << info.selected_chain << "\n"
+                << "[SiSeedDebug] ==================================================" << std::endl;
+    }
     info.status = status;
     ++m_statusCount[std::clamp(status, 0, 6)];
     m_eventData->tpc_seeds.push_back(info);
@@ -1217,6 +1827,10 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
 
   if (in.nClusters < m_minTpcClusters)
   {
+    if (dbg)
+    {
+      debugTrackHeader(in, nullptr);
+    }
     finish(SiTpcSeedInfo::TooFewClusters);
     return;
   }
@@ -1229,7 +1843,12 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
     info.charge = in.fit.charge;
   }
   SiTpcReference::TpcReference ref;
-  if (!SiTpcReference::buildTpcReference(in.fit, m_map, ref, m_boundaryMargin))
+  const bool refOk = SiTpcReference::buildTpcReference(in.fit, m_map, ref, m_boundaryMargin);
+  if (dbg)
+  {
+    debugTrackHeader(in, refOk ? &ref : nullptr);
+  }
+  if (!refOk)
   {
     finish(SiTpcSeedInfo::FitFailed);
     return;
@@ -1257,19 +1876,38 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
     anyPrediction = true;
     const auto anchors = anchorBlobs(ref, outer);
     info.n_anchors += static_cast<int>(anchors.size());
+    if (dbg)
+    {
+      std::cout << "[SiSeedDebug] --- seed pair " << outer << "->" << inner << std::endl;
+      debugAnchors(ref, outer, anchors);
+    }
     for (int a : anchors)
     {
       if (chains.size() >= m_maxChainsPerTrack)
       {
+        if (dbg)
+        {
+          std::cout << "[SiSeedDebug]   chain cap " << m_maxChainsPerTrack << " reached, remaining anchors skipped" << std::endl;
+        }
         break;
       }
       const auto& seed = m_eventData->blobs[a];
       const auto cands = seedCandidates(seed, inner, ref);
+      if (dbg)
+      {
+        debugSeed(seed, inner, ref, cands);
+      }
       const size_t ncand = std::min<size_t>(cands.size(), m_maxSeedCand);
       for (size_t k = 0; k < ncand && chains.size() < m_maxChainsPerTrack; ++k)
       {
         SiHitChain ch;
-        if (!buildChain(seed, cands[k], ch))
+        const bool built = buildChain(seed, cands[k], ch, &ref);
+        if (dbg)
+        {
+          std::cout << "[SiSeedDebug]     build anchor " << a << " + cand blob " << cands[k].blob << ": ";
+          debugChain(ch, built ? "OK" : "FAILED requirements");
+        }
+        if (!built)
         {
           continue;
         }
@@ -1277,6 +1915,10 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
         std::sort(sig.begin(), sig.end());
         if (!signatures.insert(sig).second)
         {
+          if (dbg)
+          {
+            std::cout << "[SiSeedDebug]       (duplicate of an earlier chain, dropped)" << std::endl;
+          }
           continue;
         }
         ch.seed_outer_layer = outer;
@@ -1307,7 +1949,8 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
   {
     toPhysics(in.fit, ch);
   }
-  std::sort(chains.begin(), chains.end(), [](const SiHitChain& a, const SiHitChain& b)
+  // previous ordering: most layers, then tpc_chi2 (finite first), then score
+  auto layersFirst = [](const SiHitChain& a, const SiHitChain& b)
   {
     if (a.n_layers() != b.n_layers())
     {
@@ -1323,18 +1966,72 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
       return a.tpc_chi2 < b.tpc_chi2;
     }
     return a.score < b.score;
-  });
+  };
+  const double agreeCut = m_agreementMaxChi2;
+  auto agrees = [agreeCut](const SiHitChain& c)
+  {
+    return std::isfinite(c.tpc_chi2) && c.tpc_chi2 <= agreeCut;
+  };
+  // agreeing chains first (most layers among them), then the rest by tpc_chi2
+  auto agreementFirst = [&](const SiHitChain& a, const SiHitChain& b)
+  {
+    const bool aa = agrees(a), ab = agrees(b);
+    if (aa != ab)
+    {
+      return aa;
+    }
+    if (aa)
+    {
+      return layersFirst(a, b);
+    }
+    const bool fa = std::isfinite(a.tpc_chi2), fb = std::isfinite(b.tpc_chi2);
+    if (fa != fb)
+    {
+      return fa;
+    }
+    if (fa && a.tpc_chi2 != b.tpc_chi2)
+    {
+      return a.tpc_chi2 < b.tpc_chi2;
+    }
+    if (a.n_layers() != b.n_layers())
+    {
+      return a.n_layers() > b.n_layers();
+    }
+    return a.score < b.score;
+  };
+
+  bool rankZeroAgrees = true;
+  if (m_chainRanking == ChainRanking::AgreementFirst)
+  {
+    const auto oldBest = std::min_element(chains.begin(), chains.end(), layersFirst);
+    const std::vector<int> oldBlobs = oldBest->blob_ids;
+    std::sort(chains.begin(), chains.end(), agreementFirst);
+    rankZeroAgrees = agrees(chains[0]);
+    if (!rankZeroAgrees)
+    {
+      ++m_noAgreeingChain;
+    }
+    if (chains[0].blob_ids != oldBlobs)
+    {
+      ++m_rankChanged;
+    }
+  }
+  else
+  {
+    std::sort(chains.begin(), chains.end(), layersFirst);
+  }
   for (size_t r = 0; r < chains.size(); ++r)
   {
     chains[r].rank = static_cast<int>(r);
   }
-  const bool pass = m_maxTpcChi2 <= 0 || (std::isfinite(chains[0].tpc_chi2) && chains[0].tpc_chi2 <= m_maxTpcChi2);
+  const bool pass = rankZeroAgrees &&
+                    (m_maxTpcChi2 <= 0 || (std::isfinite(chains[0].tpc_chi2) && chains[0].tpc_chi2 <= m_maxTpcChi2));
   chains[0].selected = pass;
 
   // ---- store
   for (auto& ch : chains)
   {
-    if (m_storeSelectedOnly && !ch.selected)
+    if (m_storeSelectedOnly && !m_exclusiveChains && !ch.selected)  // exclusive: pruned after arbitration
     {
       continue;
     }
@@ -1345,6 +2042,22 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
     if (ch.selected)
     {
       info.selected_chain = ch.id;
+    }
+    if (dbg)
+    {
+      std::cout << "[SiSeedDebug] stored chain " << ch.id << " rank " << ch.rank << (ch.selected ? " SELECTED" : "")
+                << " anchor blob " << ch.anchor_blob << " seed " << ch.seed_outer_layer << "->" << ch.seed_outer_layer - 1
+                << " chi2/ndf " << ch.tpc_chi2 << " (ndf " << ch.tpc_ndf << ", TPC residual on " << ch.tpc_nres << "/"
+                << ch.layers.size() << " layers; chi2 r*phi " << ch.tpc_chi2_rphi << ", z " << ch.tpc_chi2_z
+                << ") dz offset " << ch.tpc_dz_offset << " cm, slope " << ch.tpc_dz_slope << ", hw ddphi pull L0 " << ch.hw_ddphi_pull[0] << " L1 " << ch.hw_ddphi_pull[1] << std::endl;
+      for (size_t i = 0; i < ch.layers.size(); ++i)
+      {
+        std::printf("[SiSeedDebug]     layer %d blob %5d  Uphi %8.5f Vz %8.3f | TPC frame x %8.3f y %8.3f z %8.3f | res r*dphi %+8.4f cm  dz %+8.4f cm\n",
+                    ch.layers[i], ch.blob_ids[i], ch.phi[i], ch.z[i],
+                    i < ch.phys_x.size() ? ch.phys_x[i] : NAN, i < ch.phys_y.size() ? ch.phys_y[i] : NAN,
+                    i < ch.phys_z.size() ? ch.phys_z[i] : NAN,
+                    i < ch.res_rdphi.size() ? ch.res_rdphi[i] : NAN, i < ch.res_dz.size() ? ch.res_dz[i] : NAN);
+      }
     }
     if (Verbosity() > 2)
     {

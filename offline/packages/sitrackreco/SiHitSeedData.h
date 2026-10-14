@@ -112,9 +112,14 @@ struct SiHitChain
   // residuals of those points to the TPC helix at the same radius [cm]
   std::vector<double> res_rdphi;
   std::vector<double> res_dz;
-  double tpc_dz_offset = 0;  // weighted mean dz (subtracted in tpc_chi2 if the z offset is free)
+  std::vector<double> res_dz_fit;  // res_dz minus the fitted z model (offset [+ slope s]) [cm]
+  double tpc_dz_offset = 0;  // fitted z offset Si - TPC [cm] (z model Offset / OffsetSlope)
+  double tpc_dz_slope = 0;   // fitted dz/ds Si - TPC (z model OffsetSlope), ~ tanl correction
+  double tpc_chi2_rphi = std::numeric_limits<double>::quiet_NaN();  // sum (r*dphi/sigma)^2
+  double tpc_chi2_z = std::numeric_limits<double>::quiet_NaN();     // sum ((dz - model)/sigma)^2, unweighted
   double tpc_chi2 = std::numeric_limits<double>::quiet_NaN();  // chi2 / ndf of the agreement
   int tpc_ndf = 0;
+  int tpc_nres = 0;  // chain layers on which the TPC helix could be evaluated (finite r*dphi)
   int rank = -1;          // 0 = best chain of its TPC track (most layers, then best tpc_chi2)
   bool selected = false;  // rank 0 and passing the agreement cut
   int n_layers() const { return n_mvtx + n_intt; }
