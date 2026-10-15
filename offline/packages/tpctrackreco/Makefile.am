@@ -47,6 +47,10 @@ pkginclude_HEADERS = \
   Tpc_PolyClusterizer.h \
   Tpc_PolyTrackReco.h \
   Tpc_PolyTripletReco.h \
+  Tpc_CrossingTrajectory.h \
+  Tpc_CrossingTrajectoryv1.h \
+  Tpc_CrossingTrajectoryContainer.h \
+  Tpc_CrossingTrajectoryContainerv1.h \
   TpcTrackFit.h \
   TpcTrackHelixFitter.h \
   TpcTrackKalmanFitter.h \
@@ -80,7 +84,11 @@ ROOTDICTS = \
   Tpc_PolyTrackVertexContainer_Dict.cc \
   Tpc_PolyTrackVertexContainerv1_Dict.cc \
   Tpc_PolyTrackVertexv1_Dict.cc \
-  Tpc_PolyTrackv1_Dict.cc
+  Tpc_PolyTrackv1_Dict.cc \
+  Tpc_CrossingTrajectory_Dict.cc \
+  Tpc_CrossingTrajectoryv1_Dict.cc \
+  Tpc_CrossingTrajectoryContainer_Dict.cc \
+  Tpc_CrossingTrajectoryContainerv1_Dict.cc
 
 pcmdir = $(libdir)
 # more elegant way to create pcm files (without listing them)
@@ -99,6 +107,8 @@ libtpctrackreco_io_la_SOURCES = \
   Tpc_PolyTrackVertexContainerv1.cc \
   Tpc_PolyClusterv1.cc \
   Tpc_PolyClusterContainerv1.cc \
+  Tpc_CrossingTrajectoryv1.cc \
+  Tpc_CrossingTrajectoryContainerv1.cc \
   $(ROOTDICTS)
 
 libtpctrackreco_la_SOURCES = \

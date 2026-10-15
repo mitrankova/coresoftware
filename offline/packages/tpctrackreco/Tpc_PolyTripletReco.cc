@@ -1,14 +1,10 @@
 #include "Tpc_PolyTripletReco.h"
 
 #include "IdealPadMap.h"
-#include "TpcCrossingDecision.h"
-#include "TpcCrossingDecisionContainer.h"
 #include "Tpc_AssembledTrack.h"
 #include "Tpc_AssembledTrackContainer.h"
-#include "Tpc_PolyClusterContainerv1.h"
-#include "Tpc_PolyClusterv1.h"
-#include "Tpc_PolyTrackContainerv1.h"
-#include "Tpc_PolyTrackv1.h"
+#include "Tpc_CrossingTrajectoryContainerv1.h"
+#include "Tpc_CrossingTrajectoryv1.h"
 
 #include <fun4all/Fun4AllReturnCodes.h>
 
@@ -24,7 +20,9 @@
 #include <phool/getClass.h>
 
 #include <trackbase/ActsGeometry.h>
+#include <trackbase/InttDefs.h>
 #include <trackbase/TpcDefs.h>
+#include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrDefs.h>
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
@@ -66,14 +64,13 @@ Tpc_PolyTripletReco::~Tpc_PolyTripletReco()
 int Tpc_PolyTripletReco::InitRun(PHCompositeNode* topNode)
 {
   m_assembledTracks = findNode::getClass<Tpc_AssembledTrackContainer>(topNode, m_inputNodeName);
-  m_crossingDecisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_crossingDecisionNodeName);
   m_hits = findNode::getClass<TrkrHitSetContainer>(topNode, "TRKR_HITSET");
   m_geomContainer = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
   m_garfield = findNode::getClass<PHGarfield>(topNode, "PHGarfield");
   m_geometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
-  if (!m_assembledTracks || !m_crossingDecisions || !m_hits || !m_geomContainer || !m_garfield || !m_geometry)
+  if (!m_assembledTracks || !m_hits || !m_geomContainer || !m_garfield || !m_geometry)
   {
-    std::cerr << Name() << "::InitRun - missing input (" << m_inputNodeName << ", " << m_crossingDecisionNodeName
+    std::cerr << Name() << "::InitRun - missing input (" << m_inputNodeName
               << ", TRKR_HITSET, TPCGEOMCONTAINER, PHGarfield or ActsGeometry)" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
@@ -128,22 +125,18 @@ int Tpc_PolyTripletReco::InitRun(PHCompositeNode* topNode)
     dstNode = new PHCompositeNode("DST");
     topNode->addNode(dstNode);
   }
-  m_points = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_pointNodeName);
-  if (!m_points)
+  m_trajectories = findNode::getClass<Tpc_CrossingTrajectoryContainer>(topNode, m_outputNodeName);
+  if (!m_trajectories)
   {
-    m_points = new Tpc_PolyClusterContainerv1();
-    dstNode->addNode(new PHIODataNode<PHObject>(m_points, m_pointNodeName, "PHObject"));
-  }
-  m_tracks = findNode::getClass<Tpc_PolyTrackContainer>(topNode, m_trackNodeName);
-  if (!m_tracks)
-  {
-    m_tracks = new Tpc_PolyTrackContainerv1();
-    dstNode->addNode(new PHIODataNode<PHObject>(m_tracks, m_trackNodeName, "PHObject"));
+    m_trajectories = new Tpc_CrossingTrajectoryContainerv1();
+    dstNode->addNode(new PHIODataNode<PHObject>(m_trajectories, m_outputNodeName, "PHObject"));
   }
 
-  std::cout << Name() << "::InitRun - edge pad margin " << m_edgePadMargin << ", min layer span " << m_minLayerSpan
+  std::cout << Name() << "::InitRun - " << (m_triggeredMode ? "triggered mode, crossing " + std::to_string(m_triggeredCrossing)
+                                                             : "streaming mode, all INTT crossings with |z0| < " + std::to_string(m_maxVertexZ) + " cm")
+            << "; edge pad margin " << m_edgePadMargin << ", min layer span " << m_minLayerSpan
             << "; t0 side0=" << m_t0Side[0] << " side1=" << m_t0Side[1] << " tbins; output "
-            << m_pointNodeName << ", " << m_trackNodeName << std::endl;
+            << m_outputNodeName << std::endl;
   m_event = 0;
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -179,6 +172,7 @@ bool Tpc_PolyTripletReco::buildLayer(unsigned int layer)
         Polyline& pl = polyline(layer, side, sector, s);
         pl.phi = phi;
         pl.points.resize(line->GetN());
+        m_maxLookupTimeNs = std::max(m_maxLookupTimeNs, (line->GetN() - 1) * m_driftStepNs);
         const Float_t* xyz = line->GetP();
         for (int i = 0; i < line->GetN(); ++i)
         {
@@ -293,36 +287,48 @@ bool Tpc_PolyTripletReco::makePoint(unsigned int layer, unsigned int side, short
   return sector < 12 && drift(layer, side, sector, sphi / sw, timeNs, p.x, p.y, p.z);
 }
 
-int Tpc_PolyTripletReco::storePoint(unsigned int assembledId, unsigned int side, const RefPoint& p,
-                                    const std::vector<Hit>& hits)
+bool Tpc_PolyTripletReco::insideTpc(const RefPoint& p, unsigned int side) const
 {
-  const Hit& peak = *std::max_element(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.adc < b.adc; });
-  auto* point = new Tpc_PolyClusterv1();
-  point->set_event(m_event);
-  point->set_cluster_id(m_points->size());
-  point->set_source_assembled_track_id(assembledId);
-  point->set_trkr_cluster_key(TrkrDefs::genClusKey(peak.hitsetkey, m_nextIndex[peak.hitsetkey]++));
-  point->set_side(static_cast<int>(side));
-  point->set_centroid_x(p.x);
-  point->set_centroid_y(p.y);
-  point->set_centroid_z(p.z);
-  double adc = 0;
-  for (const Hit& h : hits)
-  {
-    adc += std::max(h.adc, 0.0);
-    point->add_hit(h.hitsetkey, h.hitkey, p.x, p.y, p.z);  // hit list only; xyz = reference point
-  }
-  point->set_adc(adc);
-  const int index = static_cast<int>(m_points->size());
-  m_points->add_cluster(point);
-  return index;
+  const double r = std::hypot(p.x, p.y);
+  const bool inVolume = r >= m_padMap->get_radius(FirstLayer) - m_radialTolerance &&
+                        r <= m_padMap->get_radius(FirstLayer + NLayers - 1) + m_radialTolerance &&
+                        std::fabs(p.z) <= m_tpcHalfLength + m_zTolerance;
+  const bool rightSide = side == 0 ? p.z <= m_centralMembraneTolerance : p.z >= -m_centralMembraneTolerance;
+  return inVolume && rightSide;
 }
 
-int Tpc_PolyTripletReco::process_event(PHCompositeNode* /*topNode*/)
+// INTT crossings of the event (time buckets of the INTT cluster sets)
+std::set<short> Tpc_PolyTripletReco::inttCrossings() const
 {
-  m_points->Reset();
-  m_tracks->Reset();
-  m_nextIndex.clear();
+  std::set<short> crossings;
+  if (!m_clusterMap)
+  {
+    return crossings;
+  }
+  for (const auto& hitsetkey : m_clusterMap->getHitSetKeys())
+  {
+    if (static_cast<TrkrDefs::TrkrId>(TrkrDefs::getTrkrId(hitsetkey)) == TrkrDefs::TrkrId::inttId)
+    {
+      crossings.insert(static_cast<short>(InttDefs::getTimeBucketId(hitsetkey)));
+    }
+  }
+  return crossings;
+}
+
+int Tpc_PolyTripletReco::process_event(PHCompositeNode* topNode)
+{
+  m_trajectories->Reset();
+
+  std::set<short> crossings;
+  if (m_triggeredMode)
+  {
+    crossings.insert(m_triggeredCrossing);
+  }
+  else
+  {
+    m_clusterMap = findNode::getClass<TrkrClusterContainer>(topNode, "TRKR_CLUSTER");
+    crossings = inttCrossings();
+  }
 
   for (unsigned int it = 0; it < m_assembledTracks->size(); ++it)
   {
@@ -331,16 +337,11 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* /*topNode*/)
     {
       continue;
     }
-    const TpcCrossingDecision* decision = m_crossingDecisions->get_decision(assembled->get_track_id());
-    if (!decision || decision->get_selected_tier() > m_maxAcceptedTier)
-    {
-      continue;
-    }
-    const short crossing = decision->get_selected_crossing();
     const auto side = static_cast<unsigned int>(assembled->get_side());
 
-    // hits of this track, by layer
+    // hits of this track, by layer, and its time extrema
     std::map<unsigned int, std::vector<Hit>> byLayer;
+    double minTbin = 1e9, maxTbin = -1e9;
     for (unsigned int ih = 0; ih < assembled->size_hit_indices(); ++ih)
     {
       const Tpc_AssembledTrack::HitIndex hi = assembled->get_hit_index(ih);
@@ -355,8 +356,10 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* /*topNode*/)
       {
         continue;
       }
-      byLayer[layer].push_back({hi.first, hi.second, TpcDefs::getPad(hi.second),
-                                static_cast<double>(TpcDefs::getTBin(hi.second)), static_cast<double>(hit->getAdc())});
+      const auto tbin = static_cast<double>(TpcDefs::getTBin(hi.second));
+      minTbin = std::min(minTbin, tbin);
+      maxTbin = std::max(maxTbin, tbin);
+      byLayer[layer].push_back({hi.first, hi.second, TpcDefs::getPad(hi.second), tbin, static_cast<double>(hit->getAdc())});
     }
     if (byLayer.empty())
     {
@@ -364,7 +367,8 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* /*topNode*/)
     }
     ++m_nTracks;
 
-    // usable layers: not the first / last layer of a module, no hit on a sector-edge pad
+    // usable layers (independent of the crossing): not the first / last layer of a module,
+    // no hit on a sector-edge pad
     std::vector<unsigned int> usable;
     for (const auto& [layer, hits] : byLayer)
     {
@@ -387,66 +391,89 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* /*topNode*/)
       continue;
     }
 
-    // beginning: innermost usable layer that drifts; end: outermost one
-    std::array<RefPoint, 3> pts;
-    bool ok = false;
-    std::size_t iIn = 0;
-    for (; iIn < usable.size() && !ok; ++iIn)
+    bool anyTrajectory = false;
+    for (const short crossing : crossings)
     {
-      ok = makePoint(usable[iIn], side, crossing, byLayer[usable[iIn]], pts[0]);
-    }
-    bool okOut = false;
-    for (std::size_t i = usable.size(); ok && i-- > iIn && !okOut;)
-    {
-      okOut = makePoint(usable[i], side, crossing, byLayer[usable[i]], pts[2]);
-    }
-    if (!ok || !okOut)
-    {
-      ++m_nDriftFailed;
-      continue;
-    }
-    if (pts[2].layer - pts[0].layer < m_minLayerSpan)
-    {
-      ++m_nShortSpan;
-      continue;
-    }
+      ++m_nHypotheses;
 
-    // middle: usable layer closest to the radial midpoint of the two
-    const double rMid = 0.5 * (m_padMap->get_radius(pts[0].layer) + m_padMap->get_radius(pts[2].layer));
-    std::vector<unsigned int> middle;
-    for (const unsigned int layer : usable)
-    {
-      if (layer > pts[0].layer && layer < pts[2].layer)
+      // beginning: innermost usable layer that drifts; end: outermost one; middle: closest to
+      // the radial midpoint
+      std::array<RefPoint, 3> pts;
+      bool okIn = false, okOut = false, okMid = false;
+      std::size_t iIn = 0;
+      for (; iIn < usable.size() && !okIn; ++iIn)
       {
-        middle.push_back(layer);
+        okIn = makePoint(usable[iIn], side, crossing, byLayer[usable[iIn]], pts[0]);
       }
-    }
-    std::sort(middle.begin(), middle.end(), [&](unsigned int l1, unsigned int l2)
-              { return std::fabs(m_padMap->get_radius(l1) - rMid) < std::fabs(m_padMap->get_radius(l2) - rMid); });
-    bool okMid = false;
-    for (std::size_t i = 0; i < middle.size() && !okMid; ++i)
-    {
-      okMid = makePoint(middle[i], side, crossing, byLayer[middle[i]], pts[1]);
-    }
-    if (!okMid)
-    {
-      ++m_nNoMiddle;
-      continue;
-    }
+      for (std::size_t i = usable.size(); okIn && i-- > iIn && !okOut;)
+      {
+        okOut = makePoint(usable[i], side, crossing, byLayer[usable[i]], pts[2]);
+      }
+      if (okIn && okOut && pts[2].layer - pts[0].layer >= m_minLayerSpan)
+      {
+        const double rMid = 0.5 * (m_padMap->get_radius(pts[0].layer) + m_padMap->get_radius(pts[2].layer));
+        std::vector<unsigned int> middle;
+        for (const unsigned int layer : usable)
+        {
+          if (layer > pts[0].layer && layer < pts[2].layer)
+          {
+            middle.push_back(layer);
+          }
+        }
+        std::sort(middle.begin(), middle.end(), [&](unsigned int l1, unsigned int l2)
+                  { return std::fabs(m_padMap->get_radius(l1) - rMid) < std::fabs(m_padMap->get_radius(l2) - rMid); });
+        for (std::size_t i = 0; i < middle.size() && !okMid; ++i)
+        {
+          okMid = makePoint(middle[i], side, crossing, byLayer[middle[i]], pts[1]);
+        }
+      }
+      if (!okMid)
+      {
+        ++m_nNoPoints;
+        continue;
+      }
 
-    ++m_nTriplets;
-    std::array<int, 3> pointIndex{};
-    for (int k = 0; k < 3; ++k)
-    {
-      pointIndex[k] = storePoint(assembled->get_track_id(), side, pts[k], byLayer[pts[k].layer]);
+      auto* trajectory = new Tpc_CrossingTrajectoryv1();
+      fitTrajectory(pts, *trajectory);
+
+      // streaming mode: physical crossing only
+      if (!m_triggeredMode)
+      {
+        const double tol = m_edgeToleranceTbins * m_tpcAdcClock;
+        const double tMin = (minTbin - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
+        const double tMax = (maxTbin - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
+        const bool timeOk = tMin > -tol && tMax <= m_maxLookupTimeNs + tol;
+        const bool volumeOk = insideTpc(pts[0], side) && insideTpc(pts[1], side) && insideTpc(pts[2], side);
+        const bool vertexOk = trajectory->get_fit_status() == 1 &&
+                              std::fabs(trajectory->get_z() - m_collisionZ) <= m_maxVertexZ;
+        if (!timeOk || !volumeOk || !vertexOk)
+        {
+          ++(!timeOk ? m_nTimeWindow : (!volumeOk ? m_nOutsideTpc : m_nVertexZ));
+          delete trajectory;
+          continue;
+        }
+      }
+
+      trajectory->set_event(m_event);
+      trajectory->set_trajectory_id(m_trajectories->size());
+      trajectory->set_source_assembled_track_id(assembled->get_track_id());
+      trajectory->set_crossing(crossing);
+      trajectory->set_side(static_cast<int>(side));
+      for (unsigned int k = 0; k < 3; ++k)
+      {
+        trajectory->set_point(k, pts[k].layer, pts[k].x, pts[k].y, pts[k].z);
+      }
+      m_trajectories->add_trajectory(trajectory);
+      ++m_nTrajectories;
+      anyTrajectory = true;
     }
-    fillTrack(assembled->get_track_id(), pointIndex);
+    m_nTracksWithTrajectory += anyTrajectory ? 1 : 0;
   }
 
   if (Verbosity() > 0)
   {
-    std::cout << Name() << "::process_event - event " << m_event << " assembled=" << m_assembledTracks->size()
-              << " points=" << m_points->size() << " tracks=" << m_tracks->size() << std::endl;
+    std::cout << Name() << "::process_event - event " << m_event << " crossings=" << crossings.size()
+              << " assembled=" << m_assembledTracks->size() << " trajectories=" << m_trajectories->size() << std::endl;
   }
   ++m_event;
   return Fun4AllReturnCodes::EVENT_OK;
@@ -454,126 +481,109 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* /*topNode*/)
 
 int Tpc_PolyTripletReco::End(PHCompositeNode* /*topNode*/)
 {
-  std::cout << Name() << "::End - tracks with hits " << m_nTracks << ": triplets " << m_nTriplets
-            << ", usable span < " << m_minLayerSpan << " layers "
-            << m_nShortSpan << ", no inner/outer point " << m_nDriftFailed << ", no middle point " << m_nNoMiddle
-            << std::endl;
+  std::cout << Name() << "::End - tracks with hits " << m_nTracks << ", with >= 1 trajectory " << m_nTracksWithTrajectory
+            << ", usable span < " << m_minLayerSpan << " layers " << m_nShortSpan << std::endl
+            << Name() << "::End - crossing hypotheses " << m_nHypotheses << ": trajectories " << m_nTrajectories
+            << ", no 3 points " << m_nNoPoints;
+  if (!m_triggeredMode)
+  {
+    std::cout << ", outside the drift time window " << m_nTimeWindow << ", outside the TPC " << m_nOutsideTpc
+              << ", |z0| > " << m_maxVertexZ << " cm " << m_nVertexZ;
+  }
+  std::cout << std::endl;
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
 // circle (sagitta) in xy + line in rz through the three reference points, world frame
-void Tpc_PolyTripletReco::fillTrack(unsigned int assembledId, const std::array<int, 3>& pointIndex)
+void Tpc_PolyTripletReco::fitTrajectory(const std::array<RefPoint, 3>& pts, Tpc_CrossingTrajectoryv1& out) const
 {
-  auto* out = new Tpc_PolyTrackv1();
-  out->set_event(m_event);
-  out->set_track_id(m_tracks->size());
-  out->set_source_assembled_track_id(assembledId);
-
   double x[3], y[3], z[3];
-  bool complete = true;
   for (int k = 0; k < 3; ++k)
   {
-    if (pointIndex[k] < 0)
-    {
-      complete = false;
-      continue;
-    }
-    const Tpc_PolyCluster* c = m_points->get_cluster(pointIndex[k]);
-    out->add_cluster_key(c->get_trkr_cluster_key());
-    const Acts::Vector3 w = m_geometry->transformTpcEnvelopeToWorld(
-        Acts::Vector3(c->get_centroid_x(), c->get_centroid_y(), c->get_centroid_z()));
+    const Acts::Vector3 w = m_geometry->transformTpcEnvelopeToWorld(Acts::Vector3(pts[k].x, pts[k].y, pts[k].z));
     x[k] = w.x();
     y[k] = w.y();
     z[k] = w.z();
   }
 
-  if (complete)
+  // ---- xy: kappa = 2 h / (|a| |b|), h = distance of P2 from the chord P1P3
+  const double ax = x[1] - x[0], ay = y[1] - y[0];  // P1 -> P2
+  const double bx = x[2] - x[1], by = y[2] - y[1];  // P2 -> P3
+  const double cx = x[2] - x[0], cy = y[2] - y[0];  // chord P1 -> P3
+  const double la = std::hypot(ax, ay), lb = std::hypot(bx, by), lc = std::hypot(cx, cy);
+  if (!(la > 0.0 && lb > 0.0 && lc > 0.0))
   {
-    // ---- xy: kappa = 2 h / (|a| |b|), h = distance of P2 from the chord P1P3
-    const double ax = x[1] - x[0], ay = y[1] - y[0];  // P1 -> P2
-    const double bx = x[2] - x[1], by = y[2] - y[1];  // P2 -> P3
-    const double cx = x[2] - x[0], cy = y[2] - y[0];  // chord P1 -> P3
-    const double la = std::hypot(ax, ay), lb = std::hypot(bx, by), lc = std::hypot(cx, cy);
-    if (la > 0.0 && lb > 0.0 && lc > 0.0)
-    {
-      const double kappa = 2.0 * (ax * by - ay * bx) / (la * lb * lc);  // > 0: counter-clockwise
-
-      // tangent at P1 = chord turned by half the subtended angle
-      const double alpha = std::asin(std::clamp(0.5 * kappa * lc, -1.0, 1.0));
-      const double ux = cx / lc, uy = cy / lc;
-      const double tx = ux * std::cos(alpha) + uy * std::sin(alpha);
-      const double ty = -ux * std::sin(alpha) + uy * std::cos(alpha);
-      const double nx = -ty, ny = tx;  // left normal
-
-      // closest approach to the beam (0,0), arc from P1 (negative = inward)
-      const double wa = -(x[0] * nx + y[0] * ny);
-      const double wb = -(x[0] * tx + y[0] * ty);
-      const bool line = std::fabs(kappa) < m_minCurvature;
-      const double phis = line ? 0.0 : std::atan2(wb * kappa, 1.0 - wa * kappa);
-      const double s1 = line ? wb : std::sin(phis) / kappa;
-      const double s2 = line ? 0.0 : 2.0 * std::pow(std::sin(0.5 * phis), 2) / kappa;
-      const double pcaX = x[0] + tx * s1 + nx * s2;
-      const double pcaY = y[0] + ty * s1 + ny * s2;
-      const double dirX = tx * std::cos(phis) + nx * std::sin(phis);
-      const double dirY = ty * std::cos(phis) + ny * std::sin(phis);
-
-      // ---- rz: least-squares line z = z0 + slope * r
-      double r[3], sr = 0, sz = 0, srr = 0, srz = 0;
-      for (int k = 0; k < 3; ++k)
-      {
-        r[k] = std::hypot(x[k], y[k]);
-        sr += r[k];
-        sz += z[k];
-        srr += r[k] * r[k];
-        srz += r[k] * z[k];
-      }
-      const double det = 3.0 * srr - sr * sr;
-      if (det > 0.0)
-      {
-        const double slope = (3.0 * srz - sr * sz) / det;
-        const double z0 = (sz - slope * sr) / 3.0;
-        double chi2 = 0.0;
-        for (int k = 0; k < 3; ++k)
-        {
-          chi2 += std::pow(z[k] - z0 - slope * r[k], 2);  // [cm^2], no errors
-        }
-        const double pcaZ = z0 + slope * std::hypot(pcaX, pcaY);
-
-        out->set_fit_status(1);
-        out->set_x(pcaX);
-        out->set_y(pcaY);
-        out->set_z(pcaZ);
-        out->set_seed_x0(pcaX);
-        out->set_seed_y0(pcaY);
-        out->set_seed_z0(pcaZ);
-        out->set_seed_phi(std::atan2(dirY, dirX));
-        out->set_seed_slope(slope);
-        out->set_chi2(chi2);
-        out->set_ndf(1.0);  // circle through 3 points is exact; rz line has 1 dof
-        if (line)
-        {
-          const double norm = std::sqrt(1.0 + slope * slope);
-          out->set_px(dirX / norm);
-          out->set_py(dirY / norm);
-          out->set_pz(slope / norm);
-          out->set_charge(0.0);
-          out->set_seed_q_over_r(0.0);
-        }
-        else
-        {
-          const double pt = 0.003 * m_magneticFieldTesla / std::fabs(kappa);
-          const double charge = kappa >= 0.0 ? -1.0 : 1.0;  // same convention as Tpc_PolyTrackReco
-          out->set_px(pt * dirX);
-          out->set_py(pt * dirY);
-          out->set_pz(pt * slope);
-          out->set_charge(charge);
-          out->set_seed_q_over_r(charge * std::fabs(kappa));
-          out->set_helix_x0(x[0] + nx / kappa);
-          out->set_helix_y0(y[0] + ny / kappa);
-        }
-      }
-    }
+    return;
   }
+  const double kappa = 2.0 * (ax * by - ay * bx) / (la * lb * lc);  // > 0: counter-clockwise
 
-  m_tracks->add_track(out);
+  // tangent at P1 = chord turned by half the subtended angle
+  const double alpha = std::asin(std::clamp(0.5 * kappa * lc, -1.0, 1.0));
+  const double ux = cx / lc, uy = cy / lc;
+  const double tx = ux * std::cos(alpha) + uy * std::sin(alpha);
+  const double ty = -ux * std::sin(alpha) + uy * std::cos(alpha);
+  const double nx = -ty, ny = tx;  // left normal
+
+  // closest approach to the beam (0,0), arc from P1 (negative = inward)
+  const double wa = -(x[0] * nx + y[0] * ny);
+  const double wb = -(x[0] * tx + y[0] * ty);
+  const bool line = std::fabs(kappa) < m_minCurvature;
+  const double phis = line ? 0.0 : std::atan2(wb * kappa, 1.0 - wa * kappa);
+  const double s1 = line ? wb : std::sin(phis) / kappa;
+  const double s2 = line ? 0.0 : 2.0 * std::pow(std::sin(0.5 * phis), 2) / kappa;
+  const double pcaX = x[0] + tx * s1 + nx * s2;
+  const double pcaY = y[0] + ty * s1 + ny * s2;
+  const double dirX = tx * std::cos(phis) + nx * std::sin(phis);
+  const double dirY = ty * std::cos(phis) + ny * std::sin(phis);
+
+  // ---- rz: least-squares line z = z0 + slope * r
+  double r[3], sr = 0, sz = 0, srr = 0, srz = 0;
+  for (int k = 0; k < 3; ++k)
+  {
+    r[k] = std::hypot(x[k], y[k]);
+    sr += r[k];
+    sz += z[k];
+    srr += r[k] * r[k];
+    srz += r[k] * z[k];
+  }
+  const double det = 3.0 * srr - sr * sr;
+  if (det <= 0.0)
+  {
+    return;
+  }
+  const double slope = (3.0 * srz - sr * sz) / det;
+  const double z0 = (sz - slope * sr) / 3.0;
+  double chi2 = 0.0;
+  for (int k = 0; k < 3; ++k)
+  {
+    chi2 += std::pow(z[k] - z0 - slope * r[k], 2);  // [cm^2], no errors
+  }
+  const double pcaZ = z0 + slope * std::hypot(pcaX, pcaY);
+
+  out.set_fit_status(1);
+  out.set_x(pcaX);
+  out.set_y(pcaY);
+  out.set_z(pcaZ);
+  out.set_phi(std::atan2(dirY, dirX));
+  out.set_slope(slope);
+  out.set_chi2(chi2);
+  if (line)
+  {
+    const double norm = std::sqrt(1.0 + slope * slope);
+    out.set_px(dirX / norm);
+    out.set_py(dirY / norm);
+    out.set_pz(slope / norm);
+    out.set_charge(0.0);
+    out.set_q_over_r(0.0);
+  }
+  else
+  {
+    const double pt = 0.003 * m_magneticFieldTesla / std::fabs(kappa);
+    const double charge = kappa >= 0.0 ? -1.0 : 1.0;  // same convention as Tpc_PolyTrackReco
+    out.set_px(pt * dirX);
+    out.set_py(pt * dirY);
+    out.set_pz(pt * slope);
+    out.set_charge(charge);
+    out.set_q_over_r(charge * std::fabs(kappa));
+  }
 }
