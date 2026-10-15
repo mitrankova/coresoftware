@@ -220,7 +220,9 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
   tpcCfg.beamY = beamY();
   tpcCfg.bz = m_bz;
   std::vector<TpcInfo> tpc;
-  std::map<unsigned int, std::size_t> tpcByIndex;  // TPC_POLYTRACKS index -> position in tpc
+  // assembled track id -> position in tpc (the Si chains may come from a different TPC track
+  // container, e.g. TPC_TRIPLETTRACKS, so they are linked by assembled id, not by index)
+  std::map<unsigned int, std::size_t> tpcByAssembledId;
   for (unsigned int i = 0; i < tracks->size(); ++i)
   {
     const Tpc_PolyTrack* t = tracks->get_track(i);
@@ -249,7 +251,7 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
       continue;
     }
     info.eta = std::asinh(info.fit.tanl);
-    tpcByIndex[i] = tpc.size();
+    tpcByAssembledId[t->get_source_assembled_track_id()] = tpc.size();
     tpc.push_back(std::move(info));
   }
 
@@ -283,8 +285,8 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
         continue;
       }
       const SiHitChain& chain = seeds->chains[cid];
-      const auto it = tpcByIndex.find(static_cast<unsigned int>(chain.tpc_track_index));
-      if (chain.tpc_track_index < 0 || it == tpcByIndex.end())
+      const auto it = tpcByAssembledId.find(chain.tpc_assembled_track_id);
+      if (chain.tpc_track_index < 0 || it == tpcByAssembledId.end())
       {
         continue;
       }
