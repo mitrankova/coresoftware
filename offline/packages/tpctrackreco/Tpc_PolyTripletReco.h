@@ -5,7 +5,17 @@
 
 // Fast TPC seeds for the silicon seeding, run before the full polyline clusterizer.
 //
-// For every assembled track (with an accepted crossing decision) three points along the track:
+// Crossing hypotheses per assembled track:
+//   triggered mode (default): one crossing, setTriggeredCrossing (default 0), no further checks
+//   streaming mode          : every INTT crossing of the event (INTT time buckets in TRKR_CLUSTER),
+//                             no silicon vertex needed; a crossing is kept if
+//                               - the track's earliest / latest hit times fit in the drift range,
+//                               - the three reference points are inside the TPC on the track's side,
+//                               - the trajectory z at the beam is within setMaxVertexZ of setCollisionZ
+// One Tpc_CrossingTrajectory per accepted (assembled track, crossing); it keeps its assembled
+// track id (get_source_assembled_track_id), its crossing (get_crossing) and its three points.
+//
+// Three points along the track, for each crossing:
 //   beginning : innermost usable layer
 //   end       : outermost usable layer
 //   middle    : usable layer closest to the radial midpoint of the two
@@ -13,23 +23,24 @@
 // within setEdgePadMargin pads of a sector edge (truncated clusters would bias the circle).
 // Tracks whose usable layers span less than setMinLayerSpan layers get no points.
 //   reference point = ADC-weighted mean pad phi and time bin of the track's hits on that layer,
-//                     drifted back once through the PHGarfield polylines
-//                     (drift lookup built per layer on first use)
+//                     drifted back once through the PHGarfield polylines with the crossing's
+//                     time offset (drift lookup built per layer on first use)
 // Track model:
 //   xy: circle through the three points, curvature from the sagitta (kappa = 2 h / (a b)),
 //       so a straight track is simply kappa = 0 (no infinite radius anywhere)
 //   rz: straight line z = z0 + slope * r
 //
-// Output (same classes as the full chain, own node names, so the full chain can run later):
-//   TPC_TRIPLETPOINTS : Tpc_PolyClusterContainer, one reference point per track and layer
-//   TPC_TRIPLETTRACKS : Tpc_PolyTrackContainer
-// SiHitSeedReco reads them with setTpcClusterNodeName / setTpcTrackNodeName / setMinTpcClusters(3).
+// Output: TPC_CROSSINGTRAJECTORIES (Tpc_CrossingTrajectoryContainer). Tpc_PolyCluster / Tpc_PolyTrack
+// stay for the full clusterizer and fit, which can run later.
+// SiHitSeedReco reads it with setTpcTrajectoryNodeName("TPC_CROSSINGTRAJECTORIES") and
+// setMinTpcClusters(3).
 
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
 #include <array>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -39,9 +50,9 @@ class PHCompositeNode;
 class PHGarfield;
 class PHG4TpcGeomContainer;
 class Tpc_AssembledTrackContainer;
-class Tpc_PolyClusterContainer;
-class Tpc_PolyTrackContainer;
-class TpcCrossingDecisionContainer;
+class Tpc_CrossingTrajectoryContainer;
+class Tpc_CrossingTrajectoryv1;
+class TrkrClusterContainer;
 class TrkrHitSetContainer;
 
 class Tpc_PolyTripletReco : public SubsysReco
@@ -54,15 +65,19 @@ class Tpc_PolyTripletReco : public SubsysReco
   int process_event(PHCompositeNode*) override;
   int End(PHCompositeNode*) override;
 
+  // crossing hypotheses (see above)
+  void setTriggeredMode(bool v) { m_triggeredMode = v; }
+  void setTriggeredCrossing(short v) { m_triggeredCrossing = v; }
+  // streaming mode: |z at the beam - collision z| window [cm]
+  void setMaxVertexZ(double v) { m_maxVertexZ = v; }
+  void setCollisionZ(double v) { m_collisionZ = v; }
+
   // pads from a sector edge whose hits make a layer unusable (1 = only the edge pads)
   void setEdgePadMargin(unsigned int v) { m_edgePadMargin = v; }
   // minimum (end - beginning) layer distance for a track to get points
   void setMinLayerSpan(unsigned int v) { m_minLayerSpan = v; }
-  void setPointNodeName(const std::string& n) { m_pointNodeName = n; }
-  void setTrackNodeName(const std::string& n) { m_trackNodeName = n; }
+  void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setInputNodeName(const std::string& n) { m_inputNodeName = n; }
-  void setCrossingDecisionNodeName(const std::string& n) { m_crossingDecisionNodeName = n; }
-  void setMaxAcceptedTier(unsigned char v) { m_maxAcceptedTier = v; }
   void setMagneticFieldTesla(double v) { m_magneticFieldTesla = v; }
   // |kappa| below this [1/cm] is stored as a straight line (charge 0)
   void setMinCurvature(double v) { m_minCurvature = v; }
@@ -105,8 +120,9 @@ class Tpc_PolyTripletReco : public SubsysReco
   bool drift(unsigned int layer, unsigned int side, unsigned int sector, double phi, double timeNs,
              double& x, double& y, double& z) const;
   bool makePoint(unsigned int layer, unsigned int side, short crossing, const std::vector<Hit>& hits, RefPoint& p);
-  int storePoint(unsigned int assembledId, unsigned int side, const RefPoint& p, const std::vector<Hit>& hits);
-  void fillTrack(unsigned int assembledId, const std::array<int, 3>& pointIndex);
+  bool insideTpc(const RefPoint& p, unsigned int side) const;
+  void fitTrajectory(const std::array<RefPoint, 3>& pts, Tpc_CrossingTrajectoryv1& out) const;
+  std::set<short> inttCrossings() const;
   Polyline& polyline(unsigned int layer, unsigned int side, unsigned int sector, unsigned int sample)
   {
     return m_lookup[(((layer - FirstLayer) * 2 + side) * 12 + sector) * NSamples + sample];
@@ -116,14 +132,22 @@ class Tpc_PolyTripletReco : public SubsysReco
     return m_lookup[(((layer - FirstLayer) * 2 + side) * 12 + sector) * NSamples + sample];
   }
 
+  bool m_triggeredMode{true};
+  short m_triggeredCrossing{0};
+  double m_maxVertexZ{20.0};
+  double m_collisionZ{0.0};
+  // TPC volume for the streaming-mode checks (as TpcCrossingFinder) [cm]
+  double m_tpcHalfLength{105.5};
+  double m_radialTolerance{2.0};
+  double m_zTolerance{1.0};
+  double m_centralMembraneTolerance{1.0};
+  double m_edgeToleranceTbins{1.0};
+
   unsigned int m_edgePadMargin{1};
-  std::array<bool, 48> m_moduleEdgeLayer{};
+  std::array<bool, NLayers> m_moduleEdgeLayer{};
   unsigned int m_minLayerSpan{16};
   std::string m_inputNodeName{"TPC_ASSEMBLEDTRACKS"};
-  std::string m_crossingDecisionNodeName{"TPC_CROSSING_DECISIONS"};
-  std::string m_pointNodeName{"TPC_TRIPLETPOINTS"};
-  std::string m_trackNodeName{"TPC_TRIPLETTRACKS"};
-  unsigned char m_maxAcceptedTier{1};
+  std::string m_outputNodeName{"TPC_CROSSINGTRAJECTORIES"};
   double m_magneticFieldTesla{1.4};
   double m_minCurvature{1.0e-7};
 
@@ -134,6 +158,7 @@ class Tpc_PolyTripletReco : public SubsysReco
   double m_crossingPeriodNs{106.56};
   double m_driftStepNs{56.881262};
   unsigned int m_driftSubsteps{10};
+  double m_maxLookupTimeNs{0.0};  // longest drift polyline built so far
   std::array<double, 2> m_t0Side{{0.0, 0.0}};
   std::array<double, 2> m_startZ{{-102.605, 102.605}};
 
@@ -142,22 +167,23 @@ class Tpc_PolyTripletReco : public SubsysReco
 
   // counters for the End summary
   unsigned long m_nTracks{0};
-  unsigned long m_nTriplets{0};
   unsigned long m_nShortSpan{0};
-  unsigned long m_nNoMiddle{0};
-  unsigned long m_nDriftFailed{0};
-
-  std::map<TrkrDefs::hitsetkey, unsigned int> m_nextIndex;  // cluster key index per hitset (per event)
+  unsigned long m_nTracksWithTrajectory{0};
+  unsigned long m_nHypotheses{0};
+  unsigned long m_nTrajectories{0};
+  unsigned long m_nNoPoints{0};
+  unsigned long m_nTimeWindow{0};
+  unsigned long m_nOutsideTpc{0};
+  unsigned long m_nVertexZ{0};
 
   Tpc_AssembledTrackContainer* m_assembledTracks{nullptr};
-  TpcCrossingDecisionContainer* m_crossingDecisions{nullptr};
   TrkrHitSetContainer* m_hits{nullptr};
+  TrkrClusterContainer* m_clusterMap{nullptr};
   PHG4TpcGeomContainer* m_geomContainer{nullptr};
   PHGarfield* m_garfield{nullptr};
   ActsGeometry* m_geometry{nullptr};
   IdealPadMap* m_padMap{nullptr};
-  Tpc_PolyClusterContainer* m_points{nullptr};
-  Tpc_PolyTrackContainer* m_tracks{nullptr};
+  Tpc_CrossingTrajectoryContainer* m_trajectories{nullptr};
   unsigned int m_event{0};
 };
 #endif
