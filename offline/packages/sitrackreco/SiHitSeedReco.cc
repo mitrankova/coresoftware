@@ -1,5 +1,7 @@
 #include "SiHitSeedReco.h"
 
+#include <tpctrackreco/Tpc_CrossingTrajectory.h>
+#include <tpctrackreco/Tpc_CrossingTrajectoryContainer.h>
 #include <tpctrackreco/Tpc_PolyCluster.h>
 #include <tpctrackreco/Tpc_PolyClusterContainer.h>
 #include <tpctrackreco/Tpc_PolyTrack.h>
@@ -87,7 +89,9 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
   if (Verbosity() > 0)
   {
     const auto& c = m_frame.detectorCenterCm();
-    std::cout << Name() << ": TPC-driven chaining, TPC from " << m_tpcTrackNodeName << " + " << m_tpcClusterNodeName
+    std::cout << Name() << ": TPC-driven chaining, TPC from "
+              << (m_tpcTrajectoryNodeName.empty() ? m_tpcTrackNodeName + " + " + m_tpcClusterNodeName
+                                                  : m_tpcTrajectoryNodeName + " (crossing trajectories)")
               << " (>= " << m_minTpcClusters << " clusters, z offset " << m_tpcZOffset << " cm)" << std::endl
               << Name() << ":   frames: Uphi rotation " << m_frame.uphiRotation() << " rad, detector centre ("
               << 10 * c[0] << ", " << 10 * c[1] << ", " << 10 * c[2] << ") mm, Si halves on TPC beam axis "
@@ -500,7 +504,9 @@ void SiHitSeedReco::resolveSharedChains()
       for (int b : chains[c].blob_ids)
       {
         const auto it = owner.find(b);
-        if (it != owner.end())
+        // crossing hypotheses of the same assembled track are alternatives, not competitors:
+        // they may share silicon (TpcCrossingResolver picks one of them later)
+        if (it != owner.end() && seeds[it->second].tpc_assembled_track_id != info.tpc_assembled_track_id)
         {
           ++sharedWith[it->second];
         }
@@ -1065,6 +1071,63 @@ void SiHitSeedReco::forEachHitNear(int layer, double zbinCenter, double zHalf,
 std::vector<SiHitSeedReco::TpcTrackInput> SiHitSeedReco::collectTpcTracks(PHCompositeNode* topNode) const
 {
   std::vector<TpcTrackInput> out;
+  if (!m_tpcTrajectoryNodeName.empty())
+  {
+    // crossing trajectories: three points each, one trajectory per assembled track and crossing
+    auto* trajectories = findNode::getClass<Tpc_CrossingTrajectoryContainer>(topNode, m_tpcTrajectoryNodeName);
+    if (!trajectories)
+    {
+      if (Verbosity() > 0)
+      {
+        std::cout << Name() << ": missing " << m_tpcTrajectoryNodeName << " - no TPC-driven chaining in this event" << std::endl;
+      }
+      return out;
+    }
+    SiTpcHelixFit::Config cfg;
+    cfg.beamX = m_beamAlign.referenceBeamX();
+    cfg.beamY = m_beamAlign.referenceBeamY();
+    cfg.bz = m_bz;
+    for (unsigned int i = 0; i < trajectories->size(); ++i)
+    {
+      const Tpc_CrossingTrajectory* t = trajectories->get_trajectory(i);
+      if (!t)
+      {
+        continue;
+      }
+      TpcTrackInput in;
+      in.index = static_cast<int>(i);
+      in.id = t->get_trajectory_id();
+      in.assembledId = t->get_source_assembled_track_id();
+      in.crossing = t->get_crossing();
+      in.polyX = t->get_x();
+      in.polyY = t->get_y();
+      in.polyZ = t->get_z();
+      in.polyPx = t->get_px();
+      in.polyPy = t->get_py();
+      in.polyPz = t->get_pz();
+      in.polyCharge = t->get_charge();
+      in.polyFitStatus = t->get_fit_status();
+      std::vector<SiTpcHelixFit::Point> pts;
+      for (unsigned int k = 0; k < Tpc_CrossingTrajectory::NPoints; ++k)
+      {
+        const auto p = m_beamAlign.tpcToTpcFrame(t->get_point_x(k), t->get_point_y(k), t->get_point_z(k));
+        if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z))
+        {
+          pts.push_back({p.x, p.y, p.z + m_tpcZOffset, 1.0, 1.0, 1});
+        }
+      }
+      in.nClusters = static_cast<unsigned int>(pts.size());
+      if (pts.size() >= m_minTpcClusters)
+      {
+        std::sort(pts.begin(), pts.end(), [](const auto& a, const auto& b)
+                  { return a.x * a.x + a.y * a.y < b.x * b.x + b.y * b.y; });
+        in.fit = SiTpcHelixFit::fit(pts, cfg);
+      }
+      out.push_back(std::move(in));
+    }
+    return out;
+  }
+
   auto* clusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_tpcClusterNodeName);
   auto* tracks = findNode::getClass<Tpc_PolyTrackContainer>(topNode, m_tpcTrackNodeName);
   if (!clusters || !tracks)
@@ -1795,6 +1858,7 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
   info.tpc_track_index = in.index;
   info.tpc_track_id = in.id;
   info.tpc_assembled_track_id = in.assembledId;
+  info.tpc_crossing = in.crossing;
   info.n_clusters = in.nClusters;
   const bool dbg = debugThisTrack(in);
   const bool dbgEvent = m_debugEvent >= 0 && static_cast<long>(m_eventData->event) == m_debugEvent;
@@ -2039,6 +2103,7 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
     ch.tpc_track_index = in.index;
     ch.tpc_track_id = in.id;
     ch.tpc_assembled_track_id = in.assembledId;
+    ch.tpc_crossing = in.crossing;
     if (ch.selected)
     {
       info.selected_chain = ch.id;
