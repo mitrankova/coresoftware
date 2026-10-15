@@ -73,6 +73,9 @@ class SiHitSeedReco : public SubsysReco
   void setHitNodeName(const std::string& s) { m_hitNodeName = s; }
   void setTpcClusterNodeName(const std::string& s) { m_tpcClusterNodeName = s; }
   void setTpcTrackNodeName(const std::string& s) { m_tpcTrackNodeName = s; }
+  // non-empty: TPC input = Tpc_CrossingTrajectoryContainer of this name (Tpc_PolyTripletReco,
+  // one trajectory per assembled track and crossing) instead of the poly clusters + tracks
+  void setTpcTrajectoryNodeName(const std::string& s) { m_tpcTrajectoryNodeName = s; }
   void setOutputNodeName(const std::string& s) { m_outputNodeName = s; }
 
   // ---- chain requirements
@@ -336,6 +339,7 @@ class SiHitSeedReco : public SubsysReco
     int index = -1;
     unsigned int id = 0;
     unsigned int assembledId = 0;
+    short crossing = 0;
     unsigned int nClusters = 0;
     SiTpcHelixFit::Result fit;
     // Tpc_PolyTrack's own parameters (for the debug dump)
@@ -388,6 +392,7 @@ class SiHitSeedReco : public SubsysReco
   std::string m_hitNodeName = "TRKR_HITSET";
   std::string m_tpcClusterNodeName = "TPC_POLYCLUSTERS";
   std::string m_tpcTrackNodeName = "TPC_POLYTRACKS";
+  std::string m_tpcTrajectoryNodeName;
   std::string m_outputNodeName = "SI_HIT_SEED_EVENT";
   unsigned long long m_event = 0;
   SiHitSeedEvent* m_eventData = nullptr;

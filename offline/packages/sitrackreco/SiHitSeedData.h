@@ -98,9 +98,10 @@ struct SiHitChain
   double hw_ddphi_pull[2] = {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
 
   // ---- TPC association
-  int tpc_track_index = -1;  // index in TPC_POLYTRACKS
+  int tpc_track_index = -1;  // index in TPC_POLYTRACKS (or in the crossing-trajectory container)
   unsigned int tpc_track_id = 0;
   unsigned int tpc_assembled_track_id = 0;
+  short tpc_crossing = 0;  // crossing assumed for the TPC trajectory
   int seed_outer_layer = -1;  // outer layer of the seed pair (2: pair 2->1, 1: pair 1->0)
   int anchor_blob = -1;       // blob in the TPC anchor window on the outer seed layer
 
@@ -141,6 +142,7 @@ struct SiTpcSeedInfo
   int tpc_track_index = -1;
   unsigned int tpc_track_id = 0;
   unsigned int tpc_assembled_track_id = 0;
+  short tpc_crossing = 0;
   unsigned int n_clusters = 0;
   int status = TooFewClusters;
   double pt = std::numeric_limits<double>::quiet_NaN();
