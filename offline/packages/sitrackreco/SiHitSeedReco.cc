@@ -102,7 +102,11 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
               << (m_seedPhiFromTpc ? "TPC curvature" : "0") << ", +- " << m_seedPhiHalf << " bins" << std::endl
               << Name() << ":   propagation (hardware coordinates): phi +- " << m_propPhiHalf << " bins, z +- "
               << m_propZHalf << " bins; chains >= " << m_minLayers << " layers, >= "
-              << m_minMvtxLayers << " MVTX, >= " << m_minInttLayers << " INTT" << std::endl
+              << m_minMvtxLayers << " MVTX, >= " << m_minInttLayers << " INTT"
+              << ((m_inttCrossingWindow >= 0 && !m_tpcTrajectoryNodeName.empty())
+                      ? "; INTT hits only within +-" + std::to_string(m_inttCrossingWindow) + " time buckets of the trajectory crossing"
+                      : std::string(""))
+              << std::endl
               << Name() << ":   selection: " << (m_chainRanking == ChainRanking::AgreementFirst ? "agreeing chains first (chi2/ndf <= " + std::to_string(m_agreementMaxChi2) + "), then most layers" : std::string("most layers, then chi2/ndf"))
               << (m_exclusiveChains ? ", exclusive across TPC tracks (>= " + std::to_string(m_exclusiveMinShared) + " shared blobs)" : std::string(""))
               << " (sigma r*phi L0-6 " << m_sigRphiL[0] << " "
@@ -112,7 +116,12 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
               << (m_inttCentre == InttCentre::MvtxLine ? "straight MVTX line"
                   : (m_inttCentre == InttCentre::TpcOffset ? "TPC prediction + mean MVTX offset" : "TPC prediction + MVTX offset and slope"))
               << ", z model "
-              << (m_zModel == TpcZModel::Fixed ? "fixed" : (m_zModel == TpcZModel::Offset ? "free offset" : "free offset + slope"))
+              << (m_zModel == TpcZModel::Fixed ? std::string("fixed")
+                  : m_zModel == TpcZModel::Offset ? std::string("free offset")
+                  : m_zModel == TpcZModel::OffsetSlope ? std::string("free offset + slope")
+                  : "offset with prior sigma " + std::to_string(m_zOffsetSigma) + " cm")
+              << (m_mvtxPropZFromTpc ? ", MVTX propagation z from the TPC inclination" : "")
+              << ", INTT z half window " << (m_inttPropZHalf >= 0 ? m_inttPropZHalf : m_propZHalf) << " bins"
               << ", z weight " << m_zWeight << "; anchor z " << (m_anchorZ > 0 ? "window" : "not used") << ", z ordering weight " << m_anchorZWeight
               << ", max chi2/ndf " << (m_maxTpcChi2 > 0 ? std::to_string(m_maxTpcChi2) : std::string("off")) << ")"
               << std::endl;
@@ -326,6 +335,15 @@ int SiHitSeedReco::End(PHCompositeNode*)
       std::cout << Name() << ": INTT window from the TPC prediction ("
                 << (m_inttCentre == InttCentre::TpcOffsetSlope ? "MVTX offset + slope" : "mean MVTX offset") << "): " << m_inttTpcUsed << " INTT searches, "
                 << m_inttTpcFallback << " fell back to the straight MVTX line (no TPC prediction / MVTX offset)" << std::endl;
+    }
+    if (m_mvtxPropZFromTpc)
+    {
+      std::cout << Name() << ": MVTX propagations with the z centre from the TPC inclination: " << m_mvtxTpcZUsed << std::endl;
+    }
+    if (m_inttCrossingWindow >= 0 && !m_tpcTrajectoryNodeName.empty())
+    {
+      std::cout << Name() << ": INTT crossing window +-" << m_inttCrossingWindow << ": INTT hits in propagation windows "
+                << m_inttTimeChecked << ", rejected by time bucket " << m_inttTimeRejected << std::endl;
     }
     if (m_measureWidths)
     {
@@ -1562,9 +1580,17 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
         ++m_hwDdphiProp0Used;
       }
     }
+    if (kind == SiChainStep::MvtxPropagation && m_mvtxPropZFromTpc && tpcRef && tpcRef->layers[layer].valid &&
+        tpcRef->layers[ref].valid)
+    {
+      // inclination from the TPC: TPC z difference between this layer and the nearest chain layer
+      pz = acc[ref].z + (tpcRef->layers[layer].z - tpcRef->layers[ref].z);
+      ++m_mvtxTpcZUsed;
+    }
+    const double zHalf = (kind == SiChainStep::InttPropagation && m_inttPropZHalf >= 0) ? m_inttPropZHalf : m_propZHalf;
     int bestBlob = -1, bestHit = -1;
     double bestScore = 1e99, bz = 0, bp = 0, rz = 0, rp = 0;
-    forEachHitNear(layer, (pz - m_zmin) / dz, m_propZHalf, pp / dp, phiHalf, [&](int hid)
+    forEachHitNear(layer, (pz - m_zmin) / dz, zHalf, pp / dp, phiHalf, [&](int hid)
     {
       const int b = m_hitBlob[hid];
       if (b < 0 || isUsed(b))
@@ -1572,13 +1598,23 @@ bool SiHitSeedReco::buildChain(const SiBlob& seed, const Candidate& cand, SiHitC
         return;
       }
       const auto& h = m_eventData->hits[hid];
+      if (layer >= 3 && m_inttCrossingWindow >= 0 && !m_tpcTrajectoryNodeName.empty())
+      {
+        ++m_inttTimeChecked;
+        const int bucket = static_cast<int>(InttDefs::getTimeBucketId(h.hitsetkey));
+        if (std::abs(bucket - m_curCrossing) > m_inttCrossingWindow)
+        {
+          ++m_inttTimeRejected;
+          return;
+        }
+      }
       const double rrphi = wrapDelta(h.phi - pp, twopi) / dp;
       const double rrz = (h.z - pz) / dz;
-      if (std::abs(rrphi) > phiHalf || std::abs(rrz) > m_propZHalf)
+      if (std::abs(rrphi) > phiHalf || std::abs(rrz) > zHalf)
       {
         return;
       }
-      const double sc = (rrphi / phiHalf) * (rrphi / phiHalf) + (rrz / m_propZHalf) * (rrz / m_propZHalf);
+      const double sc = (rrphi / phiHalf) * (rrphi / phiHalf) + (rrz / zHalf) * (rrz / zHalf);
       if (sc < bestScore)
       {
         bestScore = sc;
@@ -1819,7 +1855,16 @@ void SiHitSeedReco::toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& c
       nzpar = 1;
     }
   }
-  chain.tpc_dz_offset = a;
+  const double priorW = 1.0 / (m_zOffsetSigma * m_zOffsetSigma);
+  if (m_zModel == TpcZModel::OffsetPrior && nz > 0)
+  {
+    a = Sz / (S + priorW);  // offset pulled towards 0 by the prior
+    nzpar = 0;              // one parameter, one prior constraint
+  }
+  // Fixed model: nothing is subtracted in the chi2, but the measured Si - TPC z offset is still
+  // stored (TpcCrossingResolver needs it to move the chain to the neighbouring crossings)
+  // (OffsetPrior: the measured offset too, not the one pulled by the prior)
+  chain.tpc_dz_offset = ((m_zModel == TpcZModel::Fixed || m_zModel == TpcZModel::OffsetPrior) && nz > 0) ? Sz / S : a;
   chain.tpc_dz_slope = b;
   double chi2z = 0;
   for (size_t i = 0; i < chain.layers.size(); ++i)
@@ -1830,6 +1875,10 @@ void SiHitSeedReco::toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& c
       const double d = (chain.res_dz[i] - a - b * pathS[i]) / sig;
       chi2z += d * d;
     }
+  }
+  if (m_zModel == TpcZModel::OffsetPrior && nz > 0)
+  {
+    chi2z += a * a * priorW;
   }
   chain.res_dz_fit.assign(chain.layers.size(), std::numeric_limits<double>::quiet_NaN());
   for (size_t i = 0; i < chain.layers.size(); ++i)
@@ -1854,6 +1903,7 @@ void SiHitSeedReco::toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& c
 
 void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
 {
+  m_curCrossing = in.crossing;
   SiTpcSeedInfo info;
   info.tpc_track_index = in.index;
   info.tpc_track_id = in.id;

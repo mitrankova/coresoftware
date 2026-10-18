@@ -82,6 +82,11 @@ class SiHitSeedReco : public SubsysReco
   void setMinLayers(int v) { m_minLayers = v; }
   void setMinMvtxLayers(int v) { m_minMvtxLayers = v; }
   void setMinInttLayers(int v) { m_minInttLayers = v; }
+  // crossing trajectories (streaming): an INTT hit is used for a trajectory only if its time
+  // bucket is within +- n of the trajectory crossing, so the chain of a crossing hypothesis gets
+  // only INTT hits of that crossing.  < 0: off (default; keep off in triggered mode, where the
+  // trajectory crossing is not an INTT time bucket)
+  void setInttCrossingWindow(int n) { m_inttCrossingWindow = n; }
   void setRefitWithIntt(bool v) { m_refitWithIntt = v; }
 
   // ---------------------------------------------------------------------------
@@ -143,6 +148,13 @@ class SiHitSeedReco : public SubsysReco
   void setPhiHalfWindowBins(double v) { m_seedPhiHalf = v; m_propPhiHalf = v; }  // both at once
   void setPropagationPhiHalfWindowBins(double v) { m_propPhiHalf = v; }
   void setPropagationZHalfWindowBins(double v) { m_propZHalf = v; }
+  // INTT propagation z half window [z bins]; < 0 (default): same as setPropagationZHalfWindowBins.
+  // Should cover half an INTT strip length + the prediction error.
+  void setInttPropagationZHalfWindowBins(double v) { m_inttPropZHalf = v; }
+  // true: z centre of the MVTX propagation = z of the nearest chain hit + the TPC z difference
+  // between the two layers (inclination from the TPC, offset from the chain) instead of the
+  // straight line through the chain hits (r*phi centre unchanged). Default false.
+  void setMvtxPropagationZFromTpc(bool v) { m_mvtxPropZFromTpc = v; }
 
   // ---------------------------------------------------------------------------
   // Step-to-step delta-delta-phi constraint in hardware coordinates (layers 0 and 1), from the
@@ -243,13 +255,24 @@ class SiHitSeedReco : public SubsysReco
   //   Offset:      a free z offset is fitted and subtracted (default; same as FreeZOffset(true))
   //   OffsetSlope: a free offset and a free slope in path length (dz = a + b*s) are fitted, so a
   //                TPC tanl error does not count either; needs >= 3 z points to constrain anything
+  //   OffsetPrior: the TPC z error at the silicon is mostly a common offset (crossing, t0, 3-point
+  //                extrapolation) while the TPC inclination (tanl) is precise.  A z offset is
+  //                fitted with a Gaussian prior of width setTpcAgreementZOffsetSigma:
+  //                chi2_z = sum ((dz_i - a) / sigma_z,i)^2 + (a / sigma_a)^2.
+  //                sigma_z,i (setTpcAgreementSigmaLayer) are then the widths AROUND the offset
+  //                (End printout with this model), so a chain with the wrong inclination fails
+  //                even if its mean z agrees, and the offset itself is limited by sigma_a.
   enum class TpcZModel
   {
     Fixed,
     Offset,
-    OffsetSlope
+    OffsetSlope,
+    OffsetPrior
   };
   void setTpcAgreementZModel(TpcZModel m) { m_zModel = m; }
+  // OffsetPrior: width of the prior on the Si - TPC z offset [cm] (TpcCrossingResolver End: robust
+  // sigma of the tier-0 dz)
+  void setTpcAgreementZOffsetSigma(double cm) { m_zOffsetSigma = std::max(1e-3, cm); }
   void setTpcAgreementFreeZOffset(bool v) { m_zModel = v ? TpcZModel::Offset : TpcZModel::Fixed; }
   // weight of the z part relative to r*phi:
   //   tpc_chi2 = (chi2_rphi + w * chi2_z) / (n_rphi + [w > 0] * (n_z - n_zpar))
@@ -400,6 +423,10 @@ class SiHitSeedReco : public SubsysReco
   int m_minLayers = 3;
   int m_minMvtxLayers = 2;
   int m_minInttLayers = 0;
+  int m_inttCrossingWindow = -1;                // < 0: off
+  int m_curCrossing = 0;                        // crossing of the TPC input being chained
+  mutable unsigned long m_inttTimeChecked = 0;  // INTT hits in a propagation window (time cut on)
+  mutable unsigned long m_inttTimeRejected = 0; // ... of them outside the crossing window
   bool m_refitWithIntt = false;
 
   // silicon (hardware) alignment
@@ -461,6 +488,10 @@ class SiHitSeedReco : public SubsysReco
   mutable unsigned long m_inttTpcUsed = 0;
   mutable unsigned long m_inttTpcFallback = 0;
   TpcZModel m_zModel = TpcZModel::Offset;
+  double m_zOffsetSigma = 0.35;
+  double m_inttPropZHalf = -1.0;
+  bool m_mvtxPropZFromTpc = false;
+  mutable unsigned long m_mvtxTpcZUsed = 0;
   double m_zWeight = 0.25;
   bool m_requireAllResiduals = true;
   double m_maxTpcChi2 = 0.0;

@@ -1,5 +1,7 @@
 #include "SiTpc_TrackResiduals.h"
 
+#include "tpctrackreco/TpcCrossingDecision.h"
+#include "tpctrackreco/TpcCrossingDecisionContainer.h"
 #include "tpctrackreco/Tpc_PolyCluster.h"
 #include "tpctrackreco/Tpc_PolyClusterContainer.h"
 
@@ -11,6 +13,7 @@
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phool/PHCompositeNode.h>
 #include <phool/getClass.h>
+#include <trackbase/InttDefs.h>
 
 #include <TFile.h>
 #include <TH3.h>
@@ -21,6 +24,7 @@
 #include <format>
 #include <iostream>
 #include <limits>
+#include <map>
 
 namespace
 {
@@ -113,6 +117,14 @@ int SiTpc_TrackResiduals::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("tanl", &m_tanl, "tanl/D");
   m_tree->Branch("R", &m_R, "R/D");
   m_tree->Branch("tpc_z_offset", &m_tpcZOffset, "tpc_z_offset/D");
+  m_tree->Branch("tpc_crossing", &m_tpcCrossing, "tpc_crossing/I");
+  m_tree->Branch("tpc_crossing_tier", &m_tpcCrossingTier, "tpc_crossing_tier/I");
+  m_tree->Branch("intt_crossing", &m_inttCrossing, "intt_crossing/I");
+  m_tree->Branch("intt_n_hits", &m_inttNHits, "intt_n_hits/I");
+  m_tree->Branch("intt_crossing_spread", &m_inttCrossingSpread, "intt_crossing_spread/I");
+  m_tree->Branch("crossing_diff", &m_crossingDiff, "crossing_diff/I");
+  m_tree->Branch("n_tracks_crossing", &m_nTracksCrossing, "n_tracks_crossing/I");
+  m_tree->Branch("n_si_chains_crossing", &m_nSiChainsCrossing, "n_si_chains_crossing/I");
   m_tree->Branch("circle_rms", &m_circleRms, "circle_rms/D");
   m_tree->Branch("z_rms", &m_zRms, "z_rms/D");
   m_tree->Branch("pca_x", &m_pcaX, "pca_x/D");
@@ -427,6 +439,10 @@ void SiTpc_TrackResiduals::reset_tree_values()
   m_charge = 0;
   m_R = m_tpcZOffset = m_circleRms = m_zRms = m_pcaX = m_pcaY = kNaN;
   m_nMvtx = m_nIntt = m_nTpcLayers = 0;
+  m_tpcCrossing = m_inttCrossing = m_crossingDiff = kNoCrossing;
+  m_tpcCrossingTier = -1;
+  m_inttNHits = m_inttCrossingSpread = 0;
+  m_nTracksCrossing = m_nSiChainsCrossing = 0;
   for (int l = 0; l < kNLayers; ++l)
   {
     m_resRPhiLayer[l] = kNaN;
@@ -475,6 +491,7 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
   }
   m_clusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_clusterNodeName);
   m_siSeeds = findNode::getClass<SiHitSeedEvent>(topNode, m_siSeedNodeName);
+  m_decisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_crossingNodeName);
 
   // ---- matching tree
   m_event = m_evt;
@@ -490,6 +507,29 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
       m_cChi2 = m_tracks->get_candidate_chi2(i);
       m_cAccepted = m_tracks->get_candidate_accepted(i);
       m_matchTree->Fill();
+    }
+  }
+
+  // ---- tracks per crossing in this event: final Si+TPC tracks and selected Si chains
+  m_tracksPerCrossing.clear();
+  m_siChainsPerCrossing.clear();
+  for (unsigned int it = 0; it < m_tracks->size(); ++it)
+  {
+    const SiTpc_Track* t = m_tracks->get_track(it);
+    const TpcCrossingDecision* d = (t && t->isValid() && m_decisions) ? m_decisions->get_decision(t->get_tpc_assembled_track_id()) : nullptr;
+    if (d)
+    {
+      ++m_tracksPerCrossing[d->get_selected_crossing()];
+    }
+  }
+  if (m_siSeeds)
+  {
+    for (const auto& ch : m_siSeeds->chains)
+    {
+      if (ch.selected)
+      {
+        ++m_siChainsPerCrossing[ch.tpc_crossing];
+      }
     }
   }
 
@@ -666,7 +706,57 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
         m_rmsZ[d] = std::sqrt(detSumZ[d] / detN[d]);
       }
     }
+    // ---- crossing: TPC (resolved / decided) and INTT (time buckets of the chain's INTT hits)
+    if (const TpcCrossingDecision* d = m_decisions ? m_decisions->get_decision(m_tpcAssembledId) : nullptr)
+    {
+      m_tpcCrossing = d->get_selected_crossing();
+      const unsigned char tier = d->get_selected_tier();
+      m_tpcCrossingTier = tier == std::numeric_limits<unsigned char>::max() ? -1 : static_cast<int>(tier);
+      const auto itr = m_tracksPerCrossing.find(m_tpcCrossing);
+      m_nTracksCrossing = itr != m_tracksPerCrossing.end() ? itr->second : 0;
+      const auto isc = m_siChainsPerCrossing.find(m_tpcCrossing);
+      m_nSiChainsCrossing = isc != m_siChainsPerCrossing.end() ? isc->second : 0;
+    }
+    if (m_siSeeds && m_siChainId >= 0)
+    {
+      for (const auto& c : m_siSeeds->chains)
+      {
+        if (c.id != m_siChainId)
+        {
+          continue;
+        }
+        std::map<int, int> buckets;  // time bucket -> hits
+        for (const int hid : c.hit_ids)
+        {
+          if (hid >= 0 && hid < static_cast<int>(m_siSeeds->hits.size()) && m_siSeeds->hits[hid].layer >= 3)
+          {
+            ++buckets[InttDefs::getTimeBucketId(m_siSeeds->hits[hid].hitsetkey)];
+            ++m_inttNHits;
+          }
+        }
+        if (!buckets.empty())
+        {
+          m_inttCrossing = std::max_element(buckets.begin(), buckets.end(), [](const auto& a, const auto& b)
+                                            { return a.second < b.second; })
+                               ->first;
+          m_inttCrossingSpread = buckets.rbegin()->first - buckets.begin()->first;
+        }
+        break;
+      }
+    }
+    if (m_tpcCrossing != kNoCrossing && m_inttCrossing != kNoCrossing)
+    {
+      m_crossingDiff = m_inttCrossing - m_tpcCrossing;
+    }
+
     m_tree->Fill();
+  }
+
+  // keep the trees readable if the job does not reach End (crash, kill, time limit)
+  m_tree->AutoSave("SaveSelf");
+  if (m_matchTree)
+  {
+    m_matchTree->AutoSave("SaveSelf");
   }
 
   if (Verbosity() > 0)
