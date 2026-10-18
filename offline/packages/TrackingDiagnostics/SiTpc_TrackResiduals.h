@@ -3,6 +3,7 @@
 
 #include <fun4all/SubsysReco.h>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@ class PHCompositeNode;
 class SiHitSeedEvent;
 struct SiHitChain;
 class SiTpc_TrackContainer;
+class TpcCrossingDecisionContainer;
 class Tpc_PolyClusterContainer;
 class TFile;
 class TH3F;
@@ -28,6 +30,19 @@ class TTree;
 //     residual_z = z_point - [tpc_z_offset for TPC points] - z_state;
 //     cluster_adc, cluster_pad_size (TPC points, from TPC_POLYCLUSTERS if present).
 //   Frame: TPC frame of the matcher (Si halves on the TPC beam axis) (TPC z as measured, offset in residual_z).
+//   Bunch crossing of the track (both from the same track):
+//     tpc_crossing          crossing used for the TPC (TPC_CROSSING_DECISIONS, by assembled id;
+//                           -9999 without decision)
+//     tpc_crossing_tier     tier of that decision (0, 1, 2; -1 without decision)
+//     intt_crossing         most frequent INTT time bucket of the INTT hits of the track's Si chain
+//                           (SI_HIT_SEED_EVENT; -9999 if the chain has no INTT hit)
+//     intt_n_hits           number of INTT hits of the chain
+//     intt_crossing_spread  max - min INTT time bucket of those hits
+//     crossing_diff         intt_crossing - tpc_crossing (-9999 if either is missing)
+//     n_tracks_crossing     Si+TPC tracks of this event (all valid ones, before the tree cuts)
+//                           with the same tpc_crossing, this track included (0 without crossing)
+//     n_si_chains_crossing  selected Si chains of SI_HIT_SEED_EVENT with the same crossing
+//                           (TpcCrossingResolver: Si-matched TPC tracks of that collision)
 //   Per track also:
 //     n_mvtx, n_intt, n_tpc          number of fit points per detector
 //     x0, y0, z0                     point of closest approach to the beam (TPC frame)
@@ -89,6 +104,7 @@ class SiTpc_TrackResiduals : public SubsysReco
   void setTrackNodeName(const std::string& n) { m_trackNodeName = n; }
   void setTpcClusterNodeName(const std::string& n) { m_clusterNodeName = n; }
   void setSiSeedNodeName(const std::string& n) { m_siSeedNodeName = n; }
+  void setCrossingDecisionNodeName(const std::string& n) { m_crossingNodeName = n; }
   void setOutputFileName(const std::string& n) { m_outfilename = n; }
   void setMinPt(double v) { m_minPt = v; }
   void setMaxPt(double v) { m_maxPt = v; }
@@ -145,6 +161,7 @@ class SiTpc_TrackResiduals : public SubsysReco
   std::string m_trackNodeName{"SITPC_TRACKS"};
   std::string m_clusterNodeName{"TPC_POLYCLUSTERS"};
   std::string m_siSeedNodeName{"SI_HIT_SEED_EVENT"};
+  std::string m_crossingNodeName{"TPC_CROSSING_DECISIONS"};
 
   double m_minPt{0.0};
   double m_maxPt{1.0e30};
@@ -159,6 +176,7 @@ class SiTpc_TrackResiduals : public SubsysReco
   SiTpc_TrackContainer* m_tracks{nullptr};
   Tpc_PolyClusterContainer* m_clusters{nullptr};
   SiHitSeedEvent* m_siSeeds{nullptr};
+  TpcCrossingDecisionContainer* m_decisions{nullptr};
 
   // ---- residuals tree
   unsigned int m_event{0};
@@ -178,6 +196,17 @@ class SiTpc_TrackResiduals : public SubsysReco
   int m_charge{0};
   double m_R{0}, m_tpcZOffset{0}, m_circleRms{0}, m_zRms{0}, m_pcaX{0}, m_pcaY{0};
   unsigned int m_nMvtx{0}, m_nIntt{0}, m_nTpcLayers{0};
+  static constexpr int kNoCrossing = -9999;
+  int m_tpcCrossing{kNoCrossing};
+  int m_tpcCrossingTier{-1};
+  int m_inttCrossing{kNoCrossing};
+  int m_inttNHits{0};
+  int m_inttCrossingSpread{0};
+  int m_crossingDiff{kNoCrossing};
+  int m_nTracksCrossing{0};
+  int m_nSiChainsCrossing{0};
+  std::map<int, int> m_tracksPerCrossing;    // this event: tpc_crossing -> Si+TPC tracks
+  std::map<int, int> m_siChainsPerCrossing;  // this event: tpc_crossing -> selected Si chains
   static constexpr int kNLayers = 55;    // 0-2 MVTX, 3-6 INTT, 7-54 TPC
   static constexpr int kNSiLayers = 7;   // 0-2 MVTX, 3-6 INTT
   double m_resRPhiLayer[kNLayers]{};

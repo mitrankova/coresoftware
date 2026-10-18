@@ -1,5 +1,7 @@
 #include "SiTpc_EventDisplay.h"
 
+#include "tpctrackreco/TpcCrossingDecision.h"
+#include "tpctrackreco/TpcCrossingDecisionContainer.h"
 #include "tpctrackreco/Tpc_PolyCluster.h"
 #include "tpctrackreco/Tpc_PolyClusterContainer.h"
 #include "tpctrackreco/Tpc_PolyTrack.h"
@@ -20,9 +22,7 @@
 
 #include <TCanvas.h>
 #include <TDirectory.h>
-#include <TEllipse.h>
 #include <TFile.h>
-#include <TGraph.h>
 #include <TH1F.h>
 #include <TH3D.h>
 #include <TH3F.h>
@@ -41,6 +41,8 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -119,48 +121,6 @@ namespace
     pm->SetMarkerStyle(style);
     pm->SetMarkerSize(size);
     pm->Draw("same");
-  }
-
-  // 2D projections.  proj = 0: (x, y),  proj = 1: (r, z)
-  void project(const std::vector<XYZ>& pts, const int proj, std::vector<double>& a, std::vector<double>& b)
-  {
-    a.clear();
-    b.clear();
-    for (const auto& p : pts)
-    {
-      a.push_back(proj == 0 ? p.x : radius_of(p));
-      b.push_back(proj == 0 ? p.y : p.z);
-    }
-  }
-
-  void draw_line_2d(const std::vector<XYZ>& pts, const int proj, const int color, const int style, const int width)
-  {
-    if (pts.size() < 2)
-    {
-      return;
-    }
-    std::vector<double> a, b;
-    project(pts, proj, a, b);
-    auto* g = owned(new TGraph(static_cast<int>(a.size()), a.data(), b.data()));
-    g->SetLineColor(color);
-    g->SetLineStyle(style);
-    g->SetLineWidth(width);
-    g->Draw("L same");
-  }
-
-  void draw_markers_2d(const std::vector<XYZ>& pts, const int proj, const int color, const int style, const double size)
-  {
-    if (pts.empty())
-    {
-      return;
-    }
-    std::vector<double> a, b;
-    project(pts, proj, a, b);
-    auto* g = owned(new TGraph(static_cast<int>(a.size()), a.data(), b.data()));
-    g->SetMarkerColor(color);
-    g->SetMarkerStyle(style);
-    g->SetMarkerSize(size);
-    g->Draw("P same");
   }
 
   // =====================================================================
@@ -594,6 +554,7 @@ void SiTpc_EventDisplay::get_nodes(PHCompositeNode* topNode)
   m_tpcTracks = m_drawTpc ? findNode::getClass<Tpc_PolyTrackContainer>(topNode, m_tpcTrackNodeName) : nullptr;
   m_tpcVertices = m_drawTpc ? findNode::getClass<Tpc_PolyTrackVertexContainer>(topNode, m_tpcVertexNodeName) : nullptr;
   m_siTpcTracks = findNode::getClass<SiTpc_TrackContainer>(topNode, m_siTpcTrackNodeName);
+  m_decisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_crossingNodeName);
 
   if (Verbosity() > 0)
   {
@@ -602,7 +563,8 @@ void SiTpc_EventDisplay::get_nodes(PHCompositeNode* topNode)
               << ", TPC clusters " << (m_tpcClusters ? "yes" : "no")
               << ", TPC tracks " << (m_tpcTracks ? "yes" : "no")
               << ", TPC vertices " << (m_tpcVertices ? "yes" : "no")
-              << ", Si+TPC tracks " << (m_siTpcTracks ? "yes" : "no") << std::endl;
+              << ", Si+TPC tracks " << (m_siTpcTracks ? "yes" : "no")
+              << ", crossing decisions " << (m_decisions ? "yes" : "no") << std::endl;
   }
 }
 
@@ -690,6 +652,12 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     const auto it = tpcMatchedChain.find(assembledId);
     return it != tpcMatchedChain.end() ? palette_color(it->second) : static_cast<int>(kGray + 1);
   };
+  // crossing of an assembled track (TPC_CROSSING_DECISIONS; 0 without decisions)
+  auto crossingOf = [&](unsigned int assembledId) -> short
+  {
+    const TpcCrossingDecision* d = m_decisions ? m_decisions->get_decision(assembledId) : nullptr;
+    return d ? d->get_selected_crossing() : static_cast<short>(0);
+  };
 
   struct TpcLine
   {
@@ -700,7 +668,13 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   };
   std::map<unsigned int, std::vector<XYZ>> tpcClustersById;  // assembled track id -> clusters
   std::vector<TpcLine> tpcLines;
-  std::vector<std::pair<int, XYZ>> tpcPca;
+  struct PcaDraw
+  {
+    unsigned int id = 0;  // assembled track id
+    int color = 0;
+    XYZ p;
+  };
+  std::vector<PcaDraw> tpcPca;
   std::vector<XYZ> tpcCollision;
   if (m_tpcClusters)
   {
@@ -794,7 +768,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       const XYZ p{v->get_pca_x(), v->get_pca_y(), v->get_pca_z()};
       if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z))
       {
-        tpcPca.emplace_back(tpcColor(v->get_source_assembled_track_id()), p);
+        tpcPca.push_back({v->get_source_assembled_track_id(), tpcColor(v->get_source_assembled_track_id()), p});
       }
     }
     const unsigned int ncoll = (m_tpcVertices && m_tpcVertices->get_collision_vertex_valid())
@@ -846,6 +820,11 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       }
     }
   }
+  std::map<int, short> chainCrossing;  // chain id -> crossing of its TPC trajectory
+  for (const auto* cp : drawnChains)
+  {
+    chainCrossing[cp->id] = cp->tpc_crossing;
+  }
   std::vector<XYZ> siFreeHits;
   std::map<int, std::vector<XYZ>> siChainHits;  // chain id -> hits
   std::vector<char> onChain;
@@ -892,7 +871,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
   }
   // chains without a usable trajectory: no trajectory at all, or a failed fit
-  std::vector<XYZ> siUnfittedHits;
+  std::map<int, std::vector<XYZ>> siUnfittedHits;  // chain id -> hits
   unsigned int nSiUnfitted = 0;
   for (const auto& [id, pts] : siChainHits)
   {
@@ -904,7 +883,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       continue;
     }
     ++nSiUnfitted;
-    siUnfittedHits.insert(siUnfittedHits.end(), pts.begin(), pts.end());
+    siUnfittedHits[id] = pts;
     if (Verbosity() > 0)
     {
       std::cout << Name() << ": chain " << id << " not fitted ("
@@ -1156,6 +1135,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   };
   // Si+TPC fitted tracks (optional): from the pca outward through the whole tracker
   std::vector<std::vector<XYZ>> siTpcCurves;
+  std::vector<unsigned int> siTpcIds;  // assembled track id of every curve
   if (m_siTpcTracks && m_drawSiTpcTracks)
   {
     for (unsigned int i = 0; i < m_siTpcTracks->size(); ++i)
@@ -1178,6 +1158,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
         pts.push_back({p.x, p.y, p.z});
       }
       siTpcCurves.push_back(std::move(pts));
+      siTpcIds.push_back(t->get_tpc_assembled_track_id());
     }
   }
   auto siTpcSegments = [&](const std::vector<XYZ>& pts, const bool zoom)
@@ -1185,22 +1166,24 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     return zoom ? clip_curve(pts, kSiZoomR, zoomZ) : std::vector<std::vector<XYZ>>{pts};
   };
 
-  std::vector<XYZ> siTrajPoints;  // fit points of all trajectories
-  for (const auto& d : siTrajs)
-  {
-    for (unsigned int k = 0; k < d.t->size_points(); ++k)
-    {
-      siTrajPoints.push_back({d.t->get_point_x(k), d.t->get_point_y(k), d.t->get_point_z(k)});
-    }
-  }
-
   const int siHitStyle = 21;  // squares
   const int tpcClusterStyle = 20;  // circles
 
-  auto drawEverything3D = [&](const bool zoom)
+  auto chainXing = [&](int chainId)
   {
+    const auto it = chainCrossing.find(chainId);
+    return it != chainCrossing.end() ? it->second : static_cast<short>(0);
+  };
+  // xing: draw only what belongs to this crossing (unassociated Si hits always); nullopt: all
+  auto drawEverything3D = [&](const bool zoom, const std::optional<short> xing, const bool collisions)
+  {
+    auto keep = [&](short crossing) { return !xing || crossing == *xing; };
     for (const auto& l : tpcLines)
     {
+      if (!keep(crossingOf(l.id)))
+      {
+        continue;
+      }
       for (const auto& seg : tpcCurves(l, zoom, false))
       {
         draw_line_zxy(seg, l.color, 1, 3);
@@ -1212,28 +1195,54 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
     for (const auto& [id, pts] : tpcClustersById)
     {
-      draw_markers_zxy(pts, tpcColor(id), tpcClusterStyle, zoom ? 0.8 : 1.0);
+      if (keep(crossingOf(id)))
+      {
+        draw_markers_zxy(pts, tpcColor(id), tpcClusterStyle, zoom ? 0.8 : 1.0);
+      }
     }
-    for (const auto& [color, p] : tpcPca)
+    for (const auto& v : tpcPca)
     {
-      draw_markers_zxy({p}, color, 20, 1.2);
+      if (keep(crossingOf(v.id)))
+      {
+        draw_markers_zxy({v.p}, v.color, 20, 1.2);
+      }
     }
-    draw_markers_zxy(tpcCollision, kBlack, 29, 2.0);
+    if (collisions)
+    {
+      draw_markers_zxy(tpcCollision, kBlack, 29, 2.0);
+    }
     draw_markers_zxy(siFreeHits, kGray + 1, siHitStyle, zoom ? 0.4 : 0.3);
     for (const auto& [id, pts] : siChainHits)
     {
-      draw_markers_zxy(pts, palette_color(id), siHitStyle, zoom ? 0.8 : 0.6);
+      if (keep(chainXing(id)))
+      {
+        draw_markers_zxy(pts, palette_color(id), siHitStyle, zoom ? 0.8 : 0.6);
+      }
     }
-    draw_markers_zxy(siUnfittedHits, kBlack, 27, zoom ? 1.4 : 1.0);
-    for (const auto& c : siTpcCurves)
+    for (const auto& [id, pts] : siUnfittedHits)
     {
-      for (const auto& seg : siTpcSegments(c, zoom))
+      if (keep(chainXing(id)))
+      {
+        draw_markers_zxy(pts, kBlack, 27, zoom ? 1.4 : 1.0);
+      }
+    }
+    for (std::size_t i = 0; i < siTpcCurves.size(); ++i)
+    {
+      if (!keep(crossingOf(siTpcIds[i])))
+      {
+        continue;
+      }
+      for (const auto& seg : siTpcSegments(siTpcCurves[i], zoom))
       {
         draw_line_zxy(seg, m_siTpcTrackColor, 1, 2);
       }
     }
     for (std::size_t i = 0; i < siTrajs.size(); ++i)
     {
+      if (!keep(chainXing(siTrajs[i].t->get_chain_id())))
+      {
+        continue;
+      }
       const bool low = siTrajs[i].lowPt;
       if (!zoom)
       {
@@ -1245,19 +1254,52 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
 
   if (m_drawPhysics)
   {
-    // full detector
+    // crossings present in the event: of the drawn TPC tracks, Si trajectories, Si+TPC tracks
+    std::set<short> crossings;
+    for (const auto& l : tpcLines)
     {
-      auto* c = new TCanvas(("c3_" + tag + "_phys_z_x_y").c_str(), (title + " TPC poly clusters/tracks + Si hits/trajectories").c_str(), 1200, 900);
-      auto* h3 = owned(new TH3D(("h3_" + tag + "_phys_z_x_y").c_str(),
-                                (title + " TPC (circles) + Si (squares);z [cm];x [cm];y [cm]").c_str(),
+      crossings.insert(crossingOf(l.id));
+    }
+    for (const auto& d : siTrajs)
+    {
+      crossings.insert(chainXing(d.t->get_chain_id()));
+    }
+    for (const unsigned int id : siTpcIds)
+    {
+      crossings.insert(crossingOf(id));
+    }
+    const bool singleCrossing = crossings.size() <= 1;
+
+    // full detector, one canvas per crossing
+    for (const short xing : crossings)
+    {
+      unsigned int nTpc = 0, nSi = 0, nSiTpc = 0;
+      for (const auto& l : tpcLines)
+      {
+        nTpc += crossingOf(l.id) == xing;
+      }
+      for (const auto& d : siTrajs)
+      {
+        nSi += chainXing(d.t->get_chain_id()) == xing;
+      }
+      for (const unsigned int id : siTpcIds)
+      {
+        nSiTpc += crossingOf(id) == xing;
+      }
+      const std::string xtag = xing < 0 ? std::format("m{}", -xing) : std::format("{}", xing);
+      const std::string xtitle = std::format("{} crossing {}: {} TPC tracks, {} Si trajectories, {} Si+TPC tracks",
+                                             title, xing, nTpc, nSi, nSiTpc);
+      auto* c = new TCanvas(("c3_" + tag + "_phys_z_x_y_crossing" + xtag).c_str(), xtitle.c_str(), 1200, 900);
+      auto* h3 = owned(new TH3D(("h3_" + tag + "_phys_z_x_y_crossing" + xtag).c_str(),
+                                (xtitle + " - TPC (circles) + Si (squares);z [cm];x [cm];y [cm]").c_str(),
                                 204, m_zmin, m_zmax, 170, -m_xymax, m_xymax, 170, -m_xymax, m_xymax));
       h3->SetDirectory(nullptr);
       h3->SetStats(false);
       h3->Draw();
-      drawEverything3D(false);
+      drawEverything3D(false, xing, singleCrossing);
       write_and_delete(c);
     }
-    // silicon zoom
+    // silicon zoom, all crossings
     {
       auto* c = new TCanvas(("c3_" + tag + "_phys_si_z_x_y").c_str(), (title + " silicon").c_str(), 1200, 900);
       auto* h3 = owned(new TH3D(("h3_" + tag + "_phys_si_z_x_y").c_str(),
@@ -1266,118 +1308,19 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       h3->SetDirectory(nullptr);
       h3->SetStats(false);
       h3->Draw();
-      drawEverything3D(true);
+      drawEverything3D(true, std::nullopt, singleCrossing);
       draw_markers_zxy({{beamX(), beamY(), 0.0}}, kBlack, 29, 1.5);
-      write_and_delete(c);
-    }
-  }
-
-  if (m_drawProjections)
-  {
-    auto drawEverything2D = [&](const int proj, const bool zoom)
-    {
-      for (const auto& l : tpcLines)
-      {
-        for (const auto& seg : tpcCurves(l, zoom, false))
-        {
-          draw_line_2d(seg, proj, l.color, 1, 2);
-        }
-        for (const auto& seg : tpcCurves(l, zoom, true))
-        {
-          draw_line_2d(seg, proj, l.color, 2, 2);
-        }
-      }
-      for (const auto& [id, pts] : tpcClustersById)
-      {
-        draw_markers_2d(pts, proj, tpcColor(id), tpcClusterStyle, 0.5);
-      }
-      for (const auto& [color, p] : tpcPca)
-      {
-        draw_markers_2d({p}, proj, color, 24, 1.2);
-      }
-      draw_markers_2d(tpcCollision, proj, kBlack, 29, 2.0);
-      draw_markers_2d(siFreeHits, proj, kGray + 1, siHitStyle, zoom ? 0.4 : 0.25);
-      for (const auto& [id, pts] : siChainHits)
-      {
-        draw_markers_2d(pts, proj, palette_color(id), siHitStyle, zoom ? 0.8 : 0.5);
-      }
-      draw_markers_2d(siUnfittedHits, proj, kBlack, 27, zoom ? 1.6 : 1.0);
-      for (const auto& c : siTpcCurves)
-      {
-        for (const auto& seg : siTpcSegments(c, zoom))
-        {
-          draw_line_2d(seg, proj, m_siTpcTrackColor, 1, 2);
-        }
-      }
-      for (std::size_t i = 0; i < siTrajs.size(); ++i)
-      {
-        const bool low = siTrajs[i].lowPt;
-        if (!zoom)
-        {
-          draw_line_2d(siCurveExt[i], proj, siTrajs[i].color, low ? 3 : 2, low ? 1 : 2);
-        }
-        draw_line_2d(siCurveIn[i], proj, siTrajs[i].color, low ? 3 : 1, low ? 1 : 2);
-      }
-      if (zoom)
-      {
-        draw_markers_2d(siTrajPoints, proj, kBlack, 24, 1.2);
-      }
-    };
-
-    // x-y, full
-    {
-      auto* c = new TCanvas(("c_" + tag + "_phys_xy").c_str(), (title + " x-y").c_str(), 1000, 1000);
-      c->DrawFrame(-m_xymax, -m_xymax, m_xymax, m_xymax, (title + " TPC (circles) + Si (squares);x [cm];y [cm]").c_str());
-      drawEverything2D(0, false);
-      write_and_delete(c);
-    }
-    // x-y, silicon zoom
-    {
-      auto* c = new TCanvas(("c_" + tag + "_phys_xy_si").c_str(), (title + " x-y silicon").c_str(), 1000, 1000);
-      c->DrawFrame(-kSiZoomR, -kSiZoomR, kSiZoomR, kSiZoomR, (title + (m_alignment.enabled() ? " silicon (TPC frame, Si halves on TPC beam axis)" : " silicon (global frame)") + ";x [cm];y [cm]").c_str());
-      // nominal layers: one half circle per clamshell half, around the position of the
-      // detector centre after the shift and the move of that half onto the TPC beam axis (z = 0)
-      const double phiA = (m_alignment.clamshellBoundary() + m_frame.uphiRotation()) * 180.0 / kPi;
-      for (int half = SiTpcBeamAlignment::SiHalfA; half <= SiTpcBeamAlignment::SiHalfB; ++half)
-      {
-        const auto cen = m_alignment.siHalfToTpcAxis(half, {center[0], center[1], 0.0});
-        const double phi0 = phiA + (half == SiTpcBeamAlignment::SiHalfA ? 0.0 : 180.0);
-        for (int l = 0; l < SiDetectorFrame::kNLayers; ++l)
-        {
-          const double r = SiDetectorFrame::layerRadius(l);
-          auto* e = owned(new TEllipse(cen.x, cen.y, r, r, phi0, phi0 + 180.0));
-          e->SetFillStyle(0);
-          e->SetLineColor(half == SiTpcBeamAlignment::SiHalfA ? kGray + 1 : kGray);
-          e->SetLineStyle(3);
-          e->SetNoEdges(true);
-          e->Draw("same");
-        }
-        auto* det = owned(new TMarker(cen.x, cen.y, half == SiTpcBeamAlignment::SiHalfA ? 5 : 2));
-        det->SetMarkerColor(kGray + 2);
-        det->SetMarkerSize(2.0);
-        det->Draw();
-      }
-      drawEverything2D(0, true);
-      auto* beam = owned(new TMarker(beamX(), beamY(), 29));
-      beam->SetMarkerSize(2.0);
-      beam->Draw();
-      auto* tx = owned(new TLatex(0.12, 0.92, std::format("#star beam (TPC beam axis)   #times/+ detector centre half A/B   shift ({:.1f}, {:.1f}) mm, Si halves on TPC beam axis {}   {}",
-                                                          10 * center[0], 10 * center[1], m_alignment.enabled() ? "on" : "off", siSummary)
+      auto* tx = owned(new TLatex(0.02, 0.97, std::format("#star beam (TPC beam axis)   shift ({:.1f}, {:.1f}) mm, Si halves on TPC beam axis {}   {} crossings   {}",
+                                                          10 * center[0], 10 * center[1], m_alignment.enabled() ? "on" : "off",
+                                                          crossings.size(), siSummary)
                                                   .c_str()));
       tx->SetNDC();
-      tx->SetTextSize(0.025);
+      tx->SetTextSize(0.022);
       tx->Draw();
-      auto* tx2 = owned(new TLatex(0.12, 0.89, siTpcSummary.c_str()));
+      auto* tx2 = owned(new TLatex(0.02, 0.94, siTpcSummary.c_str()));
       tx2->SetNDC();
-      tx2->SetTextSize(0.025);
+      tx2->SetTextSize(0.022);
       tx2->Draw();
-      write_and_delete(c);
-    }
-    // z vs r, full
-    {
-      auto* c = new TCanvas(("c_" + tag + "_phys_z_r").c_str(), (title + " z vs r").c_str(), 1200, 800);
-      c->DrawFrame(0, m_zmin, m_xymax, m_zmax, (title + " TPC (circles) + Si (squares);r [cm];z [cm]").c_str());
-      drawEverything2D(1, false);
       write_and_delete(c);
     }
   }
@@ -1395,6 +1338,9 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   std::cout << Name() << " - saved event " << m_evt << ": Si " << siSummary << "; " << siTpcSummary << "; TPC clusters " << nTpcClusters
             << ", TPC poly tracks " << tpcLines.size() << ", TPC collision vertices " << tpcCollision.size() << std::endl;
   ++m_eventsSaved;
+  // keys and header on disk after every saved event: the file stays readable if the job does
+  // not reach End (crash, kill, time limit)
+  m_outfile->Write();
   return Fun4AllReturnCodes::EVENT_OK;
 }
 

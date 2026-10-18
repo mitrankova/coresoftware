@@ -16,6 +16,7 @@ class Tpc_PolyClusterContainer;
 class Tpc_PolyTrackContainer;
 class Tpc_PolyTrackVertexContainer;
 class SiTpc_TrackContainer;
+class TpcCrossingDecisionContainer;
 
 // Event display of the silicon seeds / trajectories together with the TPC poly clusters and
 // poly tracks.  One TDirectory per event (events/event_NNNNNN), only canvases are written.
@@ -26,6 +27,8 @@ class SiTpc_TrackContainer;
 //   TPC_POLYCLUSTERS       Tpc_PolyClusterContainer
 //   TPC_POLYTRACKS         Tpc_PolyTrackContainer
 //   TPC_POLYTRACKVERTICES  Tpc_PolyTrackVertexContainer (pca + collision vertices, z0 selection)
+//   TPC_CROSSING_DECISIONS TpcCrossingDecisionContainer (crossing of every assembled track;
+//                          without it every TPC track is in crossing 0)
 //
 // ---- DETECTOR coordinates (as SiHitSeedDisplay): axes nominal Vz, intrinsic Uphi, layer.
 //   c3_evtN_det_hits_chains_traj : one histogram (BOX2Z) with all Si hits over the full Uphi
@@ -40,15 +43,14 @@ class SiTpc_TrackContainer;
 //   setDrawUnassociatedHits(false) keeps only the chain hits in the histogram.
 //
 // ---- PHYSICS space (as Tpc_PolyClusterDisplay): axes z, x, y in the global frame [cm].
-//   c3_evtN_phys_z_x_y      TPC poly clusters + poly tracks + pca / collision vertices,
-//                           Si hits (chain colour; others grey), Si trajectories.
+//   c3_evtN_phys_z_x_y_crossingC   one canvas per bunch crossing C (negative: crossing_mC):
+//                           the TPC poly clusters + poly tracks + pca of the tracks resolved to
+//                           crossing C (TPC_CROSSING_DECISIONS), the Si chains / trajectories /
+//                           Si+TPC tracks of those tracks, all unassociated Si hits (grey).
+//                           Collision vertices only if the event has a single crossing.
 //                           Each trajectory is solid in its own detector; setTrajectoryExtension
 //                           selects which ones are also drawn (dashed) through the other one.
-//   c3_evtN_phys_si_z_x_y   zoom on the silicon
-//   c_evtN_phys_xy          x-y projection, everything
-//   c_evtN_phys_xy_si       x-y zoom on the silicon with nominal layers around the detector
-//                           centre, beam and detector-centre markers
-//   c_evtN_phys_z_r         z vs radius, everything
+//   c3_evtN_phys_si_z_x_y   zoom on the silicon, all crossings, with the event summary
 //   Optional (setDrawSiTpcTracks): fitted Si+TPC tracks as solid lines in all physics views.
 //
 // Coordinates of the physics views: TPC frame (SiTpcBeamAlignment), beam on the TPC beam axis.
@@ -77,11 +79,11 @@ class SiTpc_EventDisplay : public SubsysReco
   void setTpcClusterNodeName(const std::string& s) { m_tpcClusterNodeName = s; }
   void setTpcTrackNodeName(const std::string& s) { m_tpcTrackNodeName = s; }
   void setTpcVertexNodeName(const std::string& s) { m_tpcVertexNodeName = s; }
+  void setCrossingDecisionNodeName(const std::string& s) { m_crossingNodeName = s; }
 
   // ---- what to draw
   void setDrawDetectorView(bool v) { m_drawDetector = v; }
   void setDrawPhysicsView(bool v) { m_drawPhysics = v; }
-  void setDrawProjections(bool v) { m_drawProjections = v; }  // 2D x-y and z-r canvases
   void setDrawUnassociatedHits(bool v) { m_drawUnassociated = v; }
   void setDrawTpc(bool v) { m_drawTpc = v; }
   void setMaxEventDisplays(unsigned int n) { m_maxEventDisplays = n; }
@@ -182,6 +184,7 @@ class SiTpc_EventDisplay : public SubsysReco
   std::string m_tpcClusterNodeName = "TPC_POLYCLUSTERS";
   std::string m_tpcTrackNodeName = "TPC_POLYTRACKS";
   std::string m_tpcVertexNodeName = "TPC_POLYTRACKVERTICES";
+  std::string m_crossingNodeName = "TPC_CROSSING_DECISIONS";
   unsigned int m_maxEventDisplays;
   unsigned int m_evt = 0;
   unsigned int m_eventsSaved = 0;
@@ -193,6 +196,7 @@ class SiTpc_EventDisplay : public SubsysReco
   Tpc_PolyTrackContainer* m_tpcTracks = nullptr;
   Tpc_PolyTrackVertexContainer* m_tpcVertices = nullptr;
   SiTpc_TrackContainer* m_siTpcTracks = nullptr;
+  TpcCrossingDecisionContainer* m_decisions = nullptr;
   std::string m_siTpcTrackNodeName = "SITPC_TRACKS";
   bool m_drawSiTpcTracks = false;
   bool m_colorTpcByMatch = true;
@@ -201,7 +205,6 @@ class SiTpc_EventDisplay : public SubsysReco
 
   bool m_drawDetector = true;
   bool m_drawPhysics = true;
-  bool m_drawProjections = true;
   bool m_drawUnassociated = true;
   bool m_drawTpc = true;
   bool m_requireSiTraj = false;

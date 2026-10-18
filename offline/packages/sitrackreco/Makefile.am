@@ -29,7 +29,8 @@ pkginclude_HEADERS = \
   SiTpcTrackMatcher.h \
   SiTrajectoryFitter.h \
   SiHitSeedData.h \
-  SiHitSeedReco.h
+  SiHitSeedReco.h \
+  TpcCrossingResolver.h
 
 ROOTDICTS = \
   Si_Trajectory_Dict.cc \
@@ -55,6 +56,7 @@ libsitrackreco_la_SOURCES = \
   SiTpc_TrackContainerv1.cc \
   SiTpcTrackMatcher.cc \
   SiHitSeedReco.cc \
+  TpcCrossingResolver.cc \
   $(ROOTDICTS)
 
 libsitrackreco_la_LIBADD = \
