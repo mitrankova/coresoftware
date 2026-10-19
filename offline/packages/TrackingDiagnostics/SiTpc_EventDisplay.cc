@@ -583,6 +583,30 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
 
   const auto& center = m_frame.detectorCenterCm();
 
+  // colour of a Si chain (and of everything matched to it): grey if it has fewer MVTX layers
+  // than setColorMinMvtxLayers
+  std::map<int, int> chainNMvtx;  // chain id -> MVTX layers
+  if (m_siSeeds)
+  {
+    for (const auto& ch : m_siSeeds->chains)
+    {
+      chainNMvtx[ch.id] = ch.n_mvtx;
+    }
+  }
+  const int grey = static_cast<int>(kGray + 1);
+  auto chainColor = [&](int chainId) -> int
+  {
+    if (m_colorMinMvtx > 0)
+    {
+      const auto it = chainNMvtx.find(chainId);
+      if (it == chainNMvtx.end() || it->second < m_colorMinMvtx)
+      {
+        return grey;
+      }
+    }
+    return palette_color(chainId);
+  };
+
   // ==================================================================
   // Si trajectories
   // ==================================================================
@@ -617,7 +641,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       {
         continue;
       }
-      siTrajs.push_back({t, helix_of(*t), palette_color(t->get_chain_id()), lowPt});
+      siTrajs.push_back({t, helix_of(*t), chainColor(t->get_chain_id()), lowPt});
     }
   }
 
@@ -650,7 +674,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       return palette_color(static_cast<int>(assembledId));
     }
     const auto it = tpcMatchedChain.find(assembledId);
-    return it != tpcMatchedChain.end() ? palette_color(it->second) : static_cast<int>(kGray + 1);
+    return it != tpcMatchedChain.end() ? chainColor(it->second) : grey;
   };
   // crossing of an assembled track (TPC_CROSSING_DECISIONS; 0 without decisions)
   auto crossingOf = [&](unsigned int assembledId) -> short
@@ -1032,13 +1056,13 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       // candidate (not selected) chains thin dotted
       if (chain.selected)
       {
-        drawPath(pts, palette_color(chain.id), 1);
+        drawPath(pts, chainColor(chain.id), 1);
       }
       else
       {
         for (const auto& piece : splitAtSeam(pts, b))
         {
-          auto* l = make_det_line(piece, palette_color(chain.id), 3);
+          auto* l = make_det_line(piece, chainColor(chain.id), 3);
           l->SetLineWidth(1);
           l->Draw("same");
         }
@@ -1061,11 +1085,11 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
         continue;
       }
       const P3 vtx{z0 - center[2], cp->phi.back(), kVertexLayer};
-      drawPath({{cp->z.back(), cp->phi.back(), static_cast<double>(cp->layers.back())}, vtx}, palette_color(cp->id), 3);
+      drawPath({{cp->z.back(), cp->phi.back(), static_cast<double>(cp->layers.back())}, vtx}, chainColor(cp->id), 3);
       auto* m = owned(new TPolyMarker3D(1));
       m->SetPoint(0, vtx.z, toU(vtx.phi, b), kVertexLayer);
       m->SetMarkerStyle(23);
-      m->SetMarkerColor(palette_color(cp->id));
+      m->SetMarkerColor(chainColor(cp->id));
       m->SetMarkerSize(1.6);
       m->Draw("same");
     }
@@ -1179,9 +1203,10 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   auto drawEverything3D = [&](const bool zoom, const std::optional<short> xing, const bool collisions, const bool freeSiHits)
   {
     auto keep = [&](short crossing) { return !xing || crossing == *xing; };
+    auto shown = [&](int color) { return m_drawGreyTracks || color != grey; };
     for (const auto& l : tpcLines)
     {
-      if (!keep(crossingOf(l.id)))
+      if (!keep(crossingOf(l.id)) || !shown(l.color))
       {
         continue;
       }
@@ -1196,14 +1221,14 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
     for (const auto& [id, pts] : tpcClustersById)
     {
-      if (keep(crossingOf(id)))
+      if (keep(crossingOf(id)) && shown(tpcColor(id)))
       {
         draw_markers_zxy(pts, tpcColor(id), tpcClusterStyle, zoom ? 0.8 : 1.0);
       }
     }
     for (const auto& v : tpcPca)
     {
-      if (keep(crossingOf(v.id)))
+      if (keep(crossingOf(v.id)) && shown(v.color))
       {
         draw_markers_zxy({v.p}, v.color, 20, 1.2);
       }
@@ -1218,9 +1243,9 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
     for (const auto& [id, pts] : siChainHits)
     {
-      if (keep(chainXing(id)))
+      if (keep(chainXing(id)) && shown(chainColor(id)))
       {
-        draw_markers_zxy(pts, palette_color(id), siHitStyle, zoom ? 0.8 : 0.6);
+        draw_markers_zxy(pts, chainColor(id), siHitStyle, zoom ? 0.8 : 0.6);
       }
     }
     for (const auto& [id, pts] : siUnfittedHits)
@@ -1232,7 +1257,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
     for (std::size_t i = 0; i < siTpcCurves.size(); ++i)
     {
-      if (!keep(crossingOf(siTpcIds[i])))
+      if (!keep(crossingOf(siTpcIds[i])) || !shown(tpcColor(siTpcIds[i])))
       {
         continue;
       }
@@ -1243,7 +1268,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     }
     for (std::size_t i = 0; i < siTrajs.size(); ++i)
     {
-      if (!keep(chainXing(siTrajs[i].t->get_chain_id())))
+      if (!keep(chainXing(siTrajs[i].t->get_chain_id())) || !shown(siTrajs[i].color))
       {
         continue;
       }
@@ -1290,9 +1315,37 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       {
         nSiTpc += crossingOf(id) == xing;
       }
+      // collision z of this crossing: silicon_vertex_z of the tier 0 / 1 decisions of its tracks
+      // (TpcCrossingResolver: one collision per crossing, so normally a single value)
+      std::map<long, unsigned int> vertexVotes;  // z in units of 0.01 cm -> tracks
+      {
+        std::set<unsigned int> ids;
+        for (const auto& l : tpcLines)
+        {
+          ids.insert(l.id);
+        }
+        ids.insert(siTpcIds.begin(), siTpcIds.end());
+        for (const unsigned int id : ids)
+        {
+          const TpcCrossingDecision* d = m_decisions ? m_decisions->get_decision(id) : nullptr;
+          if (d && d->get_selected_crossing() == xing && d->get_selected_tier() <= 1 && std::isfinite(d->get_silicon_vertex_z()))
+          {
+            ++vertexVotes[std::lround(100.0 * d->get_silicon_vertex_z())];
+          }
+        }
+      }
+      std::string vtxText = "no vertex";
+      if (!vertexVotes.empty())
+      {
+        vtxText.clear();
+        for (const auto& [zc, n] : vertexVotes)
+        {
+          vtxText += std::format("{}z_{{vtx}} = {:.2f} cm ({} trk)", vtxText.empty() ? "" : ", ", 0.01 * static_cast<double>(zc), n);
+        }
+      }
       const std::string xtag = xing < 0 ? std::format("m{}", -xing) : std::format("{}", xing);
-      const std::string xtitle = std::format("{} crossing {}: {} TPC tracks, {} Si trajectories, {} Si+TPC tracks",
-                                             title, xing, nTpc, nSi, nSiTpc);
+      const std::string xtitle = std::format("{} crossing {}, {}: {} TPC tracks, {} Si trajectories, {} Si+TPC tracks",
+                                             title, xing, vtxText, nTpc, nSi, nSiTpc);
       auto* c = new TCanvas(("c3_" + tag + "_phys_z_x_y_crossing" + xtag).c_str(), xtitle.c_str(), 1200, 900);
       auto* h3 = owned(new TH3D(("h3_" + tag + "_phys_z_x_y_crossing" + xtag).c_str(),
                                 (xtitle + " - TPC (circles) + Si (squares);z [cm];x [cm];y [cm]").c_str(),
