@@ -135,7 +135,8 @@ int TpcCrossingResolver::InitRun(PHCompositeNode* topNode)
               << " x (n_layers/7)^" << m_layerPower << " exp(-" << m_ddphiWeight << " <ddphi pull^2>/2) x " << m_noInttFactor
               << " if no INTT; chains chi2/ndf <= " << m_maxChainChi2 << "; vertices: window " << m_clusterZWindow
               << " cm, single-track Si z sigma " << m_siZSigma << " cm (support: x sqrt(1 + 1/n_other)), support scale " << m_supportScale << ", floor " << m_eventFloor
-              << "; lone track: credit >= " << m_minLoneCredit << " and >= " << m_ambiguityRatio << " x its other hypotheses" << std::endl;
+              << "; lone track: credit >= " << m_minLoneCredit << " and >= " << m_ambiguityRatio << " x its other hypotheses"
+              << (m_loneIgnoreSameSi ? " with other Si hits" : "") << std::endl;
     std::cout << Name() << ":   collisions need a chain with INTT hits (MVTX-only chains only join them): "
               << (m_requireInttForCollision ? "yes" : "no") << std::endl;
     std::cout << Name() << ":   split collisions: "
@@ -375,6 +376,23 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
         owner.erase(it);
       }
     }
+  };
+  // two hypotheses with the same Si hits: same chain, or >= setMinSharedBlobs common blobs
+  auto sameSi = [&](const Hypothesis& a, const Hypothesis& b)
+  {
+    if (a.chain == b.chain)
+    {
+      return true;
+    }
+    unsigned int shared = 0;
+    for (const int x : seeds->chains[a.chain].blob_ids)
+    {
+      for (const int y : seeds->chains[b.chain].blob_ids)
+      {
+        shared += x == y;
+      }
+    }
+    return shared >= m_minSharedBlobs;
   };
   std::map<unsigned int, const Hypothesis*> winner;  // assembled id -> chosen hypothesis
   std::map<unsigned int, std::string> noChainReason;  // assembled id -> why it has no Si chain
@@ -691,12 +709,24 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       ++m_nMoved;
       continue;
     }
+    // competitors of a lone winner: its other hypotheses; with setLoneIgnoreSameSi those with the
+    // same Si hits (same chain, or >= setMinSharedBlobs common blobs) are not counted - they differ
+    // only in the crossing (+-1, chosen by dz), not in the Si association, and the Si+TPC fit
+    // floats the TPC z offset anyway
+    double otherCredit = 0, sameSiCredit = 0;
     if (inMain2[id] && v.n == 1)
     {
-      double otherCredit = 0;
       for (const auto& h : byTrack[id])
       {
-        if (&h != w)
+        if (&h == w)
+        {
+          continue;
+        }
+        if (m_loneIgnoreSameSi && sameSi(h, *w))
+        {
+          sameSiCredit = std::max(sameSiCredit, h.credit);
+        }
+        else
         {
           otherCredit = std::max(otherCredit, h.credit);
         }
@@ -705,17 +735,13 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       {
         kind[id] = Lone;
         ++m_nLoneKept;
+        m_nLoneSameSi += w->credit < m_ambiguityRatio * sameSiCredit;
         continue;
       }
     }
     // displaced, or a lone track that is not robust: no chain
     if (inMain2[id] && v.n == 1)
     {
-      double otherCredit = 0;
-      for (const auto& h : byTrack[id])
-      {
-        otherCredit = &h != w ? std::max(otherCredit, h.credit) : otherCredit;
-      }
       if (m_requireInttForCollision && !w->timed)
       {
         noChainReason[id] = std::format("no INTT time: alone in crossing {} (z {:.2f}) with an MVTX-only chain", w->crossing, w->z);
@@ -988,7 +1014,7 @@ int TpcCrossingResolver::End(PHCompositeNode* /*topNode*/)
               << ", winner not the highest-credit hypothesis " << m_nChangedByEvent << ", chain other than SiHitSeedReco's rank 0 "
               << m_nOtherChain << ", left without a chain by the ownership " << m_nLostByOwnership << std::endl
               << Name() << "::End - one collision per crossing: moved to a supported vertex " << m_nMoved
-              << ", lone kept (robust) " << m_nLoneKept << ", dropped (displaced / lone not robust) " << m_nDropped << std::endl
+              << ", lone kept (robust) " << m_nLoneKept << " (of which ambiguous only between crossings of the same Si hits " << m_nLoneSameSi << "), dropped (displaced / lone not robust) " << m_nDropped << std::endl
               << Name() << "::End - dropped because no INTT-timed chain in their collision (MVTX-only) " << m_nUntimed << std::endl
               << Name() << "::End - split collisions merged into the collision of a neighbouring crossing " << m_nMergedCollisions
               << ", tracks moved to the common crossing " << m_nMergeMoved << std::endl
