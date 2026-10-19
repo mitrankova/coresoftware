@@ -24,7 +24,11 @@
 // Tracks whose usable layers span less than setMinLayerSpan layers get no points.
 //   reference point = ADC-weighted mean pad phi and time bin of the track's hits on that layer,
 //                     drifted back once through the PHGarfield polylines with the crossing's
-//                     time offset (drift lookup built per layer on first use)
+//                     time offset
+// Drift lookup: PHGarfield::ReverseDrift for setDriftSamplesPerSector pad positions per sector,
+// every layer and side, built once in InitRun. Defaults as TpcCrossingFinder: 3 samples per
+// sector (3456 polylines) and PHGarfield's default substeps. Tpc_PolyClusterizer uses 24 samples
+// and 10 substeps (27648 polylines, minutes to build).
 // Track model:
 //   xy: circle through the three points, curvature from the sagitta (kappa = 2 h / (a b)),
 //       so a straight track is simply kappa = 0 (no infinite radius anywhere)
@@ -38,6 +42,7 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <set>
@@ -85,11 +90,18 @@ class Tpc_PolyTripletReco : public SubsysReco
   void setT0(double v) { m_t0 = v; m_t0Override = true; }
   void setTpcAdcClock(double v) { m_tpcAdcClock = v; m_tpcAdcClockOverride = true; }
   void setCrossingPeriodNs(double v) { m_crossingPeriodNs = v; }
+  // drift polylines per sector in the lookup (2..MaxSamples, default 3 as TpcCrossingFinder;
+  // Tpc_PolyClusterizer: 24); the build time scales with it, the points are linear in phi between
+  // neighbouring polylines
+  void setDriftSamplesPerSector(unsigned int n) { m_nSamples = std::clamp(n, 2U, MaxSamples); }
+  // ReverseDrift substeps per drift step; 0 (default, as TpcCrossingFinder): PHGarfield's default
+  // (Tpc_PolyClusterizer: 10)
+  void setDriftSubsteps(unsigned int n) { m_driftSubsteps = n; }
 
  private:
   static constexpr unsigned int FirstLayer = 7;
   static constexpr unsigned int NLayers = 48;
-  static constexpr unsigned int NSamples = 24;  // drift polylines per sector
+  static constexpr unsigned int MaxSamples = 64;  // drift polylines per sector (upper limit)
 
   struct DriftPoint
   {
@@ -110,6 +122,16 @@ class Tpc_PolyTripletReco : public SubsysReco
     double tbin{0};
     double adc{0};
   };
+  // crossing-independent part of a reference point: ADC-weighted pad phi and time bin of the
+  // track's hits on one layer (computed once per track, not once per crossing)
+  struct LayerMean
+  {
+    unsigned int layer{0};
+    unsigned int sector{0};
+    double phi{0};
+    double tbin{0};
+    bool ok{false};
+  };
   struct RefPoint
   {
     unsigned int layer{0};
@@ -119,17 +141,18 @@ class Tpc_PolyTripletReco : public SubsysReco
   bool buildLayer(unsigned int layer);  // drift polylines of one layer, both sides
   bool drift(unsigned int layer, unsigned int side, unsigned int sector, double phi, double timeNs,
              double& x, double& y, double& z) const;
-  bool makePoint(unsigned int layer, unsigned int side, short crossing, const std::vector<Hit>& hits, RefPoint& p);
+  LayerMean layerMean(unsigned int layer, unsigned int side, const std::vector<Hit>& hits) const;
+  bool makePoint(const LayerMean& m, unsigned int side, short crossing, RefPoint& p) const;
   bool insideTpc(const RefPoint& p, unsigned int side) const;
   void fitTrajectory(const std::array<RefPoint, 3>& pts, Tpc_CrossingTrajectoryv1& out) const;
   std::set<short> inttCrossings() const;
   Polyline& polyline(unsigned int layer, unsigned int side, unsigned int sector, unsigned int sample)
   {
-    return m_lookup[(((layer - FirstLayer) * 2 + side) * 12 + sector) * NSamples + sample];
+    return m_lookup[(((layer - FirstLayer) * 2 + side) * 12 + sector) * m_nSamples + sample];
   }
   const Polyline& polyline(unsigned int layer, unsigned int side, unsigned int sector, unsigned int sample) const
   {
-    return m_lookup[(((layer - FirstLayer) * 2 + side) * 12 + sector) * NSamples + sample];
+    return m_lookup[(((layer - FirstLayer) * 2 + side) * 12 + sector) * m_nSamples + sample];
   }
 
   bool m_triggeredMode{true};
@@ -157,11 +180,12 @@ class Tpc_PolyTripletReco : public SubsysReco
   bool m_tpcAdcClockOverride{false};
   double m_crossingPeriodNs{106.56};
   double m_driftStepNs{56.881262};
-  unsigned int m_driftSubsteps{10};
+  unsigned int m_driftSubsteps{0};
   double m_maxLookupTimeNs{0.0};  // longest drift polyline built so far
   std::array<double, 2> m_t0Side{{0.0, 0.0}};
   std::array<double, 2> m_startZ{{-102.605, 102.605}};
 
+  unsigned int m_nSamples{3};
   std::vector<Polyline> m_lookup;
   std::array<int, NLayers> m_layerState{};  // 0 not built, 1 built, -1 failed
 
@@ -175,6 +199,9 @@ class Tpc_PolyTripletReco : public SubsysReco
   unsigned long m_nTimeWindow{0};
   unsigned long m_nOutsideTpc{0};
   unsigned long m_nVertexZ{0};
+  unsigned long m_nDrifts{0};       // reverse-drift interpolations (makePoint calls)
+  double m_lookupMs{0};             // drift lookup build (InitRun)
+  double m_processMs{0};            // process_event, all events
 
   Tpc_AssembledTrackContainer* m_assembledTracks{nullptr};
   TrkrHitSetContainer* m_hits{nullptr};
