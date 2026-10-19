@@ -102,6 +102,13 @@ class SiTpc_EventDisplay : public SubsysReco
   // With SITPC_TRACKS present: TPC clusters / tracks matched to a Si trajectory are drawn in the
   // colour of that Si chain, unmatched TPC in grey (default).  false: colour by assembled id.
   void setColorTpcByMatch(bool v) { m_colorTpcByMatch = v; }
+  // Colour only Si chains with at least this many MVTX layers, and their Si trajectories and the
+  // TPC tracks matched to them; the others are grey like unmatched TPC tracks (default 0: every
+  // chain in colour). Si+TPC tracks keep setSiTpcTrackColor.
+  void setColorMinMvtxLayers(int n) { m_colorMinMvtx = n; }
+  // false: grey objects (unmatched TPC tracks, chains below setColorMinMvtxLayers and what is
+  // matched to them, incl. their Si+TPC tracks) are not drawn in the physics views (default true)
+  void setDrawGreyTracks(bool v) { m_drawGreyTracks = v; }
 
   // ---- TPC-driven Si chains (SiHitSeedReco): only the selected chain of every TPC track
   // (default) or also all candidate chains (dotted in the detector view)
@@ -187,6 +194,8 @@ class SiTpc_EventDisplay : public SubsysReco
   std::string m_tpcTrackNodeName = "TPC_POLYTRACKS";
   std::string m_tpcVertexNodeName = "TPC_POLYTRACKVERTICES";
   std::string m_crossingNodeName = "TPC_CROSSING_DECISIONS";
+  int m_colorMinMvtx = 0;
+  bool m_drawGreyTracks = true;
   unsigned int m_maxEventDisplays;
   unsigned int m_evt = 0;
   unsigned int m_eventsSaved = 0;
