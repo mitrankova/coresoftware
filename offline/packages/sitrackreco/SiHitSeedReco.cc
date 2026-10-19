@@ -925,8 +925,16 @@ bool SiHitSeedReco::fillHits(PHCompositeNode* topNode)
 
 void SiHitSeedReco::buildBlobs()
 {
+  if (m_blobsFromPixels)
+  {
+    buildBlobsFromPixels();
+    return;
+  }
+
   using Cell = std::pair<int, int>;
-  std::array<std::map<Cell, std::vector<int>>, nlayers> layerCells;
+  // per layer and INTT time bucket (MVTX: one group): hits of different bunch crossings are
+  // different particles and never end up in the same blob
+  std::array<std::map<int, std::map<Cell, std::vector<int>>>, nlayers> layerCells;
   const double dz = (m_zmax - m_zmin) / m_nz, dp = twopi / m_nphi;
   for (size_t i = 0; i < m_eventData->hits.size(); ++i)
   {
@@ -937,12 +945,14 @@ void SiHitSeedReco::buildBlobs()
     {
       continue;
     }
-    layerCells[h.layer][{iz, ip}].push_back(i);
+    const int bucket = (h.layer >= 3 && m_inttBlobsPerBucket) ? static_cast<int>(InttDefs::getTimeBucketId(h.hitsetkey)) : 0;
+    layerCells[h.layer][bucket][{iz, ip}].push_back(i);
   }
 
   for (int layer = 6; layer >= 0; --layer)
   {
-    auto& remaining = layerCells[layer];
+   for (auto& [bucket, remaining] : layerCells[layer])
+   {
     while (!remaining.empty())
     {
       const Cell start = remaining.begin()->first;
@@ -996,6 +1006,96 @@ void SiHitSeedReco::buildBlobs()
         phis.push_back(m_eventData->hits[id].phi);
         blob.adc_sum += m_eventData->hits[id].adc;
       }
+      blob.z = zsum / ids.size();
+      blob.phi = circularMean(phis);
+      blob.zbin = (blob.z - m_zmin) / dz;
+      blob.phibin = blob.phi / dp;
+      m_eventData->blobs.push_back(std::move(blob));
+    }
+   }
+  }
+}
+
+// Blobs = clusters of adjacent readout channels, as the hardware clusterizers do:
+//   MVTX: same chip and strobe (hitsetkey), pixels touching in (row, col) incl. diagonals
+//   INTT: same ladder, sensor and time bucket (hitsetkey), same z column, neighbouring strips
+// so two particles only share a blob if their pixels / strips touch.
+void SiHitSeedReco::buildBlobsFromPixels()
+{
+  const double dz = (m_zmax - m_zmin) / m_nz, dp = twopi / m_nphi;
+  std::map<TrkrDefs::hitsetkey, std::vector<int>> bySet;
+  for (size_t i = 0; i < m_eventData->hits.size(); ++i)
+  {
+    const auto& h = m_eventData->hits[i];
+    const int iz = (int) std::floor((h.z - m_zmin) / dz);
+    if (iz < 0 || iz >= m_nz)
+    {
+      continue;  // outside the z binning: not used by the finder
+    }
+    bySet[h.hitsetkey].push_back(static_cast<int>(i));
+  }
+  // outer layers first, as the grid blobs
+  std::vector<std::pair<int, TrkrDefs::hitsetkey>> sets;
+  for (const auto& [key, ids] : bySet)
+  {
+    sets.emplace_back(m_eventData->hits[ids.front()].layer, key);
+  }
+  std::stable_sort(sets.begin(), sets.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+
+  for (const auto& [layer, key] : sets)
+  {
+    const bool mvtx = layer <= 2;
+    std::map<std::pair<int, int>, std::vector<int>> remaining;  // (row, col) -> hits
+    for (const int id : bySet[key])
+    {
+      const auto& h = m_eventData->hits[id];
+      remaining[{static_cast<int>(h.row), static_cast<int>(h.col)}].push_back(id);
+    }
+    while (!remaining.empty())
+    {
+      std::queue<std::pair<int, int>> q;
+      q.push(remaining.begin()->first);
+      std::vector<int> ids;
+      while (!q.empty())
+      {
+        const auto px = q.front();
+        q.pop();
+        auto it = remaining.find(px);
+        if (it == remaining.end())
+        {
+          continue;
+        }
+        ids.insert(ids.end(), it->second.begin(), it->second.end());
+        remaining.erase(it);
+        for (int a = -1; a <= 1; ++a)
+        {
+          for (int b = (mvtx ? -1 : 0); b <= (mvtx ? 1 : 0); ++b)  // INTT: same z column
+          {
+            const std::pair<int, int> n{px.first + a, px.second + b};
+            if (remaining.count(n))
+            {
+              q.push(n);
+            }
+          }
+        }
+      }
+      std::sort(ids.begin(), ids.end());
+      SiBlob blob;
+      blob.id = m_eventData->blobs.size();
+      blob.layer = layer;
+      blob.hit_ids = ids;
+      std::vector<double> phis;
+      double zsum = 0;
+      std::set<std::pair<int, int>> cells;
+      for (const int id : ids)
+      {
+        const auto& h = m_eventData->hits[id];
+        zsum += h.z;
+        phis.push_back(h.phi);
+        blob.adc_sum += h.adc;
+        cells.insert({(int) std::floor((h.z - m_zmin) / dz), ((int) std::floor(h.phi / dp) % m_nphi + m_nphi) % m_nphi});
+      }
+      blob.cells.assign(cells.begin(), cells.end());
       blob.z = zsum / ids.size();
       blob.phi = circularMean(phis);
       blob.zbin = (blob.z - m_zmin) / dz;
@@ -1356,6 +1456,15 @@ Eigen::Vector3d SiHitSeedReco::xyz(int layer, double z, double phi) const
 SiHitSeedReco::Line3D SiHitSeedReco::fitLine(const std::vector<Eigen::Vector3d>& p) const
 {
   Line3D l;
+  if (p.size() == 2)
+  {
+    // two points: the line through them (same as the principal axis, without the eigen solver)
+    l.c = 0.5 * (p[0] + p[1]);
+    const Eigen::Vector3d d = p[1] - p[0];
+    const double n = d.norm();
+    l.d = n > 0 ? Eigen::Vector3d(d / n) : Eigen::Vector3d(0, 0, 1);
+    return l;
+  }
   l.c = Eigen::Vector3d::Zero();
   for (const auto& x : p)
   {
@@ -1368,7 +1477,9 @@ SiHitSeedReco::Line3D SiHitSeedReco::fitLine(const std::vector<Eigen::Vector3d>&
     auto d = x - l.c;
     cov += d * d.transpose();
   }
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+  // closed-form 3x3 eigen decomposition (much faster than the iterative solver)
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es;
+  es.computeDirect(cov);
   l.d = es.eigenvectors().col(2).normalized();
   return l;
 }

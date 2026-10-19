@@ -1174,8 +1174,9 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     const auto it = chainCrossing.find(chainId);
     return it != chainCrossing.end() ? it->second : static_cast<short>(0);
   };
-  // xing: draw only what belongs to this crossing (unassociated Si hits always); nullopt: all
-  auto drawEverything3D = [&](const bool zoom, const std::optional<short> xing, const bool collisions)
+  // xing: draw only what belongs to this crossing; nullopt: all crossings
+  // freeSiHits: also the Si hits not in any chain (grey)
+  auto drawEverything3D = [&](const bool zoom, const std::optional<short> xing, const bool collisions, const bool freeSiHits)
   {
     auto keep = [&](short crossing) { return !xing || crossing == *xing; };
     for (const auto& l : tpcLines)
@@ -1211,7 +1212,10 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     {
       draw_markers_zxy(tpcCollision, kBlack, 29, 2.0);
     }
-    draw_markers_zxy(siFreeHits, kGray + 1, siHitStyle, zoom ? 0.4 : 0.3);
+    if (freeSiHits)
+    {
+      draw_markers_zxy(siFreeHits, kGray + 1, siHitStyle, zoom ? 0.4 : 0.3);
+    }
     for (const auto& [id, pts] : siChainHits)
     {
       if (keep(chainXing(id)))
@@ -1296,7 +1300,21 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       h3->SetDirectory(nullptr);
       h3->SetStats(false);
       h3->Draw();
-      drawEverything3D(false, xing, singleCrossing);
+      drawEverything3D(false, xing, singleCrossing, false);
+      write_and_delete(c);
+    }
+    // full detector, all crossings in one canvas (same content as the per-crossing canvases)
+    {
+      const std::string xtitle = std::format("{} all {} crossings: {} TPC tracks, {} Si trajectories, {} Si+TPC tracks",
+                                             title, crossings.size(), tpcLines.size(), siTrajs.size(), siTpcIds.size());
+      auto* c = new TCanvas(("c3_" + tag + "_phys_z_x_y_allcrossings").c_str(), xtitle.c_str(), 1200, 900);
+      auto* h3 = owned(new TH3D(("h3_" + tag + "_phys_z_x_y_allcrossings").c_str(),
+                                (xtitle + " - TPC (circles) + Si (squares);z [cm];x [cm];y [cm]").c_str(),
+                                204, m_zmin, m_zmax, 170, -m_xymax, m_xymax, 170, -m_xymax, m_xymax));
+      h3->SetDirectory(nullptr);
+      h3->SetStats(false);
+      h3->Draw();
+      drawEverything3D(false, std::nullopt, singleCrossing, false);
       write_and_delete(c);
     }
     // silicon zoom, all crossings
@@ -1308,7 +1326,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       h3->SetDirectory(nullptr);
       h3->SetStats(false);
       h3->Draw();
-      drawEverything3D(true, std::nullopt, singleCrossing);
+      drawEverything3D(true, std::nullopt, singleCrossing, true);
       draw_markers_zxy({{beamX(), beamY(), 0.0}}, kBlack, 29, 1.5);
       auto* tx = owned(new TLatex(0.02, 0.97, std::format("#star beam (TPC beam axis)   shift ({:.1f}, {:.1f}) mm, Si halves on TPC beam axis {}   {} crossings   {}",
                                                           10 * center[0], 10 * center[1], m_alignment.enabled() ? "on" : "off",
