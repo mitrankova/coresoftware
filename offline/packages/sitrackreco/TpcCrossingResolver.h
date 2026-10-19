@@ -46,7 +46,8 @@
 //                    lone     : the only winner of its crossing -> moved as above if possible,
 //                               else kept only if robust: credit >= setMinLoneCredit and
 //                               >= setAmbiguityRatio x its other hypotheses (its other crossings
-//                               are far away in z), else no chain
+//                               are far away in z; hypotheses with the same Si hits are not
+//                               counted with setLoneIgnoreSameSi, default on), else no chain
 //   INTT time: with setRequireInttForCollision (default on) a collision exists only if a winner
 //                    with INTT hits is in it (the main vertex of a crossing is the largest one
 //                    with such a winner); MVTX-only chains carry no time (MVTX integration, and the
@@ -127,6 +128,9 @@ class TpcCrossingResolver : public SubsysReco
   void setAmbiguityRatio(double v) { m_ambiguityRatio = v; }
   // 6. a lone track (only winner of its crossing) is kept only with at least this credit
   void setMinLoneCredit(double v) { m_minLoneCredit = v; }
+  //    the ambiguity ratio of a lone track ignores its hypotheses with the same Si hits (they differ
+  //    only in the crossing, chosen by dz; the lone track is tier 1 anyway)
+  void setLoneIgnoreSameSi(bool v) { m_loneIgnoreSameSi = v; }
   //    TPC-only tracks: minimum collision support (credit sum of its tracks) to be matched
   void setMinSupportTpcOnly(double v) { m_minSupportTpcOnly = v; }
   // collisions need a winner with INTT hits; MVTX-only chains only join them
@@ -166,6 +170,7 @@ class TpcCrossingResolver : public SubsysReco
   unsigned int m_minSharedBlobs{2};
   double m_ambiguityRatio{2.0};
   double m_minLoneCredit{0.3};
+  bool m_loneIgnoreSameSi{true};
   double m_minSupportTpcOnly{1.0};
   double m_maxVertexZ{25.0};
   bool m_requireInttForCollision{true};
@@ -187,6 +192,7 @@ class TpcCrossingResolver : public SubsysReco
   unsigned long m_nTpcOnly{0};           // tier 1 from the TPC-only match
   unsigned long m_nMoved{0};             // pass 2: moved to another hypothesis at a supported vertex
   unsigned long m_nLoneKept{0};          // pass 2: lone and robust
+  unsigned long m_nLoneSameSi{0};        // of those: kept only because same-Si hypotheses are ignored
   unsigned long m_nDropped{0};           // pass 2: displaced or lone and not robust -> no chain
   unsigned long m_nUntimed{0};           // pass 2: MVTX-only winners without an INTT-timed collision -> no chain
   unsigned long m_nMergedCollisions{0};  // 7: collisions merged into a neighbouring crossing's one
