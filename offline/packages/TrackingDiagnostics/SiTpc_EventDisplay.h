@@ -46,11 +46,13 @@ class TpcCrossingDecisionContainer;
 //   c3_evtN_phys_z_x_y_crossingC   one canvas per bunch crossing C (negative: crossing_mC):
 //                           the TPC poly clusters + poly tracks + pca of the tracks resolved to
 //                           crossing C (TPC_CROSSING_DECISIONS), the Si chains / trajectories /
-//                           Si+TPC tracks of those tracks, all unassociated Si hits (grey).
+//                           Si+TPC tracks of those tracks (Si hits not in any chain are not drawn).
 //                           Collision vertices only if the event has a single crossing.
 //                           Each trajectory is solid in its own detector; setTrajectoryExtension
 //                           selects which ones are also drawn (dashed) through the other one.
-//   c3_evtN_phys_si_z_x_y   zoom on the silicon, all crossings, with the event summary
+//   c3_evtN_phys_z_x_y_allcrossings   the same, all crossings in one canvas
+//   c3_evtN_phys_si_z_x_y   zoom on the silicon, all crossings, with the event summary and all
+//                           unassociated Si hits (grey)
 //   Optional (setDrawSiTpcTracks): fitted Si+TPC tracks as solid lines in all physics views.
 //
 // Coordinates of the physics views: TPC frame (SiTpcBeamAlignment), beam on the TPC beam axis.

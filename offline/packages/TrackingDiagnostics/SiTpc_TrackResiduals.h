@@ -43,6 +43,28 @@ class TTree;
 //                           with the same tpc_crossing, this track included (0 without crossing)
 //     n_si_chains_crossing  selected Si chains of SI_HIT_SEED_EVENT with the same crossing
 //                           (TpcCrossingResolver: Si-matched TPC tracks of that collision)
+//   Collision vertex of the track (TpcCrossingResolver decision, Si frame, NaN without one):
+//     track_vertex_z        BEFORE clustering: this track's own z at the beam from its Si chain,
+//                           = decision tpc_z0 + delta_z (TPC z0 at the crossing + measured Si - TPC
+//                           offset); for TPC-only matches (no own chain) it is the vertex z itself
+//     vertex_z              AFTER clustering: decided collision z (silicon_vertex_z) = mean of the
+//                           chain z of the tracks of that crossing's vertex (lone track: its own z)
+//     vertex_dz             delta_z of the decision (Si - TPC z at the chosen crossing)
+//     vertex_score          selected_score of the decision (NaN for TPC-only matches)
+//     vertex_status         TpcCrossingStatus of the decision
+//     vertex_own_z          1 if track_vertex_z comes from the track's own Si chain (tier 0, lone),
+//                           0 for TPC-only matches (z taken from the vertex)
+//     vertex_n_si           tracks of this event at this crossing with their own Si z
+//     vertex_z_mean         unweighted mean of their track_vertex_z
+//     vertex_z_rms          sample standard deviation of those z (NaN if fewer than 2)
+//     vertex_z_err          setVertexTrackZSigma / sqrt(vertex_n_si) (expected uncertainty)
+//     si_z0 - vertex_z      (plot it) Si-only fit z0 versus the decided vertex
+// Tree "vertices": one entry per (event, decided crossing with a vertex), i.e. per collision
+//   event, crossing, vertex_z, n_tracks (all Si+TPC tracks), n_si (own Si z), n_tier0,
+//   z_mean, z_rms, z_err (as above), and per track of the collision (vectors):
+//   track_z (track_vertex_z), track_own_z, track_tier, track_eta, track_pt, track_phi, track_charge
+//   -> multiplicity per collision: one entry per collision (not weighted by n as n_tracks_crossing);
+//      dN/deta per collision = sum of track_eta / number of entries.
 //   Per track also:
 //     n_mvtx, n_intt, n_tpc          number of fit points per detector
 //     x0, y0, z0                     point of closest approach to the beam (TPC frame)
@@ -111,6 +133,10 @@ class SiTpc_TrackResiduals : public SubsysReco
   void setMinTpcClusters(unsigned int v) { m_minTpcClusters = v; }
   void setMinSiPoints(unsigned int v) { m_minSiPoints = v; }
   void setWriteMatchingTree(bool v) { m_writeMatching = v; }
+  // collision vertices: "vertices" tree, and the single-track Si z resolution at the beam [cm]
+  // used for vertex_z_err (measured ~0.22 cm from the spread of multi-track vertices)
+  void setWriteVertexTree(bool v) { m_writeVertices = v; }
+  void setVertexTrackZSigma(double v) { m_vertexTrackZSigma = v; }
 
   // delta-delta-phi 3D histograms
   void setWriteDdphiHists(bool v) { m_writeDdphiHists = v; }
@@ -168,11 +194,14 @@ class SiTpc_TrackResiduals : public SubsysReco
   unsigned int m_minTpcClusters{0};
   unsigned int m_minSiPoints{0};
   bool m_writeMatching{true};
+  bool m_writeVertices{true};
+  double m_vertexTrackZSigma{0.22};
 
   unsigned int m_evt{0};
   TFile* m_outfile{nullptr};
   TTree* m_tree{nullptr};
   TTree* m_matchTree{nullptr};
+  TTree* m_vertexTree{nullptr};
   SiTpc_TrackContainer* m_tracks{nullptr};
   Tpc_PolyClusterContainer* m_clusters{nullptr};
   SiHitSeedEvent* m_siSeeds{nullptr};
@@ -207,6 +236,25 @@ class SiTpc_TrackResiduals : public SubsysReco
   int m_nSiChainsCrossing{0};
   std::map<int, int> m_tracksPerCrossing;    // this event: tpc_crossing -> Si+TPC tracks
   std::map<int, int> m_siChainsPerCrossing;  // this event: tpc_crossing -> selected Si chains
+  // collision vertex of the track
+  double m_trackVertexZ{0}, m_vertexZ{0}, m_vertexDz{0}, m_vertexScore{0};
+  int m_vertexStatus{0}, m_vertexOwnZ{0}, m_vertexNSi{0};
+  double m_vertexZMean{0}, m_vertexZRms{0}, m_vertexZErr{0};
+  // this event: crossing -> collision vertex summary (from all valid Si+TPC tracks)
+  struct VertexSummary
+  {
+    double z{0};  // decided vertex z
+    int nTracks{0}, nSi{0}, nTier0{0};
+    double zMean{0}, zRms{0}, zErr{0};
+    std::vector<float> trackZ, eta, pt, phi;
+    std::vector<int> ownZ, tier, charge;
+  };
+  std::map<int, VertexSummary> m_vertices;
+  // ---- vertices tree
+  int m_vCrossing{0}, m_vNTracks{0}, m_vNSi{0}, m_vNTier0{0};
+  double m_vZ{0}, m_vZMean{0}, m_vZRms{0}, m_vZErr{0};
+  std::vector<float> m_vTrackZ, m_vEta, m_vPt, m_vPhi;
+  std::vector<int> m_vOwnZ, m_vTier, m_vCharge;
   static constexpr int kNLayers = 55;    // 0-2 MVTX, 3-6 INTT, 7-54 TPC
   static constexpr int kNSiLayers = 7;   // 0-2 MVTX, 3-6 INTT
   double m_resRPhiLayer[kNLayers]{};

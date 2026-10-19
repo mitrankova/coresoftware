@@ -31,6 +31,7 @@
 #include <TPolyLine3D.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -114,9 +115,18 @@ int Tpc_PolyTripletReco::InitRun(PHCompositeNode* topNode)
                             m_padMap->get_region(layer + 1) != region);
   }
 
-  // drift polylines are built per layer on first use
-  m_lookup.assign(NLayers * 2 * 12 * NSamples, Polyline());
+  // drift polylines of every layer, built once here (not in the first event)
+  m_lookup.assign(NLayers * 2 * 12 * m_nSamples, Polyline());
   m_layerState.fill(0);
+  const auto tLookup = std::chrono::steady_clock::now();
+  for (unsigned int i = 0; i < NLayers; ++i)
+  {
+    m_layerState[i] = buildLayer(FirstLayer + i) ? 1 : -1;
+  }
+  m_lookupMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLookup).count();
+  std::cout << Name() << "::InitRun - drift lookup: " << NLayers * 2 * 12 * m_nSamples << " polylines ("
+            << m_nSamples << " per sector, substeps " << (m_driftSubsteps > 0 ? std::to_string(m_driftSubsteps) : std::string("default"))
+            << ") built in " << m_lookupMs / 1000.0 << " s" << std::endl;
 
   PHNodeIterator iter(topNode);
   auto* dstNode = dynamic_cast<PHCompositeNode*>(iter.findFirst("PHCompositeNode", "DST"));
@@ -141,7 +151,7 @@ int Tpc_PolyTripletReco::InitRun(PHCompositeNode* topNode)
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-// Reverse-drift polylines from NSamples pad positions per sector, one layer, both sides
+// Reverse-drift polylines from m_nSamples pad positions per sector, one layer, both sides
 bool Tpc_PolyTripletReco::buildLayer(unsigned int layer)
 {
   const double radius = m_padMap->get_radius(layer);
@@ -155,13 +165,16 @@ bool Tpc_PolyTripletReco::buildLayer(unsigned int layer)
   {
     for (unsigned int sector = 0; sector < 12; ++sector)
     {
-      for (unsigned int s = 0; s < NSamples; ++s)
+      for (unsigned int s = 0; s < m_nSamples; ++s)
       {
         const auto localPad = static_cast<unsigned int>(std::llround(
-            static_cast<double>(s) / (NSamples - 1) * static_cast<double>(padsPerSector - 1)));
+            static_cast<double>(s) / (m_nSamples - 1) * static_cast<double>(padsPerSector - 1)));
         const double phi = m_padMap->get_phi(side, sector, layer, localPad);
-        TPolyLine3D* line = m_garfield->ReverseDrift(radius * std::cos(phi), radius * std::sin(phi), m_startZ[side],
-                                                     m_driftStepNs, nullptr, m_driftSubsteps);
+        TPolyLine3D* line = m_driftSubsteps > 0
+                                ? m_garfield->ReverseDrift(radius * std::cos(phi), radius * std::sin(phi), m_startZ[side],
+                                                           m_driftStepNs, nullptr, m_driftSubsteps)
+                                : m_garfield->ReverseDrift(radius * std::cos(phi), radius * std::sin(phi), m_startZ[side],
+                                                           m_driftStepNs);
         if (!line || line->GetN() <= 0 || !line->GetP())
         {
           delete line;
@@ -203,15 +216,16 @@ bool Tpc_PolyTripletReco::drift(unsigned int layer, unsigned int side, unsigned 
   }
 
   // bracketing polylines in phi (clamped to the sector edges)
-  std::array<double, NSamples> sphi{};
-  for (unsigned int s = 0; s < NSamples; ++s)
+  const unsigned int ns = m_nSamples;
+  std::array<double, MaxSamples> sphi{};
+  for (unsigned int s = 0; s < ns; ++s)
   {
     sphi[s] = (s == 0) ? polyline(layer, side, sector, 0).phi : unwrapNear(polyline(layer, side, sector, s).phi, sphi[s - 1]);
   }
-  phi = unwrapNear(phi, sphi[NSamples / 2]);
-  const double dir = (sphi[NSamples - 1] >= sphi[0]) ? 1.0 : -1.0;
+  phi = unwrapNear(phi, sphi[ns / 2]);
+  const double dir = (sphi[ns - 1] >= sphi[0]) ? 1.0 : -1.0;
   unsigned int s0 = 0;
-  while (s0 + 2 < NSamples && dir * (phi - sphi[s0 + 1]) > 0.0)
+  while (s0 + 2 < ns && dir * (phi - sphi[s0 + 1]) > 0.0)
   {
     ++s0;
   }
@@ -257,20 +271,15 @@ bool Tpc_PolyTripletReco::drift(unsigned int layer, unsigned int side, unsigned 
   return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
 }
 
-// one reference point: ADC-weighted pad phi and time of the hits on the layer, drifted back once
-bool Tpc_PolyTripletReco::makePoint(unsigned int layer, unsigned int side, short crossing,
-                                    const std::vector<Hit>& hits, RefPoint& p)
+// crossing-independent part of a reference point: ADC-weighted pad phi and time bin on the layer
+Tpc_PolyTripletReco::LayerMean Tpc_PolyTripletReco::layerMean(unsigned int layer, unsigned int side, const std::vector<Hit>& hits) const
 {
-  int& state = m_layerState[layer - FirstLayer];
-  if (state == 0)
+  LayerMean m;
+  m.layer = layer;
+  if (hits.empty() || m_layerState[layer - FirstLayer] != 1)
   {
-    state = buildLayer(layer) ? 1 : -1;
+    return m;
   }
-  if (state < 0 || hits.empty())
-  {
-    return false;
-  }
-
   const Hit& peak = *std::max_element(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.adc < b.adc; });
   const double phiPeak = m_padMap->get_phi(side, layer, peak.pad);
   double sw = 0, sphi = 0, stbin = 0;
@@ -281,10 +290,23 @@ bool Tpc_PolyTripletReco::makePoint(unsigned int layer, unsigned int side, short
     sphi += w * unwrapNear(m_padMap->get_phi(side, layer, h.pad), phiPeak);
     stbin += w * h.tbin;
   }
-  const double timeNs = (stbin / sw - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
-  const unsigned int sector = peak.pad / m_padMap->get_pads_per_sector_for_layer(layer);
-  p.layer = layer;
-  return sector < 12 && drift(layer, side, sector, sphi / sw, timeNs, p.x, p.y, p.z);
+  m.phi = sphi / sw;
+  m.tbin = stbin / sw;
+  m.sector = peak.pad / m_padMap->get_pads_per_sector_for_layer(layer);
+  m.ok = m.sector < 12;
+  return m;
+}
+
+// one reference point: the layer mean drifted back once with the crossing's time offset
+bool Tpc_PolyTripletReco::makePoint(const LayerMean& m, unsigned int side, short crossing, RefPoint& p) const
+{
+  if (!m.ok)
+  {
+    return false;
+  }
+  const double timeNs = (m.tbin - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
+  p.layer = m.layer;
+  return drift(m.layer, side, m.sector, m.phi, timeNs, p.x, p.y, p.z);
 }
 
 bool Tpc_PolyTripletReco::insideTpc(const RefPoint& p, unsigned int side) const
@@ -317,6 +339,7 @@ std::set<short> Tpc_PolyTripletReco::inttCrossings() const
 
 int Tpc_PolyTripletReco::process_event(PHCompositeNode* topNode)
 {
+  const auto tStart = std::chrono::steady_clock::now();
   m_trajectories->Reset();
 
   std::set<short> crossings;
@@ -391,40 +414,67 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* topNode)
       continue;
     }
 
+    // crossing-independent: layer means and the radius of every usable layer
+    std::vector<LayerMean> means;
+    means.reserve(usable.size());
+    for (const unsigned int layer : usable)
+    {
+      means.push_back(layerMean(layer, side, byLayer[layer]));
+    }
+    // middle-layer order for a (beginning, end) pair, cached (almost always the same pair)
+    std::map<std::pair<std::size_t, std::size_t>, std::vector<std::size_t>> middleOrder;
+    const double tol = m_edgeToleranceTbins * m_tpcAdcClock;
+
     bool anyTrajectory = false;
     for (const short crossing : crossings)
     {
       ++m_nHypotheses;
 
+      // streaming mode: drift-time window first (crossing-independent hit times, no drift needed)
+      if (!m_triggeredMode)
+      {
+        const double tMin = (minTbin - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
+        const double tMax = (maxTbin - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
+        if (!(tMin > -tol && tMax <= m_maxLookupTimeNs + tol))
+        {
+          ++m_nTimeWindow;
+          continue;
+        }
+      }
+
       // beginning: innermost usable layer that drifts; end: outermost one; middle: closest to
       // the radial midpoint
       std::array<RefPoint, 3> pts;
       bool okIn = false, okOut = false, okMid = false;
-      std::size_t iIn = 0;
-      for (; iIn < usable.size() && !okIn; ++iIn)
+      std::size_t iIn = 0, iOut = means.size();
+      for (; iIn < means.size() && !okIn; ++iIn)
       {
-        okIn = makePoint(usable[iIn], side, crossing, byLayer[usable[iIn]], pts[0]);
+        ++m_nDrifts;
+        okIn = makePoint(means[iIn], side, crossing, pts[0]);
       }
-      for (std::size_t i = usable.size(); okIn && i-- > iIn && !okOut;)
+      for (; okIn && iOut-- > iIn && !okOut;)
       {
-        okOut = makePoint(usable[i], side, crossing, byLayer[usable[i]], pts[2]);
+        ++m_nDrifts;
+        okOut = makePoint(means[iOut], side, crossing, pts[2]);
       }
       if (okIn && okOut && pts[2].layer - pts[0].layer >= m_minLayerSpan)
       {
-        const double rMid = 0.5 * (m_padMap->get_radius(pts[0].layer) + m_padMap->get_radius(pts[2].layer));
-        std::vector<unsigned int> middle;
-        for (const unsigned int layer : usable)
+        auto [orderIt, inserted] = middleOrder.try_emplace({iIn - 1, iOut});
+        std::vector<std::size_t>& order = orderIt->second;
+        if (inserted)
         {
-          if (layer > pts[0].layer && layer < pts[2].layer)
+          const double rMid = 0.5 * (m_padMap->get_radius(pts[0].layer) + m_padMap->get_radius(pts[2].layer));
+          for (std::size_t i = iIn; i < iOut; ++i)
           {
-            middle.push_back(layer);
+            order.push_back(i);
           }
+          std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b)
+                    { return std::fabs(m_padMap->get_radius(means[a].layer) - rMid) < std::fabs(m_padMap->get_radius(means[b].layer) - rMid); });
         }
-        std::sort(middle.begin(), middle.end(), [&](unsigned int l1, unsigned int l2)
-                  { return std::fabs(m_padMap->get_radius(l1) - rMid) < std::fabs(m_padMap->get_radius(l2) - rMid); });
-        for (std::size_t i = 0; i < middle.size() && !okMid; ++i)
+        for (std::size_t k = 0; k < order.size() && !okMid; ++k)
         {
-          okMid = makePoint(middle[i], side, crossing, byLayer[middle[i]], pts[1]);
+          ++m_nDrifts;
+          okMid = makePoint(means[order[k]], side, crossing, pts[1]);
         }
       }
       if (!okMid)
@@ -439,16 +489,12 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* topNode)
       // streaming mode: physical crossing only
       if (!m_triggeredMode)
       {
-        const double tol = m_edgeToleranceTbins * m_tpcAdcClock;
-        const double tMin = (minTbin - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
-        const double tMax = (maxTbin - m_t0Side[side]) * m_tpcAdcClock - crossing * m_crossingPeriodNs;
-        const bool timeOk = tMin > -tol && tMax <= m_maxLookupTimeNs + tol;
         const bool volumeOk = insideTpc(pts[0], side) && insideTpc(pts[1], side) && insideTpc(pts[2], side);
         const bool vertexOk = trajectory->get_fit_status() == 1 &&
                               std::fabs(trajectory->get_z() - m_collisionZ) <= m_maxVertexZ;
-        if (!timeOk || !volumeOk || !vertexOk)
+        if (!volumeOk || !vertexOk)
         {
-          ++(!timeOk ? m_nTimeWindow : (!volumeOk ? m_nOutsideTpc : m_nVertexZ));
+          ++(!volumeOk ? m_nOutsideTpc : m_nVertexZ);
           delete trajectory;
           continue;
         }
@@ -476,6 +522,7 @@ int Tpc_PolyTripletReco::process_event(PHCompositeNode* topNode)
               << " assembled=" << m_assembledTracks->size() << " trajectories=" << m_trajectories->size() << std::endl;
   }
   ++m_event;
+  m_processMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tStart).count();
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -490,7 +537,9 @@ int Tpc_PolyTripletReco::End(PHCompositeNode* /*topNode*/)
     std::cout << ", outside the drift time window " << m_nTimeWindow << ", outside the TPC " << m_nOutsideTpc
               << ", |z0| > " << m_maxVertexZ << " cm " << m_nVertexZ;
   }
-  std::cout << std::endl;
+  std::cout << std::endl
+            << Name() << "::End - drift lookup " << m_lookupMs / 1000.0 << " s (InitRun); process_event "
+            << (m_event > 0 ? m_processMs / m_event : 0.0) << " ms per event, " << m_nDrifts << " drift interpolations" << std::endl;
   return Fun4AllReturnCodes::EVENT_OK;
 }
 

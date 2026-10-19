@@ -125,6 +125,16 @@ int SiTpc_TrackResiduals::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("crossing_diff", &m_crossingDiff, "crossing_diff/I");
   m_tree->Branch("n_tracks_crossing", &m_nTracksCrossing, "n_tracks_crossing/I");
   m_tree->Branch("n_si_chains_crossing", &m_nSiChainsCrossing, "n_si_chains_crossing/I");
+  m_tree->Branch("track_vertex_z", &m_trackVertexZ, "track_vertex_z/D");
+  m_tree->Branch("vertex_z", &m_vertexZ, "vertex_z/D");
+  m_tree->Branch("vertex_dz", &m_vertexDz, "vertex_dz/D");
+  m_tree->Branch("vertex_score", &m_vertexScore, "vertex_score/D");
+  m_tree->Branch("vertex_status", &m_vertexStatus, "vertex_status/I");
+  m_tree->Branch("vertex_own_z", &m_vertexOwnZ, "vertex_own_z/I");
+  m_tree->Branch("vertex_n_si", &m_vertexNSi, "vertex_n_si/I");
+  m_tree->Branch("vertex_z_mean", &m_vertexZMean, "vertex_z_mean/D");
+  m_tree->Branch("vertex_z_rms", &m_vertexZRms, "vertex_z_rms/D");
+  m_tree->Branch("vertex_z_err", &m_vertexZErr, "vertex_z_err/D");
   m_tree->Branch("circle_rms", &m_circleRms, "circle_rms/D");
   m_tree->Branch("z_rms", &m_zRms, "z_rms/D");
   m_tree->Branch("pca_x", &m_pcaX, "pca_x/D");
@@ -187,6 +197,27 @@ int SiTpc_TrackResiduals::Init(PHCompositeNode* /*unused*/)
     m_matchTree->Branch("dz0", &m_cDz0, "dz0/F");
     m_matchTree->Branch("chi2", &m_cChi2, "chi2/F");
     m_matchTree->Branch("accepted", &m_cAccepted, "accepted/I");
+  }
+
+  if (m_writeVertices)
+  {
+    m_vertexTree = new TTree("vertices", "collision vertices (one per decided crossing)");
+    m_vertexTree->Branch("event", &m_event, "event/i");
+    m_vertexTree->Branch("crossing", &m_vCrossing, "crossing/I");
+    m_vertexTree->Branch("vertex_z", &m_vZ, "vertex_z/D");
+    m_vertexTree->Branch("n_tracks", &m_vNTracks, "n_tracks/I");
+    m_vertexTree->Branch("n_si", &m_vNSi, "n_si/I");
+    m_vertexTree->Branch("n_tier0", &m_vNTier0, "n_tier0/I");
+    m_vertexTree->Branch("z_mean", &m_vZMean, "z_mean/D");
+    m_vertexTree->Branch("z_rms", &m_vZRms, "z_rms/D");
+    m_vertexTree->Branch("z_err", &m_vZErr, "z_err/D");
+    m_vertexTree->Branch("track_z", &m_vTrackZ);
+    m_vertexTree->Branch("track_own_z", &m_vOwnZ);
+    m_vertexTree->Branch("track_tier", &m_vTier);
+    m_vertexTree->Branch("track_eta", &m_vEta);
+    m_vertexTree->Branch("track_pt", &m_vPt);
+    m_vertexTree->Branch("track_phi", &m_vPhi);
+    m_vertexTree->Branch("track_charge", &m_vCharge);
   }
 
   if (m_writeDdphiHists)
@@ -443,6 +474,9 @@ void SiTpc_TrackResiduals::reset_tree_values()
   m_tpcCrossingTier = -1;
   m_inttNHits = m_inttCrossingSpread = 0;
   m_nTracksCrossing = m_nSiChainsCrossing = 0;
+  m_trackVertexZ = m_vertexZ = m_vertexDz = m_vertexScore = kNaN;
+  m_vertexZMean = m_vertexZRms = m_vertexZErr = kNaN;
+  m_vertexStatus = m_vertexOwnZ = m_vertexNSi = 0;
   for (int l = 0; l < kNLayers; ++l)
   {
     m_resRPhiLayer[l] = kNaN;
@@ -513,13 +547,69 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
   // ---- tracks per crossing in this event: final Si+TPC tracks and selected Si chains
   m_tracksPerCrossing.clear();
   m_siChainsPerCrossing.clear();
+  m_vertices.clear();
   for (unsigned int it = 0; it < m_tracks->size(); ++it)
   {
     const SiTpc_Track* t = m_tracks->get_track(it);
     const TpcCrossingDecision* d = (t && t->isValid() && m_decisions) ? m_decisions->get_decision(t->get_tpc_assembled_track_id()) : nullptr;
-    if (d)
+    if (!d)
     {
-      ++m_tracksPerCrossing[d->get_selected_crossing()];
+      continue;
+    }
+    ++m_tracksPerCrossing[d->get_selected_crossing()];
+
+    // collision vertex of this crossing (tier 0 / 1 decisions carry a vertex, tier 2 not)
+    const unsigned char tier = d->get_selected_tier();
+    if (tier > 1)
+    {
+      continue;
+    }
+    VertexSummary& v = m_vertices[d->get_selected_crossing()];
+    const bool ownZ = std::isfinite(d->get_selected_score());  // TPC-only matches have no score
+    v.z = d->get_silicon_vertex_z();
+    ++v.nTracks;
+    v.nSi += ownZ;
+    v.nTier0 += tier == 0;
+    v.trackZ.push_back(d->get_tpc_z0() + d->get_delta_z());
+    v.ownZ.push_back(ownZ ? 1 : 0);
+    v.tier.push_back(tier);
+    v.eta.push_back(static_cast<float>(t->get_eta()));
+    v.pt.push_back(static_cast<float>(t->get_pt()));
+    v.phi.push_back(static_cast<float>(t->get_phi()));
+    v.charge.push_back(t->get_charge());
+  }
+  for (auto& [crossing, v] : m_vertices)
+  {
+    double sum = 0, sum2 = 0;
+    for (std::size_t i = 0; i < v.trackZ.size(); ++i)
+    {
+      if (v.ownZ[i])
+      {
+        sum += v.trackZ[i];
+        sum2 += v.trackZ[i] * v.trackZ[i];
+      }
+    }
+    v.zMean = v.nSi > 0 ? sum / v.nSi : kNaN;
+    v.zRms = v.nSi > 1 ? std::sqrt(std::max(0.0, (sum2 - v.nSi * v.zMean * v.zMean) / (v.nSi - 1))) : kNaN;
+    v.zErr = v.nSi > 0 ? m_vertexTrackZSigma / std::sqrt(v.nSi) : kNaN;
+    if (m_vertexTree)
+    {
+      m_vCrossing = crossing;
+      m_vZ = v.z;
+      m_vNTracks = v.nTracks;
+      m_vNSi = v.nSi;
+      m_vNTier0 = v.nTier0;
+      m_vZMean = v.zMean;
+      m_vZRms = v.zRms;
+      m_vZErr = v.zErr;
+      m_vTrackZ = v.trackZ;
+      m_vOwnZ = v.ownZ;
+      m_vTier = v.tier;
+      m_vEta = v.eta;
+      m_vPt = v.pt;
+      m_vPhi = v.phi;
+      m_vCharge = v.charge;
+      m_vertexTree->Fill();
     }
   }
   if (m_siSeeds)
@@ -716,6 +806,21 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
       m_nTracksCrossing = itr != m_tracksPerCrossing.end() ? itr->second : 0;
       const auto isc = m_siChainsPerCrossing.find(m_tpcCrossing);
       m_nSiChainsCrossing = isc != m_siChainsPerCrossing.end() ? isc->second : 0;
+
+      m_vertexStatus = d->get_status();
+      const auto iv = m_vertices.find(m_tpcCrossing);
+      if (iv != m_vertices.end())
+      {
+        m_vertexOwnZ = std::isfinite(d->get_selected_score()) ? 1 : 0;
+        m_trackVertexZ = d->get_tpc_z0() + d->get_delta_z();
+        m_vertexZ = d->get_silicon_vertex_z();
+        m_vertexDz = d->get_delta_z();
+        m_vertexScore = d->get_selected_score();
+        m_vertexNSi = iv->second.nSi;
+        m_vertexZMean = iv->second.zMean;
+        m_vertexZRms = iv->second.zRms;
+        m_vertexZErr = iv->second.zErr;
+      }
     }
     if (m_siSeeds && m_siChainId >= 0)
     {
@@ -758,11 +863,16 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
   {
     m_matchTree->AutoSave("SaveSelf");
   }
+  if (m_vertexTree)
+  {
+    m_vertexTree->AutoSave("SaveSelf");
+  }
 
   if (Verbosity() > 0)
   {
     std::cout << Name() << "::process_event - event " << m_evt << " Si+TPC tracks=" << m_tracks->size()
-              << " residuals=" << nfilled << " candidates=" << m_tracks->size_candidates() << std::endl;
+              << " residuals=" << nfilled << " candidates=" << m_tracks->size_candidates() << " vertices=" << m_vertices.size()
+              << std::endl;
   }
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -779,6 +889,10 @@ int SiTpc_TrackResiduals::End(PHCompositeNode* /*unused*/)
     if (m_matchTree)
     {
       m_matchTree->Write();
+    }
+    if (m_vertexTree)
+    {
+      m_vertexTree->Write();
     }
     if (m_writeDdphiHists)
     {
@@ -826,6 +940,7 @@ int SiTpc_TrackResiduals::End(PHCompositeNode* /*unused*/)
     m_outfile = nullptr;
     m_tree = nullptr;
     m_matchTree = nullptr;
+    m_vertexTree = nullptr;
     // histograms were owned by the file and deleted by Close()
     for (int q = 0; q < 2; ++q)
     {

@@ -87,6 +87,14 @@ class SiHitSeedReco : public SubsysReco
   // only INTT hits of that crossing.  < 0: off (default; keep off in triggered mode, where the
   // trajectory crossing is not an INTT time bucket)
   void setInttCrossingWindow(int n) { m_inttCrossingWindow = n; }
+  // true (default): INTT blobs are built per time bucket (hits of different crossings are never
+  // merged into one blob); false: previous behaviour, all buckets of a strip region together
+  void setInttBlobsPerTimeBucket(bool v) { m_inttBlobsPerBucket = v; }
+  // true (default): blobs = clusters of touching pixels (MVTX, same chip / strobe) and
+  // neighbouring strips (INTT, same sensor / z column / time bucket), as the hardware
+  // clusterizers; false: previous behaviour, connected cells of the (z, Uphi) search grid
+  // (cells of ~0.35 cm x 0.035 rad: hits of different particles within that are merged)
+  void setBlobsFromPixelAdjacency(bool v) { m_blobsFromPixels = v; }
   void setRefitWithIntt(bool v) { m_refitWithIntt = v; }
 
   // ---------------------------------------------------------------------------
@@ -375,6 +383,7 @@ class SiHitSeedReco : public SubsysReco
   void alignPoint(TrkrDefs::hitsetkey hskey, int layer, double& z, double& phi) const;
   bool fillHits(PHCompositeNode*);
   void buildBlobs();
+  void buildBlobsFromPixels();
   void buildHitGrid();
   std::vector<TpcTrackInput> collectTpcTracks(PHCompositeNode*) const;
   void processTpcTrack(const TpcTrackInput&);
@@ -424,6 +433,8 @@ class SiHitSeedReco : public SubsysReco
   int m_minMvtxLayers = 2;
   int m_minInttLayers = 0;
   int m_inttCrossingWindow = -1;                // < 0: off
+  bool m_inttBlobsPerBucket = true;
+  bool m_blobsFromPixels = true;
   int m_curCrossing = 0;                        // crossing of the TPC input being chained
   mutable unsigned long m_inttTimeChecked = 0;  // INTT hits in a propagation window (time cut on)
   mutable unsigned long m_inttTimeRejected = 0; // ... of them outside the crossing window
