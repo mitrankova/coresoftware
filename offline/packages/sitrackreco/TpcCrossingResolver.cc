@@ -44,6 +44,7 @@ namespace
     double credit = 0;   // match * quality
     double vote = 0;     // credit * credit share of the track
     bool inMain = false; // voted for the main vertex of its crossing (pass 1)
+    bool timed = false;  // the chain has INTT hits, i.e. a time (crossing) of its own
     double event = 0;    // leave-one-out support of the main vertex of its crossing
     double score = 0;
   };
@@ -133,12 +134,16 @@ int TpcCrossingResolver::InitRun(PHCompositeNode* topNode)
     std::cout << Name() << ":   credit = exp(-dz^2/2 " << m_dzSigma << "^2) exp(-" << m_rphiWeight << " chi2_rphi/n /2)"
               << " x (n_layers/7)^" << m_layerPower << " exp(-" << m_ddphiWeight << " <ddphi pull^2>/2) x " << m_noInttFactor
               << " if no INTT; chains chi2/ndf <= " << m_maxChainChi2 << "; vertices: window " << m_clusterZWindow
-              << " cm, sigma z " << m_siZSigma << " cm, support scale " << m_supportScale << ", floor " << m_eventFloor
+              << " cm, single-track Si z sigma " << m_siZSigma << " cm (support: x sqrt(1 + 1/n_other)), support scale " << m_supportScale << ", floor " << m_eventFloor
               << "; lone track: credit >= " << m_minLoneCredit << " and >= " << m_ambiguityRatio << " x its other hypotheses" << std::endl;
+    std::cout << Name() << ":   collisions need a chain with INTT hits (MVTX-only chains only join them): "
+              << (m_requireInttForCollision ? "yes" : "no") << std::endl;
     std::cout << Name() << ":   split collisions: "
-              << (m_mergeSplitCollisions ? std::format("merged if |crossing difference| <= {}, |z difference| <= {} cm and "
-                                                       "chi2(one crossing) - chi2(own crossings) < {} (dz sigma {} cm)",
-                                                       m_mergeMaxCrossings, m_mergeZWindow, m_mergeMaxDeltaChi2, m_dzSigma)
+              << (m_mergeSplitCollisions ? std::format("before pass 2, merged if |crossing difference| <= {}, |z difference| <= "
+                                                       "min({} cm, {} sigma_z sqrt(1/n1 + 1/n2)) and chi2(one crossing) - "
+                                                       "chi2(own crossings) < {} (dz sigma {} cm); tier 0 with >= {} tracks",
+                                                       m_mergeMaxCrossings, m_mergeZWindow, m_mergeZNSigma, m_mergeMaxDeltaChi2, m_dzSigma,
+                                                       m_mergeTier0MinTracks)
                                          : std::string("not merged"))
               << std::endl;
   }
@@ -228,6 +233,7 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       h.dz = ch.tpc_dz_offset;
       h.tpcZ = t->get_z();
       h.z = h.tpcZ + h.dz;
+      h.timed = ch.n_intt > 0;
       // match: z at this crossing and r*phi
       const double rphi = (ch.tpc_nres > 0 && std::isfinite(ch.tpc_chi2_rphi)) ? ch.tpc_chi2_rphi / ch.tpc_nres : 0.0;
       h.match = std::exp(-0.5 * h.dz * h.dz / sig2 - 0.5 * m_rphiWeight * rphi);
@@ -311,16 +317,20 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
     for (auto& h : hyps)
     {
       Vertex v = main1[h.crossing];
+      unsigned int nOther = v.n;
       if (h.inMain)
       {
         v.sumW -= h.vote;
         v.sumWZ -= h.vote * h.z;
+        nOther = nOther > 0 ? nOther - 1 : 0;
       }
       h.event = 0;
-      if (v.sumW > 1e-6)
+      if (v.sumW > 1e-6 && nOther > 0)
       {
+        // track vs vertex of the other tracks: sigma^2 = sigma_track^2 (1 + 1 / n_other)
         const double d = h.z - v.mean();
-        h.event = v.sumW / (v.sumW + m_supportScale) * std::exp(-0.5 * d * d / sigH2);
+        const double s2 = sigH2 * (1.0 + 1.0 / nOther);
+        h.event = v.sumW / (v.sumW + m_supportScale) * std::exp(-0.5 * d * d / s2);
       }
       h.score = h.credit * (m_eventFloor + h.event);
     }
@@ -393,6 +403,18 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
   //   lone      : the only winner of its crossing -> moved like a displaced one if possible, else
   //               kept only if robust (credit >= setMinLoneCredit and >= setAmbiguityRatio x its
   //               other hypotheses, i.e. its other crossings are far away in z), else no chain
+  // anchored: the main vertex of the crossing contains a winner with INTT hits. MVTX-only chains
+  // have no time information (the MVTX integrates over many crossings, and a TPC-guided window
+  // finds some MVTX-only chain near the TPC z of ANY crossing hypothesis), so they cannot make a
+  // collision of their own, only join one that an INTT-timed chain establishes
+  std::map<short, bool> anchored;
+  struct SecondVertex
+  {
+    short crossing;
+    double zMain, zSecond;
+    unsigned int nTimed;
+  };
+  std::vector<SecondVertex> secondTimed;  // crossings with another vertex of >= 2 INTT-timed winners
   auto buildMain = [&](std::map<short, Vertex>& mainV, std::map<unsigned int, bool>& inMainV)
   {
     std::map<short, std::vector<unsigned int>> perCrossing;
@@ -402,6 +424,8 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
     }
     mainV.clear();
     inMainV.clear();
+    anchored.clear();
+    secondTimed.clear();
     for (const auto& [crossing, ids] : perCrossing)
     {
       std::vector<std::pair<double, double>> zw;
@@ -411,8 +435,34 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       }
       std::vector<int> index;
       const auto vtx = clusterZ(zw, m_clusterZWindow, index);
-      const int m = mainVertex(vtx);
+      std::vector<unsigned int> timed(vtx.size(), 0);  // INTT-timed winners per vertex
+      for (std::size_t i = 0; i < ids.size(); ++i)
+      {
+        timed[index[i]] += winner[ids[i]]->timed ? 1 : 0;
+      }
+      // main vertex: the largest one with an INTT-timed winner (the largest one if none or if
+      // the INTT requirement is off)
+      int m = -1;
+      for (std::size_t j = 0; m_requireInttForCollision && j < vtx.size(); ++j)
+      {
+        if (timed[j] && (m < 0 || vtx[j].sumW > vtx[m].sumW))
+        {
+          m = static_cast<int>(j);
+        }
+      }
+      if (m < 0)
+      {
+        m = mainVertex(vtx);
+      }
       mainV[crossing] = vtx[m];
+      anchored[crossing] = !m_requireInttForCollision || timed[m] > 0;
+      for (std::size_t j = 0; j < vtx.size(); ++j)
+      {
+        if (static_cast<int>(j) != m && timed[j] >= 2)
+        {
+          secondTimed.push_back({crossing, vtx[m].mean(), vtx[j].mean(), timed[j]});
+        }
+      }
       for (std::size_t i = 0; i < ids.size(); ++i)
       {
         inMainV[ids[i]] = index[i] == m;
@@ -421,100 +471,21 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
   };
   std::map<short, Vertex> main2;
   std::map<unsigned int, bool> inMain2;
+  std::deque<Hypothesis> relabeled;                  // winners moved to the common crossing c* (stable addresses)
+  std::map<unsigned int, unsigned int> mergedGroup;  // assembled id -> tracks of its merged collision
   buildMain(main2, inMain2);
 
-  enum Kind
-  {
-    Supported = 0,
-    Moved = 1,
-    Lone = 2
-  };
-  std::map<unsigned int, int> kind;
-  std::vector<unsigned int> byScore;
-  for (const auto& [id, h] : winner)
-  {
-    byScore.push_back(id);
-  }
-  std::sort(byScore.begin(), byScore.end(), [&](unsigned int a, unsigned int b) { return winner[a]->score > winner[b]->score; });
-  for (const unsigned int id : byScore)
-  {
-    const Hypothesis* w = winner[id];
-    const Vertex& v = main2[w->crossing];
-    if (inMain2[id] && v.n >= 2)
-    {
-      kind[id] = Supported;
-      continue;
-    }
-    // another hypothesis of the track joining a supported main vertex (without this track)
-    const Hypothesis* alt = nullptr;
-    for (const auto& h : byTrack[id])
-    {
-      if (&h == w)
-      {
-        continue;
-      }
-      const auto im = main2.find(h.crossing);
-      if (im == main2.end() || im->second.n < 2 || std::fabs(h.z - im->second.mean()) > m_clusterZWindow || !chainFree(h, id))
-      {
-        continue;
-      }
-      alt = &h;  // hypotheses are sorted by score: the first one found is the best
-      break;
-    }
-    if (alt)
-    {
-      release(*w, id);
-      winner[id] = alt;
-      take(*alt, id);
-      kind[id] = Moved;
-      ++m_nMoved;
-      continue;
-    }
-    if (inMain2[id] && v.n == 1)
-    {
-      double otherCredit = 0;
-      for (const auto& h : byTrack[id])
-      {
-        if (&h != w)
-        {
-          otherCredit = std::max(otherCredit, h.credit);
-        }
-      }
-      if (w->credit >= m_minLoneCredit && w->credit >= m_ambiguityRatio * otherCredit)
-      {
-        kind[id] = Lone;
-        ++m_nLoneKept;
-        continue;
-      }
-    }
-    // displaced, or a lone track that is not robust: no chain
-    if (inMain2[id] && v.n == 1)
-    {
-      double otherCredit = 0;
-      for (const auto& h : byTrack[id])
-      {
-        otherCredit = &h != w ? std::max(otherCredit, h.credit) : otherCredit;
-      }
-      noChainReason[id] = std::format("alone in crossing {} (z {:.2f}), not robust: credit {:.3f} (min {}), best other hypothesis {:.3f} (ratio {})",
-                                      w->crossing, w->z, w->credit, m_minLoneCredit, otherCredit, m_ambiguityRatio);
-    }
-    else
-    {
-      noChainReason[id] = std::format("displaced: crossing {} has a collision at z {:.2f} with {} tracks, its chain at z {:.2f}",
-                                      w->crossing, v.mean(), v.n, w->z);
-    }
-    release(*w, id);
-    winner.erase(id);
-    ++m_nDropped;
-  }
-
-  // ---- 7. one collision = one crossing also across crossings: a collision whose tracks were
+  // ---- 6a. split collisions, one collision = one crossing also across crossings: a collision whose tracks were
   // split over neighbouring crossings (each track picks its crossing from its own dz, sigma ~0.3 cm
   // against a crossing step of ~0.8 - 1 cm) shows up as collisions at the same Si z in crossings
   // c, c +- 1, c +- 2. The Si z of a track does not depend on the crossing; only its TPC z (hence
   // dz) does, by one crossing step per crossing (taken from the trajectories, no step assumed).
+  //   done BEFORE pass 2 drops displaced / lone tracks, so the tracks of a split collision are
+  //   still there to be recovered
   //   candidates : main vertices of the winners, heaviest first; another one joins if
-  //                |crossing difference| <= setMergeMaxCrossings and |z difference| <= setMergeZWindow
+  //                |crossing difference| <= setMergeMaxCrossings and the Si vertices agree:
+  //                |z difference| <= min(setMergeZWindow, setMergeZNSigma * sigma_z * sqrt(1/n1 + 1/n2)),
+  //                sigma_z = setSiZSigma (single-track Si z at the beam)
   //   test       : chi2(c) = sum over the tracks of min((z_Si - z_TPC(c))^2 / sigma_dz^2, 9)
   //                (9 also for a track without a trajectory at c); joined if
   //                min_c chi2(c) - chi2(every track at its own crossing) < setMergeMaxDeltaChi2
@@ -522,7 +493,6 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
   //   crossing   : c* = argmin chi2(c), i.e. the crossing of the combined dz (error sigma_dz / sqrt(n));
   //                the tracks of the group at other crossings move to c* with the same chain
   //                (dz recomputed at c*) unless their |dz| at c* is beyond 3 sigma_dz
-  std::deque<Hypothesis> relabeled;  // winners moved to c* (stable addresses)
   if (m_mergeSplitCollisions && seeds && !winner.empty())
   {
     buildMain(main2, inMain2);
@@ -606,7 +576,8 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       for (std::size_t b = a + 1; b < cols.size(); ++b)
       {
         if (used[b] || std::abs(cols[b].crossing - cols[a].crossing) > m_mergeMaxCrossings ||
-            std::fabs(cols[b].z - cols[a].z) > m_mergeZWindow)
+            std::fabs(cols[b].z - cols[a].z) >
+                std::min(m_mergeZWindow, m_mergeZNSigma * m_siZSigma * std::sqrt(1.0 / cols[a].ids.size() + 1.0 / cols[b].ids.size())))
         {
           continue;
         }
@@ -657,14 +628,121 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
           winner[id] = &relabeled.back();
           ++m_nMergeMoved;
         }
-        if (kind[id] == Lone)
-        {
-          --m_nLoneKept;
-        }
-        kind[id] = Supported;
+        mergedGroup[id] = static_cast<unsigned int>(ids.size());
       }
     }
   }
+  buildMain(main2, inMain2);  // collisions after the merge, input of the classification
+  m_nSecondTimed += secondTimed.size();
+  if (Verbosity() > 1)
+  {
+    for (const auto& sv : secondTimed)
+    {
+      std::cout << Name() << ": crossing " << sv.crossing << " has a second vertex with " << sv.nTimed
+                << " INTT-timed tracks at z " << sv.zSecond << " (main vertex z " << sv.zMain << "): suppressed by one collision per crossing" << std::endl;
+    }
+  }
+
+  enum Kind
+  {
+    Supported = 0,
+    Moved = 1,
+    Lone = 2
+  };
+  std::map<unsigned int, int> kind;
+  std::vector<unsigned int> byScore;
+  for (const auto& [id, h] : winner)
+  {
+    byScore.push_back(id);
+  }
+  std::sort(byScore.begin(), byScore.end(), [&](unsigned int a, unsigned int b) { return winner[a]->score > winner[b]->score; });
+  for (const unsigned int id : byScore)
+  {
+    const Hypothesis* w = winner[id];
+    const Vertex& v = main2[w->crossing];
+    if (inMain2[id] && v.n >= 2 && anchored[w->crossing])
+    {
+      kind[id] = Supported;
+      continue;
+    }
+    // another hypothesis of the track joining a supported main vertex (without this track)
+    const Hypothesis* alt = nullptr;
+    for (const auto& h : byTrack[id])
+    {
+      if (&h == w)
+      {
+        continue;
+      }
+      const auto im = main2.find(h.crossing);
+      if (im == main2.end() || im->second.n < 2 || !anchored[h.crossing] || std::fabs(h.z - im->second.mean()) > m_clusterZWindow ||
+          !chainFree(h, id))
+      {
+        continue;
+      }
+      alt = &h;  // hypotheses are sorted by score: the first one found is the best
+      break;
+    }
+    if (alt)
+    {
+      release(*w, id);
+      winner[id] = alt;
+      take(*alt, id);
+      kind[id] = Moved;
+      ++m_nMoved;
+      continue;
+    }
+    if (inMain2[id] && v.n == 1)
+    {
+      double otherCredit = 0;
+      for (const auto& h : byTrack[id])
+      {
+        if (&h != w)
+        {
+          otherCredit = std::max(otherCredit, h.credit);
+        }
+      }
+      if ((w->timed || !m_requireInttForCollision) && w->credit >= m_minLoneCredit && w->credit >= m_ambiguityRatio * otherCredit)
+      {
+        kind[id] = Lone;
+        ++m_nLoneKept;
+        continue;
+      }
+    }
+    // displaced, or a lone track that is not robust: no chain
+    if (inMain2[id] && v.n == 1)
+    {
+      double otherCredit = 0;
+      for (const auto& h : byTrack[id])
+      {
+        otherCredit = &h != w ? std::max(otherCredit, h.credit) : otherCredit;
+      }
+      if (m_requireInttForCollision && !w->timed)
+      {
+        noChainReason[id] = std::format("no INTT time: alone in crossing {} (z {:.2f}) with an MVTX-only chain", w->crossing, w->z);
+        ++m_nUntimed;
+      }
+      else
+      {
+        noChainReason[id] = std::format("alone in crossing {} (z {:.2f}), not robust: credit {:.3f} (min {}), best other hypothesis {:.3f} (ratio {})",
+                                        w->crossing, w->z, w->credit, m_minLoneCredit, otherCredit, m_ambiguityRatio);
+      }
+    }
+    else if (inMain2[id] && !anchored[w->crossing])
+    {
+      noChainReason[id] = std::format("no INTT time: the collision of crossing {} (z {:.2f}, {} tracks) has only MVTX-only chains",
+                                      w->crossing, v.mean(), v.n);
+      ++m_nUntimed;
+    }
+    else
+    {
+      noChainReason[id] = std::format("displaced: crossing {} has a collision at z {:.2f} with {} tracks, its chain at z {:.2f}",
+                                      w->crossing, v.mean(), v.n, w->z);
+    }
+    release(*w, id);
+    winner.erase(id);
+    ++m_nDropped;
+  }
+
   buildMain(main2, inMain2);  // final collisions (statistics, TPC-only match)
 
   // ---- SI_HIT_SEED_EVENT: exactly the winning chains are selected, at their crossing
@@ -708,16 +786,20 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       const Hypothesis& best = *iw->second;
       const int k = kind[id];
       double second = 0, secondDz = std::numeric_limits<double>::quiet_NaN();
+      // merged collision: the same chain at another crossing is not a competitor (the crossing was
+      // decided by the combined dz of the collision)
+      const auto ig = mergedGroup.find(id);
+      const bool merged = ig != mergedGroup.end();
       for (const auto& h : hyps)
       {
-        if (h.crossing != best.crossing && h.score > second)
+        if (h.crossing != best.crossing && !(merged && h.chain == best.chain) && h.score > second)
         {
           second = h.score;
           secondDz = h.dz;
         }
       }
       const bool clear = second <= 0 || best.score >= m_ambiguityRatio * second;
-      const unsigned char tier = (k == Supported && clear) ? 0 : 1;
+      const unsigned char tier = (k == Supported && clear && (!merged || ig->second >= m_mergeTier0MinTracks)) ? 0 : 1;
       const auto bestCredit = std::max_element(hyps.begin(), hyps.end(), [](const Hypothesis& a, const Hypothesis& b) { return a.credit < b.credit; });
       m_nChangedByEvent += bestCredit->crossing != best.crossing;
 
@@ -770,7 +852,7 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
           continue;
         }
         const double d = zT - im->second.mean();
-        const double chi2 = d * d / (m_tpcZSigma * m_tpcZSigma + sigH2);
+        const double chi2 = d * d / (m_tpcZSigma * m_tpcZSigma + sigH2 / im->second.n);  // vertex error sigma / sqrt(n)
         nMatch += chi2 < 4.0;
         if (chi2 < bestChi2)
         {
@@ -807,7 +889,10 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       if (ir != noChainReason.end())
       {
         reason = ir->second;
-        category = reason.rfind("its ", 0) == 0 ? "lost by ownership" : (reason.rfind("alone", 0) == 0 ? "alone in its crossing, not robust" : "displaced by another collision in its crossing");
+        category = reason.rfind("its ", 0) == 0     ? "lost by ownership"
+                   : reason.rfind("no INTT", 0) == 0 ? "MVTX-only chain without an INTT-timed collision"
+                   : reason.rfind("alone", 0) == 0   ? "alone in its crossing, not robust"
+                                                     : "displaced by another collision in its crossing";
       }
       else
       {
@@ -904,8 +989,11 @@ int TpcCrossingResolver::End(PHCompositeNode* /*topNode*/)
               << m_nOtherChain << ", left without a chain by the ownership " << m_nLostByOwnership << std::endl
               << Name() << "::End - one collision per crossing: moved to a supported vertex " << m_nMoved
               << ", lone kept (robust) " << m_nLoneKept << ", dropped (displaced / lone not robust) " << m_nDropped << std::endl
+              << Name() << "::End - dropped because no INTT-timed chain in their collision (MVTX-only) " << m_nUntimed << std::endl
               << Name() << "::End - split collisions merged into the collision of a neighbouring crossing " << m_nMergedCollisions
               << ", tracks moved to the common crossing " << m_nMergeMoved << std::endl
+              << Name() << "::End - crossings with a second vertex of >= 2 INTT-timed tracks (suppressed by one collision per crossing) "
+              << m_nSecondTimed << std::endl
               << Name() << "::End - tracks without a Si chain, why (tier 1 = TPC-only match, drawn grey in SiTpc_EventDisplay / tier 2 = not used):" << std::endl;
     for (const auto& [cat, n] : m_noChainCategory)
     {
