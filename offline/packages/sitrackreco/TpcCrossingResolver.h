@@ -33,7 +33,8 @@
 //                    collision: its main vertex is the cluster with the largest vote sum, the
 //                    other clusters are the weak votes of wrong hypotheses
 //   5. decision    : score = credit * (floor + W(-h) / (W(-h) + supportScale)
-//                    * exp(-(z - z_main)^2 / 2 sigma_z^2)), W(-h) = vote sum of the main vertex
+//                    * exp(-(z - z_main)^2 / 2 sigma^2)), sigma^2 = sigma_z^2 (1 + 1/n_other),
+//                    sigma_z = setSiZSigma (single-track Si z), W(-h) = vote sum of the main vertex
 //                    of the crossing without the hypothesis' own vote (a hypothesis in a weak
 //                    cluster sees the main vertex far away: credit * floor);
 //                    tracks in order of their best score take their best hypothesis whose chain
@@ -46,12 +47,24 @@
 //                               else kept only if robust: credit >= setMinLoneCredit and
 //                               >= setAmbiguityRatio x its other hypotheses (its other crossings
 //                               are far away in z), else no chain
-//   7. split collisions: collisions at the same Si z in crossings within setMergeMaxCrossings
+//   INTT time: with setRequireInttForCollision (default on) a collision exists only if a winner
+//                    with INTT hits is in it (the main vertex of a crossing is the largest one
+//                    with such a winner); MVTX-only chains carry no time (MVTX integration, and the
+//                    TPC-guided search finds an MVTX-only chain near the TPC z of any crossing), so
+//                    they only join such collisions: a lone MVTX-only winner, or a collision made
+//                    of MVTX-only winners only, is moved (as displaced) or gets no chain
+//   split collisions (done at the start of pass 2, before any track is dropped): collisions in
+//                    crossings within setMergeMaxCrossings whose Si vertices agree
+//                    (|dz_vtx| <= min(setMergeZWindow, setMergeZNSigma sigma_z sqrt(1/n1+1/n2)))
 //                    are one collision if a common crossing fits the dz of all their tracks
 //                    (chi2 increase < setMergeMaxDeltaChi2); its tracks move to that crossing
 //                    (same chain, dz recomputed), so one collision is in exactly one crossing
-//   tier 0: supported, best score >= setAmbiguityRatio x the best of another crossing
-//   tier 1: supported but ambiguous, moved, lone kept, or no chain and the TPC z0 matches exactly
+//   monitoring: crossings with a second vertex of >= 2 INTT-timed winners are counted (End) and
+//                    printed (Verbosity > 1): two collisions in one crossing, the second suppressed
+//   tier 0: supported, best score >= setAmbiguityRatio x the best of another crossing (for a
+//           merged collision: the same chain at another crossing does not count, and the
+//           collision needs >= setMergeTier0MinTracks tracks)
+//   tier 1: supported but ambiguous, moved, merged (small), lone kept, or no chain and the TPC z0 matches exactly
 //           one collision (>= 2 tracks, credit sum >= setMinSupportTpcOnly) of its crossings
 //   tier 2: the rest (skipped by Tpc_PolyClusterizer with its default max tier 1)
 //   SI_HIT_SEED_EVENT: exactly the winning chain of every track is selected, with tpc_crossing /
@@ -99,7 +112,10 @@ class TpcCrossingResolver : public SubsysReco
   void setNoInttFactor(double v) { m_noInttFactor = v; }
   // 4. vertices: a vote joins a cluster if within this distance of its weighted mean [cm]
   void setClusterZWindow(double cm) { m_clusterZWindow = cm; }
-  // 5. collision z resolution of a track with a chain / TPC-only [cm]
+  // 5. single-track Si z resolution at the beam [cm] (measured ~0.22); the support of a track by
+  //    the vertex of n_other other tracks uses sigma^2 = sigma_z^2 (1 + 1/n_other), the TPC-only
+  //    match sigma_tpc^2 + sigma_z^2 / n, the split-collision z test sigma_z sqrt(1/n1 + 1/n2);
+  //    setTpcZSigma: TPC-only z0 resolution [cm]
   void setSiZSigma(double cm) { m_siZSigma = cm; }
   void setTpcZSigma(double cm) { m_tpcZSigma = cm; }
   //    event factor W / (W + scale); floor added to it (a lone track keeps credit * floor)
@@ -113,11 +129,16 @@ class TpcCrossingResolver : public SubsysReco
   void setMinLoneCredit(double v) { m_minLoneCredit = v; }
   //    TPC-only tracks: minimum collision support (credit sum of its tracks) to be matched
   void setMinSupportTpcOnly(double v) { m_minSupportTpcOnly = v; }
+  // collisions need a winner with INTT hits; MVTX-only chains only join them
+  void setRequireInttForCollision(bool v) { m_requireInttForCollision = v; }
   // 7. split collisions: merge on/off, max crossing distance, max Si z distance [cm],
   //    max chi2 increase of the common crossing (sigma = setDzSigma)
   void setMergeSplitCollisions(bool v) { m_mergeSplitCollisions = v; }
   void setMergeMaxCrossings(int n) { m_mergeMaxCrossings = n; }
-  void setMergeZWindow(double cm) { m_mergeZWindow = cm; }
+  void setMergeZWindow(double cm) { m_mergeZWindow = cm; }  // upper limit of the z test [cm]
+  void setMergeZNSigma(double n) { m_mergeZNSigma = n; }
+  //    a merged track is tier 0 (if otherwise clear) when its collision has at least this many tracks
+  void setMergeTier0MinTracks(unsigned int n) { m_mergeTier0MinTracks = n; }
   void setMergeMaxDeltaChi2(double v) { m_mergeMaxDeltaChi2 = v; }
   // hypotheses with |TPC z0| beyond this are not used [cm]
   void setMaxVertexZ(double cm) { m_maxVertexZ = cm; }
@@ -138,7 +159,7 @@ class TpcCrossingResolver : public SubsysReco
   double m_ddphiWeight{1.0};
   double m_noInttFactor{0.5};
   double m_clusterZWindow{0.5};
-  double m_siZSigma{0.15};
+  double m_siZSigma{0.22};
   double m_tpcZSigma{0.5};
   double m_supportScale{1.0};
   double m_eventFloor{0.05};
@@ -147,9 +168,12 @@ class TpcCrossingResolver : public SubsysReco
   double m_minLoneCredit{0.3};
   double m_minSupportTpcOnly{1.0};
   double m_maxVertexZ{25.0};
+  bool m_requireInttForCollision{true};
   bool m_mergeSplitCollisions{true};
   int m_mergeMaxCrossings{2};
-  double m_mergeZWindow{0.5};
+  double m_mergeZWindow{1.0};
+  double m_mergeZNSigma{3.0};
+  unsigned int m_mergeTier0MinTracks{3};
   double m_mergeMaxDeltaChi2{3.0};
 
   TpcCrossingDecisionContainer* m_decisions{nullptr};
@@ -164,8 +188,10 @@ class TpcCrossingResolver : public SubsysReco
   unsigned long m_nMoved{0};             // pass 2: moved to another hypothesis at a supported vertex
   unsigned long m_nLoneKept{0};          // pass 2: lone and robust
   unsigned long m_nDropped{0};           // pass 2: displaced or lone and not robust -> no chain
+  unsigned long m_nUntimed{0};           // pass 2: MVTX-only winners without an INTT-timed collision -> no chain
   unsigned long m_nMergedCollisions{0};  // 7: collisions merged into a neighbouring crossing's one
   unsigned long m_nMergeMoved{0};        // 7: tracks moved to the common crossing
+  unsigned long m_nSecondTimed{0};       // crossings with a second vertex of >= 2 INTT-timed winners
   std::map<unsigned int, unsigned long> m_multiplicity;     // Si-matched tracks per collision (crossing) -> count
   std::map<unsigned int, unsigned long> m_multiplicityAll;  // + TPC-only matched tracks
   std::vector<double> m_dzTier0;                           // dz of the tier-0 winners (End: width)
