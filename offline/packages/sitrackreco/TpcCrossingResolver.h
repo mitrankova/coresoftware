@@ -46,6 +46,10 @@
 //                               else kept only if robust: credit >= setMinLoneCredit and
 //                               >= setAmbiguityRatio x its other hypotheses (its other crossings
 //                               are far away in z), else no chain
+//   7. split collisions: collisions at the same Si z in crossings within setMergeMaxCrossings
+//                    are one collision if a common crossing fits the dz of all their tracks
+//                    (chi2 increase < setMergeMaxDeltaChi2); its tracks move to that crossing
+//                    (same chain, dz recomputed), so one collision is in exactly one crossing
 //   tier 0: supported, best score >= setAmbiguityRatio x the best of another crossing
 //   tier 1: supported but ambiguous, moved, lone kept, or no chain and the TPC z0 matches exactly
 //           one collision (>= 2 tracks, credit sum >= setMinSupportTpcOnly) of its crossings
@@ -109,6 +113,12 @@ class TpcCrossingResolver : public SubsysReco
   void setMinLoneCredit(double v) { m_minLoneCredit = v; }
   //    TPC-only tracks: minimum collision support (credit sum of its tracks) to be matched
   void setMinSupportTpcOnly(double v) { m_minSupportTpcOnly = v; }
+  // 7. split collisions: merge on/off, max crossing distance, max Si z distance [cm],
+  //    max chi2 increase of the common crossing (sigma = setDzSigma)
+  void setMergeSplitCollisions(bool v) { m_mergeSplitCollisions = v; }
+  void setMergeMaxCrossings(int n) { m_mergeMaxCrossings = n; }
+  void setMergeZWindow(double cm) { m_mergeZWindow = cm; }
+  void setMergeMaxDeltaChi2(double v) { m_mergeMaxDeltaChi2 = v; }
   // hypotheses with |TPC z0| beyond this are not used [cm]
   void setMaxVertexZ(double cm) { m_maxVertexZ = cm; }
 
@@ -137,6 +147,10 @@ class TpcCrossingResolver : public SubsysReco
   double m_minLoneCredit{0.3};
   double m_minSupportTpcOnly{1.0};
   double m_maxVertexZ{25.0};
+  bool m_mergeSplitCollisions{true};
+  int m_mergeMaxCrossings{2};
+  double m_mergeZWindow{0.5};
+  double m_mergeMaxDeltaChi2{3.0};
 
   TpcCrossingDecisionContainer* m_decisions{nullptr};
   unsigned long m_nEvents{0};
@@ -150,8 +164,12 @@ class TpcCrossingResolver : public SubsysReco
   unsigned long m_nMoved{0};             // pass 2: moved to another hypothesis at a supported vertex
   unsigned long m_nLoneKept{0};          // pass 2: lone and robust
   unsigned long m_nDropped{0};           // pass 2: displaced or lone and not robust -> no chain
+  unsigned long m_nMergedCollisions{0};  // 7: collisions merged into a neighbouring crossing's one
+  unsigned long m_nMergeMoved{0};        // 7: tracks moved to the common crossing
   std::map<unsigned int, unsigned long> m_multiplicity;     // Si-matched tracks per collision (crossing) -> count
   std::map<unsigned int, unsigned long> m_multiplicityAll;  // + TPC-only matched tracks
   std::vector<double> m_dzTier0;                           // dz of the tier-0 winners (End: width)
+  std::map<std::string, unsigned long> m_noChainCategory;                     // why tracks have no Si chain
+  std::map<std::pair<std::string, int>, unsigned long> m_noChainTier;         // (why, tier) -> count
 };
 #endif
