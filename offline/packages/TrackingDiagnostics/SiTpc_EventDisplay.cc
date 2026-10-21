@@ -225,6 +225,21 @@ namespace
     return line;
   }
 
+  // physical (phi, eta, r) view: P3 is reused as {z = eta, phi, layer = r}, so splitAtSeam cuts
+  // the lines at the phi seam; drawn with x = phi, y = eta, z = r
+  TPolyLine3D* make_phys_line(const std::vector<P3>& piece, const int color, const int style, const int width)
+  {
+    auto* line = owned(new TPolyLine3D(static_cast<int>(piece.size())));
+    for (size_t i = 0; i < piece.size(); ++i)
+    {
+      line->SetPoint(static_cast<int>(i), piece[i].phi, piece[i].z, piece[i].layer);
+    }
+    line->SetLineColor(color);
+    line->SetLineStyle(style);
+    line->SetLineWidth(width);
+    return line;
+  }
+
   TH3F* make_det_hist(const std::string& name, const std::string& title, int nz, double zmin, double zmax,
                       int nphi, double phimin, double phimax)
   {
@@ -1117,6 +1132,224 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
                                              nAssoc, nFree).c_str(), "l");
     legend->AddEntry(trajStyle, std::format("Si trajectories: {} (dotted: to z0 at layer -1)", detTrajs.size()).c_str(), "l");
     legend->AddEntry(vtxStyle, "TPC seed pca z (layer -1, chain colour)", "p");
+    legend->Draw();
+    write_and_delete(c);
+  }
+
+  // ==================================================================
+  // 1b. PHYSICAL coordinates of the hits: (phi, eta, r), one canvas
+  //     same content as det_hits_chains_traj, hits at their TPC-frame position
+  // ==================================================================
+  if (m_drawPhysHits && m_siSeeds && !m_siSeeds->hits.empty())
+  {
+    const double ox = beamX(), oy = beamY();
+    const bool zrefFromVertex = m_etaRefFromVertex && !tpcCollision.empty();
+    const double zref = zrefFromVertex ? tpcCollision.front().z : m_etaRefZ;
+    const double rmaxView = kSiZoomR;
+
+    // TPC-frame point -> {eta, phi, r} (P3 layout {z, phi, layer}); eta NaN at r = 0
+    auto toPhys = [&](const XYZ& g) -> P3
+    {
+      const double dx = g.x - ox, dy = g.y - oy;
+      const double r = std::hypot(dx, dy);
+      const double eta = r > 0 ? std::asinh((g.z - zref) / r) : std::numeric_limits<double>::quiet_NaN();
+      return {eta, std::atan2(dy, dx), r};
+    };
+    auto hitPhys = [&](int hid) -> P3
+    {
+      const auto& h = m_siSeeds->hits[hid];
+      const auto g = m_alignment.siToTpcFrame(m_frame, h.layer, h.phi, h.z);
+      return toPhys({g.x, g.y, g.z});
+    };
+    auto validHit = [&](int hid)
+    {
+      if (hid < 0 || hid >= static_cast<int>(m_siSeeds->hits.size()))
+      {
+        return false;
+      }
+      const int l = m_siSeeds->hits[hid].layer;
+      return l >= 0 && l < SiDetectorFrame::kNLayers;
+    };
+
+    // hits drawn and the eta range from them
+    std::vector<P3> hitPts;
+    int nAssoc = 0, nFree = 0;
+    double etaLo = std::numeric_limits<double>::max(), etaHi = -etaLo;
+    for (std::size_t i = 0; i < m_siSeeds->hits.size(); ++i)
+    {
+      if (!validHit(static_cast<int>(i)) || (!onChain[i] && !m_drawUnassociated))
+      {
+        continue;
+      }
+      const P3 p = hitPhys(static_cast<int>(i));
+      if (!std::isfinite(p.z))
+      {
+        continue;
+      }
+      hitPts.push_back(p);
+      etaLo = std::min(etaLo, p.z);
+      etaHi = std::max(etaHi, p.z);
+      ++(onChain[i] ? nAssoc : nFree);
+    }
+    if (hitPts.empty())
+    {
+      etaLo = -1.0;
+      etaHi = 1.0;
+    }
+    const double etaSpan = std::max(0.05, etaHi - etaLo);
+    const double etaMin = etaLo - std::max(0.03 * etaSpan, 0.05);
+    const double etaMax = etaHi + std::max(0.03 * etaSpan, 0.05);
+
+    // phi axis: one full turn [bp, bp+2pi), bp snapped to a phi-bin edge
+    const double dphi = kTwoPi / m_nphi;
+    const double bp = std::round(m_physPhiBoundary / dphi) * dphi;
+
+    TH3F* hPhys = owned(new TH3F(("h3_" + tag + "_phys_phi_eta_r_hits").c_str(),
+                                 std::format("{} Si hits, solid TPC-driven chains / dashed Si trajectories "
+                                             "(#eta from z_{{ref}} = {:.2f} cm{});"
+                                             "#phi [rad];#eta;r [cm]",
+                                             title, zref, zrefFromVertex ? ", collision vertex" : "")
+                                     .c_str(),
+                                 m_nphi, bp, bp + kTwoPi, m_neta, etaMin, etaMax, m_nr, 0.0, rmaxView));
+    hPhys->SetDirectory(nullptr);
+    hPhys->SetStats(false);
+    for (const auto& p : hitPts)
+    {
+      hPhys->Fill(toU(p.phi, bp), p.z, p.layer);
+    }
+
+    auto* c = make_det_canvas("c3_" + tag + "_phys_phi_eta_r_hits_chains_traj", hPhys->GetTitle());
+    hPhys->Draw("BOX2Z");
+
+    // lines: keep only points with finite eta inside the axis range (3D lines are not clipped
+    // by the frame), split into connected pieces, then at the phi seam
+    auto drawPhysPath = [&](const std::vector<P3>& pts, int color, int style, int width)
+    {
+      std::vector<std::vector<P3>> runs;
+      bool inside = false;
+      for (const auto& p : pts)
+      {
+        const bool in = std::isfinite(p.z) && p.z >= etaMin && p.z <= etaMax && p.layer <= rmaxView;
+        if (in)
+        {
+          if (!inside)
+          {
+            runs.emplace_back();
+          }
+          runs.back().push_back(p);
+        }
+        inside = in;
+      }
+      for (const auto& run : runs)
+      {
+        for (const auto& piece : splitAtSeam(run, bp))
+        {
+          make_phys_line(piece, color, style, width)->Draw("same");
+        }
+      }
+    };
+
+    // chains through their hits (hit_ids, outermost first like the chain arrays)
+    for (const auto* cp : drawnChains)
+    {
+      std::vector<P3> pts;
+      for (int hid : cp->hit_ids)
+      {
+        if (validHit(hid))
+        {
+          pts.push_back(hitPhys(hid));
+        }
+      }
+      if (cp->selected)
+      {
+        drawPhysPath(pts, chainColor(cp->id), 1, 3);
+      }
+      else
+      {
+        drawPhysPath(pts, chainColor(cp->id), 3, 1);
+      }
+    }
+
+    // Si trajectories: helix (TPC frame) sampled from the pca to the edge of the silicon,
+    // drawn from setPhysViewMinRadius outward; low-pt fits dotted
+    unsigned int nTrajDrawn = 0;
+    for (const auto& d : siTrajs)
+    {
+      std::vector<P3> pts;
+      for (const auto& g : sample_helix(d.helix, ox, oy, rmaxView, zabs))
+      {
+        const P3 p = toPhys(g);
+        if (p.layer >= m_physMinR)
+        {
+          pts.push_back(p);
+        }
+      }
+      if (pts.size() < 2)
+      {
+        continue;
+      }
+      ++nTrajDrawn;
+      drawPhysPath(pts, d.color, d.lowPt ? 3 : 2, 2);
+    }
+
+    // chains without a usable fit: open black diamonds on their hits
+    for (const auto* cp : drawnChains)
+    {
+      if (siUnfittedHits.find(cp->id) == siUnfittedHits.end())
+      {
+        continue;
+      }
+      std::vector<P3> pts;
+      for (int hid : cp->hit_ids)
+      {
+        if (validHit(hid))
+        {
+          const P3 p = hitPhys(hid);
+          if (std::isfinite(p.z))
+          {
+            pts.push_back(p);
+          }
+        }
+      }
+      if (pts.empty())
+      {
+        continue;
+      }
+      auto* m = owned(new TPolyMarker3D(static_cast<int>(pts.size())));
+      for (std::size_t i = 0; i < pts.size(); ++i)
+      {
+        m->SetPoint(static_cast<int>(i), toU(pts[i].phi, bp), pts[i].z, pts[i].layer);
+      }
+      m->SetMarkerStyle(27);
+      m->SetMarkerColor(kBlack);
+      m->SetMarkerSize(1.4);
+      m->Draw("same");
+    }
+
+    auto* legend = owned(new TLegend(0.12, 0.78, 0.68, 0.92));
+    legend->SetBorderSize(0);
+    legend->SetFillStyle(0);
+    auto* chainStyle = new TLine();
+    chainStyle->SetLineColor(kRed + 1);
+    chainStyle->SetLineWidth(3);
+    auto* trajStyle = new TLine();
+    trajStyle->SetLineColor(kRed + 1);
+    trajStyle->SetLineStyle(2);
+    trajStyle->SetLineWidth(2);
+    auto* unfitStyle = new TMarker(0, 0, 27);
+    unfitStyle->SetMarkerColor(kBlack);
+    unfitStyle->SetMarkerSize(1.4);
+    legendStyles.insert(legendStyles.end(), {chainStyle, trajStyle, unfitStyle});
+    unsigned int nSelected = 0;
+    for (const auto* cp : drawnChains)
+    {
+      nSelected += cp->selected;
+    }
+    legend->AddEntry(chainStyle, std::format("Hit chains: {} selected{} ({} chain hits, {} other hits)", nSelected,
+                                             m_drawCandidateChains ? std::format(", {} candidates dotted", drawnChains.size() - nSelected) : std::string(),
+                                             nAssoc, nFree).c_str(), "l");
+    legend->AddEntry(trajStyle, std::format("Si trajectories: {} (r #geq {:.1f} cm)", nTrajDrawn, m_physMinR).c_str(), "l");
+    legend->AddEntry(unfitStyle, std::format("chains not fitted: {}", siUnfittedHits.size()).c_str(), "p");
     legend->Draw();
     write_and_delete(c);
   }

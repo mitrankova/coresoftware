@@ -7,38 +7,51 @@
 
 #include <array>
 #include <cmath>
+#include <iostream>
 
-// Beam-axis alignment of the two silicon clamshell halves to the TPC.
+// Beam-centred common transverse frame for the TPC and the silicon.
 //
-// ---- 1. The beam axes (measured, one per part)
-// Every part has its own beam axis, measured from its vertices (linear fits of the vertex
-// x vs z and y vs z):
+// ---- 1. The beam lines (measured, one per part)
 //     x_axis(z) = x0 + dxdz * z ,   y_axis(z) = y0 + dydz * z
-//   TPC      : VertexDCAAlignmentQA_All.pdf                                  [cm]
-//   Si half A: si_alignment_new3.pdf, half A, global frame (translated), p. 9 [mm]
-//   Si half B: si_alignment_new3.pdf, half B, global frame (translated), p.10 [mm]
-// The TPC beam axis is the REFERENCE.
+//   Tpc     : TPC polytracks, pre-ACTS, TPC frame (no TPC survey transform)        [cm]
+//   SiHalfA : silicon half A, Uphi in [B, B+pi)                                     [mm/cm]
+//   SiHalfB : silicon half B, Uphi in [B+pi, B+2pi)                                 [mm/cm]
+//   SiFull  : whole silicon (both halves together), used when per-half mode is off  [mm/cm]
+//   B = clamshell boundary in intrinsic Uphi (default 0).  With the default rotation
+//   (global phi = Uphi + 0.1481) half A is the upper half (global phi in [8.5, 188.5) deg).
 //
-// ---- 2. The transformation (Si half -> TPC beam axis)
-// Each Si clamshell half is moved so that its beam axis coincides with the TPC beam axis:
-//     dx(z) = x_half(z) - x_tpc(z) ,   dy(z) = y_half(z) - y_tpc(z)
-//     x' = x - dx(z) ,  y' = y - dy(z) ,  z' = z
-// (shear form; the slope differences are ~1 mrad, equal to the rotation to O(1e-6)).
-// The TPC is not transformed (identity): the common frame is the TPC frame, the beam is on
-// the TPC beam axis (x_tpc(z), y_tpc(z)), NOT at (0, 0).  Fits use the TPC beam axis as
-// beam position (referenceBeamX/Y).
+// ---- 2. Which frame the Si beam lines must be measured in
+// The Si chain in SiHitSeedReco is
+//   a. intrinsic (Uphi, Vz)                       hit
+//   b. per-sensor alignment (optional)            SiAlignmentTransform, setApplySiAlignment(true)
+//   c. DETECTOR -> GLOBAL                         SiDetectorFrame::toGlobal (+ detector centre)
+//   d. GLOBAL -> beam-centred frame               this class
+// The Si beam lines must be fitted from vertices reconstructed with EXACTLY the same a-c:
+// same alignment file (on/off), same rotation order, same detector centre, same boundary.
+// The detector centre then cancels in the output (the beam is at (0,0) whatever centre is
+// used), but a beam line measured with a different centre or without the alignment file
+// gives a wrong offset.  Use shiftBeamLineMm() only as a PROVISIONAL bridge between geometries.
 //
-// Silicon chain, every step separate:
-//   a. intrinsic (Uphi, Vz) -> DETECTOR frame   SiDetectorFrame::toDetector
-//   b. DETECTOR frame       -> GLOBAL frame     SiDetectorFrame::toGlobal (+6, -1 mm shift)
-//   c. GLOBAL frame         -> TPC frame        this class: half A or B onto the TPC beam axis
-// The Si beam axes are measured in the GLOBAL frame (after step b).  If the detector shift
-// is changed, they have to be re-measured.
+// The TRACKINGALIGNMENT silicon constants are relative to the ACTS geometry with the MVTX
+// survey displacement applied (MakeActsGeometry::makeMvtxMapPairs, "Global displacement"),
+// i.e. the MVTX wrapper at D = (6.2955, -1.06874, -6.66289) mm.  For the per-sensor file to be
+// applied consistently, the SiDetectorFrame centre must be D (not (6, -1, 0)).
 //
-// Clamshell halves as in SiHitSeedQA: half A for Uphi in [B, B+pi), half B for
-// [B+pi, B+2pi), B = clamshell boundary in intrinsic Uphi (default 0).
+// ---- 3. The transformation (x, y only; tilts deliberately ignored for now)
+// centerBeam = true  (default):  every part is moved so that its own beam is at (0, 0)
+//     TPC : x' = x - x0_tpc            y' = y - y0_tpc
+//     Si  : x' = x - x0_si             y' = y - y0_si       (x0_si = half A/B or SiFull)
+// centerBeam = false            :  legacy mode, TPC unchanged, Si moved onto the TPC beam
+//     Si  : x' = x - x0_si + x0_tpc    y' = y - y0_si + y0_tpc
+// The fitted slopes are kept (for the later tilt step) but are NOT applied.
 //
-// All lengths in cm.  Header only.
+// ---- 4. Per-half vs common silicon offset
+// perHalf = true  (default): each half gets its own offset (absorbs a residual half-to-half
+//                             misalignment, makes the two halves agree BY CONSTRUCTION).
+// perHalf = false           : both halves get the SiFull offset; use this to test whether the
+//                             per-sensor alignment file alone makes the halves consistent.
+//
+// All lengths in cm internally.  Header only.
 class SiTpcBeamAlignment
 {
  public:
@@ -47,15 +60,16 @@ class SiTpcBeamAlignment
     Tpc = 0,
     SiHalfA = 1,
     SiHalfB = 2,
-    NParts = 3
+    SiFull = 3,
+    NParts = 4
   };
 
   struct BeamLine
   {
     double x0 = 0;    // [cm] at z = 0
     double y0 = 0;    // [cm] at z = 0
-    double dxdz = 0;  // [rad]
-    double dydz = 0;  // [rad]
+    double dxdz = 0;  // [rad], metadata only
+    double dydz = 0;  // [rad], metadata only
     double x(double z) const { return x0 + dxdz * z; }
     double y(double z) const { return y0 + dydz * z; }
   };
@@ -64,39 +78,21 @@ class SiTpcBeamAlignment
 
   SiTpcBeamAlignment()
   {
-    // ---- 1. beam axes (defaults = vertex QA PDFs, Si shift (+6, -1) mm, boundary B = 0)
-    //                    x0          y0          dx/dz          dy/dz
-    setTpcBeamAxisCm(-0.106835, 0.267482, 8.478616e-04, -8.041254e-04);
-    setSiBeamAxisMm(SiHalfA, -0.533300, 1.772693, 7.094553e-04, -2.743455e-04);
-    setSiBeamAxisMm(SiHalfB, 0.595174, 1.608226, 2.343532e-03, 6.926381e-04);
+    // TPC polytracks, pre-ACTS, run 79513                       [cm]
+    setBeamLineCm(Tpc, -0.106835, 0.267482, 8.478616e-04, -8.041254e-04);
+    // UNALIGNED silicon fits (no per-sensor alignment), global frame with centre (+6,-1,0) mm.
+    // Re-measure with setApplySiAlignment(true) and centre D before using them for real.  [mm]
+    setBeamLineMm(SiHalfA, -0.533300, 1.772693, 7.094553e-04, -2.743455e-04);
+    setBeamLineMm(SiHalfB, 0.595174, 1.608226, 2.343532e-03, 6.926381e-04);
+    setBeamLineMm(SiFull, 0.5 * (-0.533300 + 0.595174), 0.5 * (1.772693 + 1.608226), 0., 0.);
   }
 
   // =========================================================================================
-  // 1. beam axes
+  // 1. beam lines
   // =========================================================================================
-  void setTpcBeamAxisCm(double x0, double y0, double dxdz, double dydz)
-  {
-    m_axis[Tpc] = {x0, y0, dxdz, dydz};
-  }
-  void setTpcBeamAxisMm(double x0, double y0, double dxdz, double dydz)
-  {
-    setTpcBeamAxisCm(0.1 * x0, 0.1 * y0, dxdz, dydz);
-  }
-  void setSiBeamAxisCm(int half, double x0, double y0, double dxdz, double dydz)
-  {
-    if (half == SiHalfA || half == SiHalfB)
-    {
-      m_axis[half] = {x0, y0, dxdz, dydz};
-    }
-  }
-  void setSiBeamAxisMm(int half, double x0, double y0, double dxdz, double dydz)
-  {
-    setSiBeamAxisCm(half, 0.1 * x0, 0.1 * y0, dxdz, dydz);
-  }
-  // generic form (part = Tpc, SiHalfA, SiHalfB)
   void setBeamLineCm(int part, double x0, double y0, double dxdz, double dydz)
   {
-    if (part >= 0 && part < NParts)
+    if (validPart(part))
     {
       m_axis[part] = {x0, y0, dxdz, dydz};
     }
@@ -105,94 +101,188 @@ class SiTpcBeamAlignment
   {
     setBeamLineCm(part, 0.1 * x0, 0.1 * y0, dxdz, dydz);
   }
+  // Shift an already set beam line (e.g. old unaligned fit + alignment-file translation).
+  void shiftBeamLineMm(int part, double dx, double dy)
+  {
+    if (validPart(part))
+    {
+      m_axis[part].x0 += 0.1 * dx;
+      m_axis[part].y0 += 0.1 * dy;
+    }
+  }
 
+  // backward-compatible setters
+  void setTpcBeamAxisCm(double x0, double y0, double dxdz, double dydz) { setBeamLineCm(Tpc, x0, y0, dxdz, dydz); }
+  void setTpcBeamAxisMm(double x0, double y0, double dxdz, double dydz) { setBeamLineMm(Tpc, x0, y0, dxdz, dydz); }
+  void setSiBeamAxisCm(int half, double x0, double y0, double dxdz, double dydz)
+  {
+    if (validSi(half))
+    {
+      setBeamLineCm(half, x0, y0, dxdz, dydz);
+    }
+  }
+  void setSiBeamAxisMm(int half, double x0, double y0, double dxdz, double dydz)
+  {
+    setSiBeamAxisCm(half, 0.1 * x0, 0.1 * y0, dxdz, dydz);
+  }
+
+  const BeamLine& beamLine(int part) const { return m_axis[validPart(part) ? part : Tpc]; }
   const BeamLine& tpcBeamAxis() const { return m_axis[Tpc]; }
-  const BeamLine& siBeamAxis(int half) const { return m_axis[half]; }
-  const BeamLine& beamLine(int part) const { return m_axis[part]; }
+  const BeamLine& siBeamAxis(int half) const { return m_axis[siPart(half)]; }
 
-  // Beam position in the common (TPC) frame = TPC beam axis.  Used as beam / perigee
-  // reference by the fits.
-  double referenceBeamX(double z = 0.0) const { return m_axis[Tpc].x(z); }
-  double referenceBeamY(double z = 0.0) const { return m_axis[Tpc].y(z); }
-
-  // ---- other configuration
-  // false: no Si correction (Si stays in the GLOBAL frame after the detector shift)
-  void setEnabled(bool v) { m_enabled = v; }
+  // =========================================================================================
+  // configuration
+  // =========================================================================================
+  void setEnabled(bool on) { m_enabled = on; }
   bool enabled() const { return m_enabled; }
-  // Clamshell boundary in intrinsic Uphi [rad], must match the one used for the Si fits.
-  void setClamshellBoundary(double uphi) { m_boundary = uphi; }
+
+  void setCenterBeam(bool on) { m_centerBeam = on; }
+  bool centerBeam() const { return m_centerBeam; }
+
+  void setSiPerHalf(bool on) { m_perHalf = on; }
+  bool siPerHalf() const { return m_perHalf; }
+
+  void setClamshellBoundary(double b) { m_boundary = b; }
   double clamshellBoundary() const { return m_boundary; }
 
-  // ---- clamshell half of a Si point
+  // Beam position in the OUTPUT frame (used as the helix-fit beam constraint).
+  // Disabled or legacy mode: the TPC frame is the output, so the beam sits at the TPC beam.
+  double referenceBeamX(double /*z*/ = 0.) const { return (m_enabled && m_centerBeam) ? 0. : m_axis[Tpc].x0; }
+  double referenceBeamY(double /*z*/ = 0.) const { return (m_enabled && m_centerBeam) ? 0. : m_axis[Tpc].y0; }
+
+  // =========================================================================================
+  // halves
+  // =========================================================================================
   int siHalf(double uphi) const
   {
-    constexpr double twopi = 2.0 * M_PI;
+    constexpr double pi = 3.14159265358979323846;
+    constexpr double twopi = 2 * pi;
     double u = std::fmod(uphi - m_boundary, twopi);
     if (u < 0)
     {
       u += twopi;
     }
-    return u < M_PI ? SiHalfA : SiHalfB;
+    return u < pi ? SiHalfA : SiHalfB;
   }
-  // half of a point given in the GLOBAL or TPC frame (Uphi from its azimuth around the
-  // detector centre; the correction moves points by ~1 mm, far from the boundary for hits)
   int siHalfOfGlobal(const SiDetectorFrame& frame, const Point& g) const
   {
-    const Point d = frame.toDetectorFromGlobal(g);
+    const auto d = frame.toDetectorFromGlobal(g);
     return siHalf(std::atan2(d.y, d.x) - frame.uphiRotation());
   }
 
-  // =========================================================================================
-  // 2. transformation: Si half beam axis -> TPC beam axis
-  // =========================================================================================
-  // Offset of the Si half beam axis from the TPC beam axis at z: dx = x_half - x_tpc, dy = ...
-  double siOffsetX(int half, double z) const { return m_axis[half].x(z) - m_axis[Tpc].x(z); }
-  double siOffsetY(int half, double z) const { return m_axis[half].y(z) - m_axis[Tpc].y(z); }
+  // Si offset actually used for a half: its own line, or SiFull in common mode.
+  double siX0(int half) const { return m_axis[siPart(half)].x0; }
+  double siY0(int half) const { return m_axis[siPart(half)].y0; }
 
-  // Si point of one half: GLOBAL frame -> TPC frame
+  // Offset of the Si beam from the TPC beam, in the input coordinates [cm].
+  double siOffsetX(int half, double /*z*/ = 0.) const { return siX0(half) - m_axis[Tpc].x0; }
+  double siOffsetY(int half, double /*z*/ = 0.) const { return siY0(half) - m_axis[Tpc].y0; }
+
+  // =========================================================================================
+  // transformations
+  // =========================================================================================
+  // Si point (GLOBAL frame, after per-sensor alignment and detector centre) -> output frame
   Point siHalfToTpcAxis(int half, const Point& g) const
   {
-    if (!m_enabled || (half != SiHalfA && half != SiHalfB))
+    if (!m_enabled || !validHalf(half))
     {
       return g;
     }
-    return {g.x - siOffsetX(half, g.z), g.y - siOffsetY(half, g.z), g.z};
+    return {g.x - siX0(half) + refX(), g.y - siY0(half) + refY(), g.z};
   }
-  // inverse: TPC frame -> GLOBAL frame
-  Point siHalfFromTpcAxis(int half, const Point& t) const
+  Point siHalfFromTpcAxis(int half, const Point& p) const
   {
-    if (!m_enabled || (half != SiHalfA && half != SiHalfB))
+    if (!m_enabled || !validHalf(half))
     {
-      return t;
+      return p;
     }
-    return {t.x + siOffsetX(half, t.z), t.y + siOffsetY(half, t.z), t.z};
+    return {p.x + siX0(half) - refX(), p.y + siY0(half) - refY(), p.z};
   }
 
-  // TPC point: the TPC frame is the reference, identity (kept so the chain is explicit)
-  Point tpcToTpcFrame(const Point& p) const { return p; }
-  Point tpcToTpcFrame(double x, double y, double z) const { return {x, y, z}; }
+  // TPC point (pre-ACTS TPC frame) -> output frame
+  Point tpcToTpcFrame(const Point& p) const
+  {
+    if (!m_enabled || !m_centerBeam)
+    {
+      return p;
+    }
+    return {p.x - m_axis[Tpc].x0, p.y - m_axis[Tpc].y0, p.z};
+  }
+  Point tpcToTpcFrame(double x, double y, double z) const { return tpcToTpcFrame(Point{x, y, z}); }
+  Point tpcFromTpcFrame(const Point& p) const
+  {
+    if (!m_enabled || !m_centerBeam)
+    {
+      return p;
+    }
+    return {p.x + m_axis[Tpc].x0, p.y + m_axis[Tpc].y0, p.z};
+  }
 
-  // ---- full Si chains
-  // Si hit: intrinsic (Uphi, Vz) -> a. detector -> b. global (shift) -> c. TPC frame
+  // Full Si chain without per-sensor alignment (intrinsic -> detector -> global -> output).
   Point siToTpcFrame(const SiDetectorFrame& frame, int layer, double uphi, double vz) const
   {
-    const Point det = frame.toDetector(layer, uphi, vz);  // a
-    const Point glob = frame.toGlobal(det);               // b
-    return siHalfToTpcAxis(siHalf(uphi), glob);           // c
+    const Point det = frame.toDetector(layer, uphi, vz);
+    return siHalfToTpcAxis(siHalf(uphi), frame.toGlobal(det));
   }
-  // Si point already in the GLOBAL frame, half from its own Uphi
   Point siGlobalToTpcFrame(const SiDetectorFrame& frame, const Point& g) const
   {
     return siHalfToTpcAxis(siHalfOfGlobal(frame, g), g);
   }
-  // inverse for display: TPC frame -> GLOBAL frame (half from the point's Uphi)
-  Point siTpcFrameToGlobal(const SiDetectorFrame& frame, const Point& t) const
+
+  // Inverse for display.  The half of an output point is ambiguous near the boundary when
+  // the two halves have different offsets; iterate until the half is self-consistent.
+  Point siTpcFrameToGlobal(const SiDetectorFrame& frame, const Point& p) const
   {
-    return siHalfFromTpcAxis(siHalfOfGlobal(frame, t), t);
+    int h = siHalfOfGlobal(frame, p);
+    for (int i = 0; i < 2; ++i)
+    {
+      const Point g = siHalfFromTpcAxis(h, p);
+      const int next = siHalfOfGlobal(frame, g);
+      if (next == h)
+      {
+        return g;
+      }
+      h = next;
+    }
+    return siHalfFromTpcAxis(h, p);
+  }
+
+  // =========================================================================================
+  // printout (call from the macro to check what was configured)
+  // =========================================================================================
+  void print(std::ostream& os = std::cout) const
+  {
+    static const char* names[NParts] = {"TPC", "Si half A", "Si half B", "Si full"};
+    os << "SiTpcBeamAlignment: " << (m_enabled ? "ON" : "OFF")
+       << ", " << (m_centerBeam ? "beam-centred frame" : "TPC frame (legacy)")
+       << ", Si offsets " << (m_perHalf ? "per half" : "common (SiFull)")
+       << ", clamshell boundary " << m_boundary << " rad" << std::endl;
+    for (int p = 0; p < NParts; ++p)
+    {
+      os << "  " << names[p] << ": x0 = " << 10. * m_axis[p].x0 << " mm, y0 = " << 10. * m_axis[p].y0
+         << " mm (dx/dz = " << 1e3 * m_axis[p].dxdz << ", dy/dz = " << 1e3 * m_axis[p].dydz << " mrad, not applied)"
+         << std::endl;
+    }
+    for (int h : {SiHalfA, SiHalfB})
+    {
+      os << "  applied shift " << names[h] << ": (" << -10. * (siX0(h) - refX()) << ", " << -10. * (siY0(h) - refY())
+         << ") mm" << std::endl;
+    }
+    os << "  applied shift TPC: (" << (m_centerBeam ? -10. * m_axis[Tpc].x0 : 0.) << ", "
+       << (m_centerBeam ? -10. * m_axis[Tpc].y0 : 0.) << ") mm" << std::endl;
   }
 
  private:
+  static bool validPart(int p) { return p >= 0 && p < NParts; }
+  static bool validHalf(int h) { return h == SiHalfA || h == SiHalfB; }
+  static bool validSi(int h) { return validHalf(h) || h == SiFull; }
+  int siPart(int half) const { return (m_perHalf && validHalf(half)) ? half : SiFull; }
+  double refX() const { return m_centerBeam ? 0. : m_axis[Tpc].x0; }
+  double refY() const { return m_centerBeam ? 0. : m_axis[Tpc].y0; }
+
   bool m_enabled = true;
+  bool m_centerBeam = true;
+  bool m_perHalf = true;
   double m_boundary = 0.0;
   std::array<BeamLine, NParts> m_axis{};
 };

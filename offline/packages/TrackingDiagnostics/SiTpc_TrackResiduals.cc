@@ -559,8 +559,10 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
     ++m_tracksPerCrossing[d->get_selected_crossing()];
 
     // collision vertex of this crossing (tier 0 / 1 decisions carry a vertex, tier 2 not)
+    // collisions: tier 0 / 1 decisions with a collision vertex (untimed lone tracks of
+    // TpcCrossingResolver keep their Si association but have no vertex: silicon_vertex_z NaN)
     const unsigned char tier = d->get_selected_tier();
-    if (tier > 1)
+    if (tier > 1 || !std::isfinite(d->get_silicon_vertex_z()))
     {
       continue;
     }
@@ -808,11 +810,15 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
       m_nSiChainsCrossing = isc != m_siChainsPerCrossing.end() ? isc->second : 0;
 
       m_vertexStatus = d->get_status();
-      const auto iv = m_vertices.find(m_tpcCrossing);
+      if (tier <= 1)
+      {
+        // own Si z at the beam, also for tracks without a collision vertex
+        m_trackVertexZ = d->get_tpc_z0() + d->get_delta_z();
+        m_vertexOwnZ = std::isfinite(d->get_selected_score()) ? 1 : 0;
+      }
+      const auto iv = std::isfinite(d->get_silicon_vertex_z()) ? m_vertices.find(m_tpcCrossing) : m_vertices.end();
       if (iv != m_vertices.end())
       {
-        m_vertexOwnZ = std::isfinite(d->get_selected_score()) ? 1 : 0;
-        m_trackVertexZ = d->get_tpc_z0() + d->get_delta_z();
         m_vertexZ = d->get_silicon_vertex_z();
         m_vertexDz = d->get_delta_z();
         m_vertexScore = d->get_selected_score();
