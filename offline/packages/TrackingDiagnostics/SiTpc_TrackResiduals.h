@@ -51,7 +51,9 @@ class TTree;
 //                           chain z of the tracks of that crossing's vertex (lone track: its own z)
 //     vertex_dz             delta_z of the decision (Si - TPC z at the chosen crossing)
 //     vertex_score          selected_score of the decision (NaN for TPC-only matches)
-//     vertex_status         TpcCrossingStatus of the decision
+//     vertex_status         TpcCrossingStatus of the decision (10 = AmbiguousWithVertex: lone track
+//                           with an MVTX-only chain, kept without a collision: vertex_* NaN,
+//                           track_vertex_z = its own Si z)
 //     vertex_own_z          1 if track_vertex_z comes from the track's own Si chain (tier 0, lone),
 //                           0 for TPC-only matches (z taken from the vertex)
 //     vertex_n_si           tracks of this event at this crossing with their own Si z
