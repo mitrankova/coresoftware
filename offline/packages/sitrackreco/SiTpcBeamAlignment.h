@@ -35,7 +35,12 @@
 // The TRACKINGALIGNMENT silicon constants are relative to the ACTS geometry with the MVTX
 // survey displacement applied (MakeActsGeometry::makeMvtxMapPairs, "Global displacement"),
 // i.e. the MVTX wrapper at D = (6.2955, -1.06874, -6.66289) mm.  For the per-sensor file to be
-// applied consistently, the SiDetectorFrame centre must be D (not (6, -1, 0)).
+// applied consistently, the SiDetectorFrame centre x, y must be D_x, D_y (not 6, -1).  Keep the
+// centre z at 0 until SiHitSeedReco seeds with the same z as its residuals (z-alignment step).
+//
+// ABI note: this class is passed BY VALUE between libsitrackreco and libTrackingDiagnostics
+// (SiHitSeedReco, SiTrajectoryFitter, SiTpcTrackMatcher, SiTpc_EventDisplay).  After changing
+// this header rebuild ALL libraries that include it.
 //
 // ---- 3. The transformation (x, y only; tilts deliberately ignored for now)
 // centerBeam = true  (default):  every part is moved so that its own beam is at (0, 0)

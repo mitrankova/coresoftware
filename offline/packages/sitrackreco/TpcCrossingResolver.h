@@ -53,7 +53,13 @@
 //                    with such a winner); MVTX-only chains carry no time (MVTX integration, and the
 //                    TPC-guided search finds an MVTX-only chain near the TPC z of any crossing), so
 //                    they only join such collisions: a lone MVTX-only winner, or a collision made
-//                    of MVTX-only winners only, is moved (as displaced) or gets no chain
+//                    of MVTX-only winners only, is moved (as displaced) or gets no chain; a lone
+//                    MVTX-only winner that passes the lone robustness test keeps its chain without a
+//                    collision (setKeepUntimedLone, default on): tier 1, status AmbiguousWithVertex,
+//                    silicon_vertex_z NaN, not in the collision counts
+//   re-selection: a track that would end without a chain may take another of its candidate chains
+//                    (any chain of its crossing trajectories with chi2/ndf <= cut, not only the
+//                    best) that joins a supported INTT-timed collision (setVertexChainReselect)
 //   split collisions (done at the start of pass 2, before any track is dropped): collisions in
 //                    crossings within setMergeMaxCrossings whose Si vertices agree
 //                    (|dz_vtx| <= min(setMergeZWindow, setMergeZNSigma sigma_z sqrt(1/n1+1/n2)))
@@ -135,6 +141,16 @@ class TpcCrossingResolver : public SubsysReco
   void setMinSupportTpcOnly(double v) { m_minSupportTpcOnly = v; }
   // collisions need a winner with INTT hits; MVTX-only chains only join them
   void setRequireInttForCollision(bool v) { m_requireInttForCollision = v; }
+  //    a lone winner with an MVTX-only chain that passes the lone robustness test keeps its Si
+  //    association without making a collision: tier 1, status AmbiguousWithVertex, crossing from
+  //    its dz, silicon_vertex_z NaN (its own z = tpc_z0 + delta_z), not counted as a collision;
+  //    credit threshold: setMinUntimedLoneCredit (negative = setMinLoneCredit)
+  void setKeepUntimedLone(bool v) { m_keepUntimedLone = v; }
+  //    a track that would lose its chain (displaced, lone not robust) takes another of its
+  //    candidate chains (not only the best one per crossing trajectory) that joins a supported
+  //    INTT-timed collision within the cluster window (tier 1, moved)
+  void setVertexChainReselect(bool v) { m_vertexChainReselect = v; }
+  void setMinUntimedLoneCredit(double v) { m_minUntimedLoneCredit = v; }
   // 7. split collisions: merge on/off, max crossing distance, max Si z distance [cm],
   //    max chi2 increase of the common crossing (sigma = setDzSigma)
   void setMergeSplitCollisions(bool v) { m_mergeSplitCollisions = v; }
@@ -174,6 +190,9 @@ class TpcCrossingResolver : public SubsysReco
   double m_minSupportTpcOnly{1.0};
   double m_maxVertexZ{25.0};
   bool m_requireInttForCollision{true};
+  bool m_keepUntimedLone{true};
+  bool m_vertexChainReselect{true};
+  double m_minUntimedLoneCredit{-1.0};
   bool m_mergeSplitCollisions{true};
   int m_mergeMaxCrossings{2};
   double m_mergeZWindow{1.0};
@@ -194,6 +213,8 @@ class TpcCrossingResolver : public SubsysReco
   unsigned long m_nLoneKept{0};          // pass 2: lone and robust
   unsigned long m_nLoneSameSi{0};        // of those: kept only because same-Si hypotheses are ignored
   unsigned long m_nDropped{0};           // pass 2: displaced or lone and not robust -> no chain
+  unsigned long m_nReselected{0};        // pass 2: another candidate chain joining a timed collision
+  unsigned long m_nUntimedKept{0};       // pass 2: lone MVTX-only, Si association kept without a collision
   unsigned long m_nUntimed{0};           // pass 2: MVTX-only winners without an INTT-timed collision -> no chain
   unsigned long m_nMergedCollisions{0};  // 7: collisions merged into a neighbouring crossing's one
   unsigned long m_nMergeMoved{0};        // 7: tracks moved to the common crossing
