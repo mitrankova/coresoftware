@@ -42,6 +42,21 @@ class TpcCrossingDecisionContainer;
 //   Lines crossing the Uphi seam at B are split there.
 //   setDrawUnassociatedHits(false) keeps only the chain hits in the histogram.
 //
+// ---- PHYSICAL (phi, eta, r) coordinates of the hits: same content as det_hits_chains_traj.
+//   c3_evtN_phys_phi_eta_r_hits_chains_traj : one histogram (BOX2Z) with all Si hits at their
+//                                  position in the TPC frame (same transform as the physics views),
+//                                  axes phi, eta, r.  Every TPC-driven chain as a solid line through
+//                                  its hits (candidates dotted with setDrawCandidateChains), every Si
+//                                  trajectory as a dashed line (helix sampled from
+//                                  setPhysViewMinRadius to the edge of the silicon), chains without a
+//                                  usable fit marked with open black diamonds.
+//     r   = distance from the beam axis (beam marker position, see setBeamPositionCm)
+//     phi = azimuth around the beam axis, axis [P, P+2pi) (P = setPhysPhiBoundary, default -pi)
+//     eta = asinh((z - z_ref) / r), z_ref = z of the first TPC collision vertex
+//           (setEtaReferenceFromVertex, default) or setEtaReferenceZ (also the fallback).
+//           With z_ref at the collision, a primary track lies at constant eta.
+//   setDrawPhysHitsView(false) switches it off; setDrawUnassociatedHits applies as well.
+//
 // ---- PHYSICS space (as Tpc_PolyClusterDisplay): axes z, x, y in the global frame [cm].
 //   c3_evtN_phys_z_x_y_crossingC   one canvas per bunch crossing C (negative: crossing_mC):
 //                           the TPC poly clusters + poly tracks + pca of the tracks resolved to
@@ -167,6 +182,19 @@ class SiTpc_EventDisplay : public SubsysReco
   // Uphi [rad] where the Uphi axis starts (the seam of the display).
   void setClamshellBoundary(double uphi) { m_boundary = uphi; }
 
+  // ---- physical (phi, eta, r) view of the Si hits / chains / trajectories
+  void setDrawPhysHitsView(bool v) { m_drawPhysHits = v; }
+  // phi [rad] where the phi axis starts (seam of the display), default -pi
+  void setPhysPhiBoundary(double phi) { m_physPhiBoundary = phi; }
+  // eta = asinh((z - z_ref) / r): z_ref from the first TPC collision vertex if present (default),
+  // otherwise / with setEtaReferenceFromVertex(false) the fixed value setEtaReferenceZ [cm]
+  void setEtaReferenceZ(double z) { m_etaRefZ = z; }
+  void setEtaReferenceFromVertex(bool v) { m_etaRefFromVertex = v; }
+  void setEtaBins(int n) { m_neta = n; }
+  void setRadiusBins(int n) { m_nr = n; }
+  // Si trajectories are drawn from this radius [cm] outward (eta is ill defined near r = 0)
+  void setPhysViewMinRadius(double r) { m_physMinR = r; }
+
   // ---- physics view (as Tpc_PolyClusterDisplay)
   void setZRange(double zmin, double zmax)
   {
@@ -240,6 +268,14 @@ class SiTpc_EventDisplay : public SubsysReco
   int m_nz = 120;
   int m_nphi = 180;
   double m_boundary = 0.0;
+
+  bool m_drawPhysHits = true;
+  double m_physPhiBoundary = -3.14159265358979323846;
+  double m_etaRefZ = 0.0;
+  bool m_etaRefFromVertex = true;
+  int m_neta = 100;
+  int m_nr = 52;
+  double m_physMinR = 2.0;
 
   double m_zmin = -102.0;
   double m_zmax = 102.0;
