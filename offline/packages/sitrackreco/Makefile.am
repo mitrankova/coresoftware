@@ -30,7 +30,9 @@ pkginclude_HEADERS = \
   SiTrajectoryFitter.h \
   SiHitSeedData.h \
   SiHitSeedReco.h \
-  TpcCrossingResolver.h
+  TpcCrossingResolver.h \
+  PairVertexFinder.h \
+  SiTpc_VertexFinder.h
 
 ROOTDICTS = \
   Si_Trajectory_Dict.cc \
@@ -57,6 +59,8 @@ libsitrackreco_la_SOURCES = \
   SiTpcTrackMatcher.cc \
   SiHitSeedReco.cc \
   TpcCrossingResolver.cc \
+  PairVertexFinder.cc \
+  SiTpc_VertexFinder.cc \
   $(ROOTDICTS)
 
 libsitrackreco_la_LIBADD = \
@@ -66,11 +70,13 @@ libsitrackreco_la_LIBADD = \
   -lSubsysReco \
   -ltrack_io \
   -ltrackbase_historic_io \
+  -ltrack \
   -lmvtx \
   -lmvtx_io \
   -lintt \
   -lintt_io \
   -lg4detectors_io \
+  -lglobalvertex_io \
   -ltpctrackreco_io
 
 %_Dict.cc: %.h %LinkDef.h

@@ -227,7 +227,7 @@ class SiTpcBeamAlignment
   Point siToTpcFrame(const SiDetectorFrame& frame, int layer, double uphi, double vz) const
   {
     const Point det = frame.toDetector(layer, uphi, vz);
-    return siHalfToTpcAxis(siHalf(uphi), frame.toGlobal(det));
+    return siHalfToTpcAxis(siHalf(uphi), frame.toGlobal(layer, det));
   }
   Point siGlobalToTpcFrame(const SiDetectorFrame& frame, const Point& g) const
   {

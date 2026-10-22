@@ -132,6 +132,8 @@ class SiTpc_EventDisplay : public SubsysReco
   // ---- Si frame (must match SiTrajectoryFitter)
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
   void setDetectorCenterMm(double x, double y, double z = 0.0) { m_frame.setDetectorCenterMm(x, y, z); }
+  // INTT centre (layers 3-6); not set: the INTT uses the detector (MVTX) centre
+  void setInttCenterMm(double x, double y, double z = 0.0) { m_frame.setInttCenterMm(x, y, z); }
   // Beam marker position.  Default: TPC beam axis at z = 0 from the alignment object.
   void setBeamPositionCm(double x, double y)
   {

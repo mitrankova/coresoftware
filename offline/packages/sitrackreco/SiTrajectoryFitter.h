@@ -53,6 +53,8 @@ class SiTrajectoryFitter : public SubsysReco
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
   // step 2: position of the detector-frame origin in the global frame
   void setDetectorCenterMm(double x, double y, double z = 0.0) { m_frame.setDetectorCenterMm(x, y, z); }
+  // INTT centre (layers 3-6); not set: the INTT uses the detector (MVTX) centre
+  void setInttCenterMm(double x, double y, double z = 0.0) { m_frame.setInttCenterMm(x, y, z); }
   // step 3: Si clamshell half A / B moved onto the TPC beam axis (SiTpcBeamAlignment, default:
   // VertexDCAAlignmentQA_All.pdf + si_alignment_new3.pdf).  The fit points are then in the TPC
   // frame, the beam is on the TPC beam axis.

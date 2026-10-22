@@ -25,8 +25,14 @@ struct SiHitPoint
   float adc = 0;
   double lx = 0;
   double ly = 0;
-  double z = 0;       // nominal Vz [cm]
-  double phi = 0;     // intrinsic Uphi [rad]
+  double z = 0;       // nominal Vz [cm]        } hardware coordinates, used for blobs and
+  double phi = 0;     // intrinsic Uphi [rad]   } chaining (unchanged)
+  // PHYSICS position of the pixel / strip centre in the DETECTOR frame [cm]: on the FLAT, tilted
+  // sensor (setUseFlatSensorGeometry(true), default) or on the nominal cylinder (false), with the
+  // per-sensor alignment applied.  Used for the physics points (track fits, vertices).
+  double px = 0;
+  double py = 0;
+  double pz = 0;
   double zbin = 0;
   double phibin = 0;
 };

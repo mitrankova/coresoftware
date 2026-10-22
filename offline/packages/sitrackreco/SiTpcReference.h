@@ -52,21 +52,22 @@ namespace SiTpcReference
     const SiDetectorFrame* frame = nullptr;
     const SiTpcBeamAlignment* alignment = nullptr;
 
-    SiDetectorFrame::Point tpcToDet(double x, double y, double z, int half) const
+    // layer: MVTX / INTT detector centre (SiDetectorFrame::centerCm); < 0: MVTX
+    SiDetectorFrame::Point tpcToDet(double x, double y, double z, int half, int layer = -1) const
     {
       const auto g = alignment->siHalfFromTpcAxis(half, {x, y, z});
-      return frame->toDetectorFromGlobal(g);
+      return frame->toDetectorFromGlobal(layer, g);
     }
     // detector frame point of clamshell half `half` -> TPC frame
-    SiDetectorFrame::Point detToTpc(double x, double y, double z, int half) const
+    SiDetectorFrame::Point detToTpc(double x, double y, double z, int half, int layer = -1) const
     {
-      const auto g = frame->toGlobal({x, y, z});
+      const auto g = frame->toGlobal(layer, {x, y, z});
       return alignment->siHalfToTpcAxis(half, g);
     }
-    // det = tpc + (dx, dy) at fixed z and half
-    void offset(int half, double z, double& dx, double& dy) const
+    // det = tpc + (dx, dy) at fixed z, half and layer
+    void offset(int half, double z, double& dx, double& dy, int layer = -1) const
     {
-      const auto p = tpcToDet(0, 0, z, half);
+      const auto p = tpcToDet(0, 0, z, half, layer);
       dx = p.x;
       dy = p.y;
     }
@@ -139,7 +140,7 @@ namespace SiTpcReference
     }
     // first guess of the half: TPC-frame point at ~rl along the pca direction
     const double tx0 = std::cos(ref.phi), ty0 = std::sin(ref.phi);
-    const auto p0 = map.tpcToDet(ref.pcaX + rl * tx0, ref.pcaY + rl * ty0, ref.z0 + ref.tanl * rl, SiTpcBeamAlignment::SiHalfA);
+    const auto p0 = map.tpcToDet(ref.pcaX + rl * tx0, ref.pcaY + rl * ty0, ref.z0 + ref.tanl * rl, SiTpcBeamAlignment::SiHalfA, layer);
     int half = forceHalf >= 0 ? forceHalf : map.half(map.uphi(p0.x, p0.y));
     double zg = ref.z0 + ref.tanl * rl;
     double px = 0, py = 0, s = 0, ccx = 0, ccy = 0;
@@ -147,7 +148,7 @@ namespace SiTpcReference
     for (int iter = 0; iter < 3; ++iter)
     {
       double dx = 0, dy = 0;
-      map.offset(half, zg, dx, dy);
+      map.offset(half, zg, dx, dy, layer);
       ccx = ref.cx + dx;
       ccy = ref.cy + dy;
       const double qx = ref.pcaX + dx, qy = ref.pcaY + dy;

@@ -990,7 +990,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
         // beam axis and the detector shift to get the crossing with the nominal layer
         auto toDet = [&](const XYZ& b)
         {
-          const auto dp = m_frame.toDetectorFromGlobal(m_alignment.siTpcFrameToGlobal(m_frame, {b.x, b.y, b.z}));
+          const auto dp = m_frame.toDetectorFromGlobal(l, m_alignment.siTpcFrameToGlobal(m_frame, {b.x, b.y, b.z}));
           return XYZ{dp.x, dp.y, dp.z};
         };
         XYZ g;

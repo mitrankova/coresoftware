@@ -17,7 +17,9 @@
 #include <string>
 #include <vector>
 
+class ActsGeometry;
 class PHCompositeNode;
+class PHG4CylinderGeomContainer;
 
 // SiHitSeedReco: TPC-driven silicon chaining in HARDWARE coordinates.
 //
@@ -103,6 +105,26 @@ class SiHitSeedReco : public SubsysReco
   // The aligned 3D point is projected back onto the nominal layer cylinder.
   // ---------------------------------------------------------------------------
   void setApplySiAlignment(bool v) { m_applyAlignment = v; }
+  // Physics points only (chaining always uses the hardware Uphi, Vz):
+  // true (default): silicon hits are placed on the real FLAT sensors (MVTX staves tilted by the
+  // turbo angle, sensor offset 0.058 cm in the chip, INTT flat ladders), as in PHG4MvtxDetector /
+  // CylinderGeom_Mvtx.  false: previous approximation, hits on the nominal cylinder R_layer at
+  // Uphi = stave phi + lx cos(tilt) / R (MVTX: up to ~2 mm wrong in r, ~0.7 mm in r*phi).
+  void setUseFlatSensorGeometry(bool v) { m_flatSensors = v; }
+  // Physics points from the OFFICIAL tracking geometry (ActsGeometry node: MVTX displacement,
+  // INTT survey geometry, TRACKINGALIGNMENT from the CDB), with the local pixel / strip
+  // coordinates of CylinderGeom_Mvtx / CylinderGeomIntt: the same global positions as the
+  // TRKR_CLUSTER clusters.  The frame centres are subtracted (detector frame = global - centre),
+  // so SiDetectorFrame::toGlobal gives back the official global position.  setUseFlatSensorGeometry
+  // and the alignment file then affect only the chaining.
+  void setUseActsGeometry(bool v) { m_useActsGeometry = v; }
+  // z added to the official positions (setUseActsGeometry): the official MVTX z contains the global
+  // displacement D_z = -0.666 cm, which the own geometry (and the TPC z tuning so far) does not.
+  // +0.666 keeps the Si physics z in the same z frame as before (MVTX = nominal z) while the INTT
+  // keeps its correct z relative to the MVTX.  0: true global z.
+  void setActsZShiftCm(double dz) { m_actsZShift = dz; }
+  // per-layer table at End: own physics position (flat sensors / cylinders) - official position
+  void setCompareWithActsGeometry(bool v) { m_compareActs = v; }
   void setSiAlignmentParamsFile(const std::string& f) { m_alignmentFile = f; }
   void setUseNewSiliconRotationOrder(bool v) { m_alignment.setUseNewSiliconRotationOrder(v); }
   const SiAlignmentTransform& alignment() const { return m_alignment; }
@@ -112,6 +134,9 @@ class SiHitSeedReco : public SubsysReco
   // ---------------------------------------------------------------------------
   void setUphiRotation(double rad) { m_frame.setUphiRotation(rad); }
   void setDetectorCenterMm(double x, double y, double z = 0.0) { m_frame.setDetectorCenterMm(x, y, z); }
+  // INTT centre (layers 3-6); not set: the INTT uses the detector (MVTX) centre.  With the
+  // official TRACKINGALIGNMENT file: setDetectorCenterMm(D) + setInttCenterMm(0, 0, 0)
+  void setInttCenterMm(double x, double y, double z = 0.0) { m_frame.setInttCenterMm(x, y, z); }
   void setBeamAlignment(const SiTpcBeamAlignment& a) { m_beamAlign = a; }
   void setApplyBeamAlignment(bool v) { m_beamAlign.setEnabled(v); }
   void setBz(double tesla) { m_bz = tesla; }
@@ -380,7 +405,15 @@ class SiHitSeedReco : public SubsysReco
 
   int createNodes(PHCompositeNode*);
   int loadAlignment();
-  void alignPoint(TrkrDefs::hitsetkey hskey, int layer, double& z, double& phi) const;
+  // ideal detector-frame position of local point (lx, ly) of a sensor, and the sensor axes
+  Eigen::Vector3d sensorPoint(int layer, int stave, int chip, int ladderphi, int ladderz, double lx, double ly) const;
+  Eigen::Matrix3d sensorAxes(int layer, int stave, int ladderphi) const;
+  // official global position of a pixel / strip [cm]; false if not available
+  bool actsGlobal(TrkrDefs::hitsetkey hskey, int layer, unsigned int row, unsigned int col, int ladderz, Eigen::Vector3d& g) const;
+  // ideal point -> aligned point (unchanged without alignment)
+  Eigen::Vector3d alignPoint(TrkrDefs::hitsetkey hskey, const Eigen::Vector3d& p) const;
+  // hardware coordinates (Uphi, Vz) with the alignment applied on the nominal cylinder (chaining)
+  void alignHardware(TrkrDefs::hitsetkey hskey, int layer, double& z, double& phi) const;
   bool fillHits(PHCompositeNode*);
   void buildBlobs();
   void buildBlobsFromPixels();
@@ -442,6 +475,15 @@ class SiHitSeedReco : public SubsysReco
 
   // silicon (hardware) alignment
   bool m_applyAlignment = false;
+  bool m_flatSensors = true;
+  bool m_useActsGeometry = false;
+  bool m_compareActs = false;
+  double m_actsZShift = 0.0;
+  ActsGeometry* m_tGeometry = nullptr;
+  PHG4CylinderGeomContainer* m_geomMvtx = nullptr;
+  PHG4CylinderGeomContainer* m_geomIntt = nullptr;
+  // own - official, per layer: n, sums of dx, dy, dz, dr, r*dphi and their squares
+  std::array<std::array<double, 11>, 7> m_actsCmp{};
   std::string m_alignmentFile = "mvtx_align_params.txt";  // used only with setApplySiAlignment(true)
   SiAlignmentTransform m_alignment;
 

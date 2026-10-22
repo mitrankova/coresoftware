@@ -14,6 +14,11 @@
 #include <phool/PHNodeIterator.h>
 #include <phool/PHObject.h>
 
+#include <g4detectors/PHG4CylinderGeomContainer.h>
+#include <intt/CylinderGeomIntt.h>
+#include <mvtx/CylinderGeom_Mvtx.h>
+
+#include <trackbase/ActsGeometry.h>
 #include <trackbase/InttDefs.h>
 #include <trackbase/MvtxDefs.h>
 #include <trackbase/TrkrDefs.h>
@@ -23,8 +28,11 @@
 
 #include <Eigen/Eigenvalues>
 
+#include <TVector3.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -94,8 +102,12 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
                                                   : m_tpcTrajectoryNodeName + " (crossing trajectories)")
               << " (>= " << m_minTpcClusters << " clusters, z offset " << m_tpcZOffset << " cm)" << std::endl
               << Name() << ":   frames: Uphi rotation " << m_frame.uphiRotation() << " rad, detector centre ("
-              << 10 * c[0] << ", " << 10 * c[1] << ", " << 10 * c[2] << ") mm, Si halves on TPC beam axis "
+              << 10 * c[0] << ", " << 10 * c[1] << ", " << 10 * c[2] << ") mm, INTT centre ("
+              << 10 * m_frame.inttCenterCm()[0] << ", " << 10 * m_frame.inttCenterCm()[1] << ", " << 10 * m_frame.inttCenterCm()[2]
+              << ") mm" << (m_frame.hasInttCenter() ? "" : " (= MVTX)") << ", Si halves on TPC beam axis "
               << (m_beamAlign.enabled() ? "on" : "off") << ", Bz " << m_bz << " T" << std::endl
+              << Name() << ":   silicon hit positions on the " << (m_flatSensors ? "FLAT sensors (tilted MVTX staves)" : "nominal CYLINDERS (approximation)")
+              << (m_applyAlignment ? " + per-sensor alignment" : ", no per-sensor alignment") << std::endl
               << Name() << ":   anchor window |r dphi| < " << m_anchorRphi << " cm, |dz| < " << m_anchorZ
               << " cm (max " << m_maxAnchors << " anchors); seed pairs 2->1" << (m_useInnerPair ? ", 1->0" : "") << std::endl
               << Name() << ":   seed window: z centre tanl_TPC * ds + " << m_seedZOffsetCm << " cm, +- " << m_seedZHalfCm << " cm; phi centre "
@@ -126,6 +138,22 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
               << ", max chi2/ndf " << (m_maxTpcChi2 > 0 ? std::to_string(m_maxTpcChi2) : std::string("off")) << ")"
               << std::endl;
   }
+  if (m_useActsGeometry || m_compareActs)
+  {
+    m_tGeometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
+    m_geomMvtx = findNode::getClass<PHG4CylinderGeomContainer>(topNode, "CYLINDERGEOM_MVTX");
+    m_geomIntt = findNode::getClass<PHG4CylinderGeomContainer>(topNode, "CYLINDERGEOM_INTT");
+    if (!m_tGeometry || !m_geomMvtx || !m_geomIntt)
+    {
+      std::cerr << Name() << ": setUseActsGeometry / setCompareWithActsGeometry need ActsGeometry, CYLINDERGEOM_MVTX and CYLINDERGEOM_INTT"
+                << " (TrackingInit before this module)" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
+    }
+    std::cout << Name() << ": silicon physics points from "
+              << (m_useActsGeometry ? "the OFFICIAL tracking geometry (ActsGeometry), z shifted by " + std::to_string(m_actsZShift) + " cm"
+                                    : std::string("own geometry"))
+              << (m_compareActs ? ", compared with ActsGeometry at End" : "") << std::endl;
+  }
   if (m_applyAlignment)
   {
     const int ret = loadAlignment();
@@ -149,11 +177,10 @@ int SiHitSeedReco::loadAlignment()
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
-  // Ideal sensor centres/axes in the DETECTOR frame, from the same nominal geometry that
-  // fillHits uses: centre = local (0, 0) of the sensor, local x along +Uphi (tilted by the
-  // MVTX stave tilt), local y along +z.  The axes matter only for the new rotation order.
+  // Ideal sensor centres/axes in the DETECTOR frame, from the same geometry that fillHits uses
+  // (sensorPoint / sensorAxes: local (0, 0) of the sensor, local x along the sensor width, local
+  // y along +z).  The axes matter only for the new rotation order.
   m_alignment.clear();
-  const double rot = mvtx_phi0[2];
   for (const auto& [key, p] : params)
   {
     const int layer = TrkrDefs::getLayer(key);
@@ -172,20 +199,8 @@ int SiHitSeedReco::loadAlignment()
       continue;
     }
 
-    const double phi = intrinsicPhi(layer, stave, ladderphi, 0.0) + rot;
-    const double z = longitudinalZ(layer, chip, ladderz, 0.0);
-    const Eigen::Vector3d centre(m_radius[layer] * std::cos(phi), m_radius[layer] * std::sin(phi), z);
-
-    const Eigen::Vector3d rhat(std::cos(phi), std::sin(phi), 0.0);
-    const Eigen::Vector3d phihat(-std::sin(phi), std::cos(phi), 0.0);
-    const double tilt = mvtx ? mvtx_tilt[layer] : 0.0;
-    const Eigen::Vector3d ex = std::cos(tilt) * phihat + std::sin(tilt) * rhat;
-    const Eigen::Vector3d ey = Eigen::Vector3d::UnitZ();
-    Eigen::Matrix3d ideal;
-    ideal.col(0) = ex;
-    ideal.col(1) = ey;
-    ideal.col(2) = ex.cross(ey);
-
+    const Eigen::Vector3d centre = sensorPoint(layer, stave, chip, ladderphi, ladderz, 0.0, 0.0);
+    const Eigen::Matrix3d ideal = sensorAxes(layer, stave, ladderphi);
     m_alignment.addSensor(SiAlignmentTransform::sensorId(key), p, centre, ideal);
   }
 
@@ -194,22 +209,137 @@ int SiHitSeedReco::loadAlignment()
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-void SiHitSeedReco::alignPoint(TrkrDefs::hitsetkey hskey, int layer, double& z, double& phi) const
+Eigen::Vector3d SiHitSeedReco::alignPoint(TrkrDefs::hitsetkey hskey, const Eigen::Vector3d& p) const
+{
+  if (!m_applyAlignment)
+  {
+    return p;
+  }
+  const auto a = m_alignment.apply(SiAlignmentTransform::sensorId(hskey), {p.x(), p.y(), p.z()});
+  return {a.x, a.y, a.z};
+}
+
+void SiHitSeedReco::alignHardware(TrkrDefs::hitsetkey hskey, int layer, double& z, double& phi) const
 {
   if (!m_applyAlignment)
   {
     return;
   }
+  // as before: nominal-cylinder point -> aligned -> back to (Uphi, Vz); only for the chaining
   const double rot = mvtx_phi0[2];
   const double p = phi + rot;
-  const SiAlignmentTransform::Point det{m_radius[layer] * std::cos(p), m_radius[layer] * std::sin(p), z};
-  const auto a = m_alignment.apply(SiAlignmentTransform::sensorId(hskey), det);
-  z = a.z;
-  phi = std::fmod(std::atan2(a.y, a.x) - rot, twopi);
+  const double r = layer <= 2 ? mvtx_r[layer] : intt_r[layer - 3];
+  const Eigen::Vector3d a = alignPoint(hskey, {r * std::cos(p), r * std::sin(p), z});
+  z = a.z();
+  phi = std::fmod(std::atan2(a.y(), a.x()) - rot, twopi);
   if (phi < 0)
   {
     phi += twopi;
   }
+}
+
+bool SiHitSeedReco::actsGlobal(TrkrDefs::hitsetkey hskey, int layer, unsigned int row, unsigned int col, int ladderz, Eigen::Vector3d& g) const
+{
+  if (!m_tGeometry)
+  {
+    return false;
+  }
+  // local coordinates exactly as MvtxClusterizer / InttClusterizer (cm)
+  double lx = 0;
+  double lz = 0;
+  if (layer <= 2)
+  {
+    auto* lg = dynamic_cast<CylinderGeom_Mvtx*>(m_geomMvtx->GetLayerGeom(layer));
+    if (!lg)
+    {
+      return false;
+    }
+    const TVector3 loc = lg->get_local_coords_from_pixel(static_cast<int>(row), static_cast<int>(col));
+    lx = loc.X();
+    lz = loc.Z();
+  }
+  else
+  {
+    auto* lg = dynamic_cast<CylinderGeomIntt*>(m_geomIntt->GetLayerGeom(layer));
+    if (!lg)
+    {
+      return false;
+    }
+    double loc[3] = {0.0, 0.0, 0.0};
+    lg->find_strip_center_localcoords(ladderz, static_cast<int>(row), static_cast<int>(col), loc);
+    lx = loc[1];
+    lz = loc[2];
+  }
+  const auto surf = m_tGeometry->maps().getSiliconSurface(hskey);
+  if (!surf)
+  {
+    return false;
+  }
+  const Acts::Vector2 local(lx * Acts::UnitConstants::cm, lz * Acts::UnitConstants::cm);
+  const Acts::Vector3 glob = surf->localToGlobal(m_tGeometry->geometry().getGeoContext(), local, Acts::Vector3(1, 1, 1)) / Acts::UnitConstants::cm;
+  g = Eigen::Vector3d(glob.x(), glob.y(), glob.z());
+  return true;
+}
+
+// Sensor geometry in the DETECTOR frame (ideal sPHENIX frame before the detector centre).
+//  MVTX (PHG4MvtxDetector, CylinderGeom_Mvtx): stave origin at R_layer (layer_nominal_radius)
+//    and azimuth phi_s = phi0 + stave * 2 pi / N, stave rotated by phi_s + pi/2 + turbo tilt;
+//    sensor centre at stave-local (+0.058128, -0.003) cm (loc_sensor_in_chip + chip/half-stave
+//    offsets), hit local x (lx, sensor frame) along the stave-local x axis.  The sensor surface
+//    spans r = 24.61 ... 27.93 mm on layer 0 (PHG4MvtxDefs rMin / rMax), not the cylinder 25.23 mm.
+//  INTT: flat ladder tangent to R_layer at its azimuth, lx along +phi.
+Eigen::Matrix3d SiHitSeedReco::sensorAxes(int layer, int stave, int ladderphi) const
+{
+  double a = 0;
+  if (layer <= 2)
+  {
+    const double phis = mvtx_phi0[layer] + stave * twopi / nstaves[layer];
+    a = phis + 0.5 * pi + (m_flatSensors ? mvtx_tilt[layer] : 0.0);
+  }
+  else
+  {
+    const int i = layer - 3;
+    a = intt_phi0[i] + twopi * ladderphi / intt_nladder[i] + 0.5 * pi;
+  }
+  Eigen::Matrix3d m;
+  m.col(0) = Eigen::Vector3d(std::cos(a), std::sin(a), 0.0);  // local x
+  m.col(1) = Eigen::Vector3d::UnitZ();                       // local y (along z)
+  m.col(2) = m.col(0).cross(m.col(1));                       // normal (outward)
+  return m;
+}
+
+Eigen::Vector3d SiHitSeedReco::sensorPoint(int layer, int stave, int chip, int ladderphi, int ladderz, double lx, double ly) const
+{
+  const double z = longitudinalZ(layer, chip, ladderz, ly);
+  if (!m_flatSensors)
+  {
+    // previous approximation: nominal cylinder
+    const double phi = intrinsicPhi(layer, stave, ladderphi, lx) + mvtx_phi0[2];
+    const double r = layer <= 2 ? mvtx_r[layer] : intt_r[layer - 3];
+    return {r * std::cos(phi), r * std::sin(phi), z};
+  }
+  double phic = 0;  // azimuth of the stave / ladder origin
+  double r = 0;
+  double xs = lx;     // stave-local x
+  double ys = 0.0;  // stave-local y (towards the beam for the MVTX after the rotation)
+  if (layer <= 2)
+  {
+    phic = mvtx_phi0[layer] + stave * twopi / nstaves[layer];
+    r = mvtx_r[layer];
+    xs = lx + 0.058128;                // sensor centre in the chip (CylinderGeom_Mvtx)
+    ys = -0.0005 - 0.02075 + 0.01825;  // sensor in chip + chip in module + half-stave in stave
+  }
+  else
+  {
+    const int i = layer - 3;
+    phic = intt_phi0[i] + twopi * ladderphi / intt_nladder[i];
+    r = intt_r[i];
+  }
+  const Eigen::Matrix3d ax = sensorAxes(layer, stave, ladderphi);
+  const Eigen::Vector3d ex = ax.col(0);
+  const Eigen::Vector3d ey(-ex.y(), ex.x(), 0.0);  // stave-local +y (Rz(a) * y)
+  const Eigen::Vector3d p = r * Eigen::Vector3d(std::cos(phic), std::sin(phic), 0.0) + xs * ex + ys * ey;
+  return {p.x(), p.y(), z};
 }
 
 int SiHitSeedReco::createNodes(PHCompositeNode* topNode)
@@ -322,6 +452,30 @@ int SiHitSeedReco::process_event(PHCompositeNode* topNode)
 
 int SiHitSeedReco::End(PHCompositeNode*)
 {
+  if (m_compareActs)
+  {
+    std::cout << Name() << ": own silicon hit positions (" << (m_flatSensors ? "flat sensors" : "cylinders")
+              << (m_applyAlignment ? " + " + m_alignmentFile : std::string(", no alignment file"))
+              << ", MVTX centre (" << 10 * m_frame.detectorCenterCm()[0] << ", " << 10 * m_frame.detectorCenterCm()[1] << ", " << 10 * m_frame.detectorCenterCm()[2]
+              << ") mm, INTT centre (" << 10 * m_frame.inttCenterCm()[0] << ", " << 10 * m_frame.inttCenterCm()[1] << ", " << 10 * m_frame.inttCenterCm()[2]
+              << ") mm) - OFFICIAL (ActsGeometry), global frame, mean / rms in mm:" << std::endl;
+    std::printf("%s:   layer        n      dx  rms      dy  rms      dz  rms      dr  rms   r*dphi  rms\n", Name().c_str());
+    for (int l = 0; l < nlayers; ++l)
+    {
+      const auto& c = m_actsCmp[l];
+      if (c[0] <= 0)
+      {
+        continue;
+      }
+      std::printf("%s:   %5d %8.0f", Name().c_str(), l, c[0]);
+      for (int k = 0; k < 5; ++k)
+      {
+        const double m = c[1 + k] / c[0];
+        std::printf("  %+6.3f %5.3f", 10 * m, 10 * std::sqrt(std::max(0.0, c[6 + k] / c[0] - m * m)));
+      }
+      std::printf("\n");
+    }
+  }
   if (Verbosity() > 0)
   {
     std::cout << Name() << ": " << m_event << " events, " << m_nChains << " chains stored; TPC tracks:";
@@ -913,9 +1067,39 @@ bool SiHitSeedReco::fillHits(PHCompositeNode* topNode)
         h.adc = it->second ? it->second->getAdc() : 0;
         h.lx = lx;
         h.ly = ly;
+        // hardware coordinates for blobs and chaining (as before)
         h.z = longitudinalZ(layer, chip, ladderz, ly);
         h.phi = intrinsicPhi(layer, stave, ladderphi, lx);
-        alignPoint(hskey, layer, h.z, h.phi);
+        alignHardware(hskey, layer, h.z, h.phi);
+        // physics position on the sensor for the track fits
+        Eigen::Vector3d pos = alignPoint(hskey, sensorPoint(layer, stave, chip, ladderphi, ladderz, lx, ly));
+        Eigen::Vector3d g;
+        if ((m_useActsGeometry || m_compareActs) && actsGlobal(hskey, layer, row, col, ladderz, g))
+        {
+          if (m_compareActs)
+          {
+            const auto own = m_frame.toGlobal(layer, {pos.x(), pos.y(), pos.z()});
+            const double ro = std::hypot(own.x, own.y), ra = std::hypot(g.x(), g.y());
+            double dphi = std::atan2(own.y, own.x) - std::atan2(g.y(), g.x());
+            dphi = std::remainder(dphi, twopi);
+            const std::array<double, 5> d{own.x - g.x(), own.y - g.y(), own.z - g.z(), ro - ra, ra * dphi};
+            auto& c = m_actsCmp[layer];
+            c[0] += 1;
+            for (int k = 0; k < 5; ++k)
+            {
+              c[1 + k] += d[k];
+              c[6 + k] += d[k] * d[k];
+            }
+          }
+          if (m_useActsGeometry)
+          {
+            const auto dg = m_frame.toDetectorFromGlobal(layer, {g.x(), g.y(), g.z() + m_actsZShift});
+            pos = Eigen::Vector3d(dg.x, dg.y, dg.z);
+          }
+        }
+        h.px = pos.x();
+        h.py = pos.y();
+        h.pz = pos.z();
         m_eventData->hits.push_back(h);
       }
     }
@@ -1881,17 +2065,16 @@ void SiHitSeedReco::toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& c
     double sx = 0, sy = 0, sz = 0;
     for (int hid : blob.hit_ids)
     {
+      // 3D hit position on the sensor (detector frame), not the nominal cylinder
       const auto& h = m_eventData->hits[hid];
-      const auto det = m_frame.toDetector(layer, h.phi, h.z);
-      sx += det.x;
-      sy += det.y;
-      sz += det.z;
+      sx += h.px;
+      sy += h.py;
+      sz += h.pz;
     }
     const double n = std::max<size_t>(1, blob.hit_ids.size());
-    const double r = SiDetectorFrame::layerRadius(layer);
     const double phi = std::atan2(sy, sx);
-    const SiDetectorFrame::Point det{r * std::cos(phi), r * std::sin(phi), sz / n};
-    const auto glob = m_frame.toGlobal(det);
+    const SiDetectorFrame::Point det{sx / n, sy / n, sz / n};
+    const auto glob = m_frame.toGlobal(layer, det);
     const auto tpc = m_beamAlign.siHalfToTpcAxis(m_beamAlign.siHalf(phi - m_frame.uphiRotation()), glob);
     chain.phys_x.push_back(tpc.x);
     chain.phys_y.push_back(tpc.y);
