@@ -15,6 +15,7 @@ pkginclude_HEADERS = \
   Tpc_AssembledTrackDisplay.h \
   SiTpc_EventDisplay.h \
   SiTpc_TrackResiduals.h \
+  SiTpc_VertexQA.h \
   Tpc_PolyClusterDisplay.h \
   Tpc_PolyClusterResiduals.h \
   TpcV0CandidateTree.h \
@@ -34,6 +35,7 @@ libTrackingDiagnostics_la_SOURCES = \
   Tpc_AssembledTrackDisplay.cc \
   SiTpc_EventDisplay.cc \
   SiTpc_TrackResiduals.cc \
+  SiTpc_VertexQA.cc \
   Tpc_PolyClusterDisplay.cc \
   Tpc_PolyClusterResiduals.cc \
   TpcV0CandidateTree.cc \
@@ -65,6 +67,7 @@ libTrackingDiagnostics_la_LIBADD = \
   -ltrack_io \
   -ltrackeralign \
   -ltrackbase_historic_io \
+  -lglobalvertex_io \
   -ltpctrackreco \
   -lsitrackreco
 

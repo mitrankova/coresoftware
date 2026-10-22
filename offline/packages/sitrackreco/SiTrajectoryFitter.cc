@@ -31,6 +31,8 @@ int SiTrajectoryFitter::InitRun(PHCompositeNode* topNode)
     const auto& c = m_frame.detectorCenterCm();
     std::cout << Name() << ": Uphi rotation " << m_frame.uphiRotation() << " rad"
               << ", detector centre (" << 10 * c[0] << ", " << 10 * c[1] << ", " << 10 * c[2] << ") mm"
+              << ", INTT centre (" << 10 * m_frame.inttCenterCm()[0] << ", " << 10 * m_frame.inttCenterCm()[1] << ", "
+              << 10 * m_frame.inttCenterCm()[2] << ") mm" << (m_frame.hasInttCenter() ? "" : " (= MVTX)")
               << ", beam (" << beamX() << ", " << beamY() << ") cm" << (m_beamFromAlignment ? " (TPC beam axis)" : "")
               << ", Bz " << m_bz << " T"
               << ", chains " << (m_selectedOnly ? "selected only" : "all candidates")
@@ -210,12 +212,12 @@ std::vector<SiTrajectoryFitter::LayerPoint> SiTrajectoryFitter::layerPoints(
     {
       continue;
     }
-    // step 1: detector frame
-    const auto det = m_frame.toDetector(h.layer, h.phi, h.z);
+    // step 1: detector frame = the 3D hit position on its sensor (SiHitPoint::px/py/pz from
+    // SiHitSeedReco: flat sensors, aligned), NOT the nominal cylinder (R_layer, Uphi)
     auto& s = sums[h.layer];
-    s.x += det.x;
-    s.y += det.y;
-    s.z += det.z;
+    s.x += h.px;
+    s.y += h.py;
+    s.z += h.pz;
     ++s.n;
   }
 
@@ -223,13 +225,12 @@ std::vector<SiTrajectoryFitter::LayerPoint> SiTrajectoryFitter::layerPoints(
   out.reserve(sums.size());
   for (const auto& [layer, s] : sums)
   {
-    const double r = SiDetectorFrame::layerRadius(layer);
     const double phi = std::atan2(s.y, s.x);
-    const SiDetectorFrame::Point det{r * std::cos(phi), r * std::sin(phi), s.z / s.n};
+    const SiDetectorFrame::Point det{s.x / s.n, s.y / s.n, s.z / s.n};
     LayerPoint p;
     p.layer = layer;
     // step 2: detector shift (global frame); step 3: its clamshell half onto the TPC beam axis
-    const SiDetectorFrame::Point glob = m_frame.toGlobal(det);
+    const SiDetectorFrame::Point glob = m_frame.toGlobal(layer, det);
     p.global = m_alignment.siHalfToTpcAxis(m_alignment.siHalf(phi - m_frame.uphiRotation()), glob);
     p.nhits = s.n;
     out.push_back(p);
