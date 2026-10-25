@@ -58,6 +58,54 @@ namespace
     }
     return true;
   }
+  // centre of a circle with fixed radius R through the points with wpos > 0 (Gauss-Newton from
+  // (cx, cy)); false if it does not converge or is degenerate
+  bool refitCentreFixedRadius(const std::vector<SiTpcHelixFit::Point>& pts, double R, double& cx, double& cy)
+  {
+    double x = cx, y = cy;
+    for (int it = 0; it < 30; ++it)
+    {
+      double A00 = 0, A01 = 0, A11 = 0, b0 = 0, b1 = 0;
+      for (const auto& p : pts)
+      {
+        if (p.wpos <= 0)
+        {
+          continue;
+        }
+        const double dx = p.x - x, dy = p.y - y, d = std::hypot(dx, dy);
+        if (d <= 0)
+        {
+          return false;
+        }
+        const double r = d - R;                   // distance of the point from the circle
+        const double jx = -dx / d, jy = -dy / d;  // d r / d (cx, cy)
+        A00 += p.wpos * jx * jx;
+        A01 += p.wpos * jx * jy;
+        A11 += p.wpos * jy * jy;
+        b0 -= p.wpos * jx * r;
+        b1 -= p.wpos * jy * r;
+      }
+      const double det = A00 * A11 - A01 * A01;
+      if (!(std::abs(det) > 1e-30 * (A00 + A11) * (A00 + A11)))
+      {
+        return false;
+      }
+      const double ux = (A11 * b0 - A01 * b1) / det, uy = (A00 * b1 - A01 * b0) / det;
+      x += ux;
+      y += uy;
+      if (!std::isfinite(x) || !std::isfinite(y))
+      {
+        return false;
+      }
+      if (std::hypot(ux, uy) < 1e-8)
+      {
+        break;
+      }
+    }
+    cx = x;
+    cy = y;
+    return true;
+  }
 }  // namespace
 
 namespace SiTpcHelixFit
@@ -206,11 +254,26 @@ namespace SiTpcHelixFit
     res.s.assign(n, 0.0);
     if (!straight)
     {
-      const Circle c = fitCircleTaubin(xs, ys, ws);
+      Circle c = fitCircleTaubin(xs, ys, ws);
       if (!c.ok)
       {
         res.status = Degenerate;
         return res;
+      }
+      if (cfg.hybridMinPoints > 0)
+      {
+        unsigned int npos = 0;
+        for (const auto& p : pts)
+        {
+          npos += p.wpos > 0;
+        }
+        double hx = c.x, hy = c.y;
+        if (npos >= cfg.hybridMinPoints && refitCentreFixedRadius(pts, c.r, hx, hy) && std::hypot(hx - c.x, hy - c.y) < cfg.hybridMaxAngle * c.r)
+        {
+          c.x = hx;
+          c.y = hy;
+          res.hybrid = true;
+        }
       }
       const double ax = x1 - c.x, ay = y1 - c.y, bx = x2 - c.x, by = y2 - c.y;
       const int h = (ax * by - ay * bx) >= 0 ? +1 : -1;

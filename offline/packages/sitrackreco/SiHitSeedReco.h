@@ -123,6 +123,37 @@ class SiHitSeedReco : public SubsysReco
   // +0.666 keeps the Si physics z in the same z frame as before (MVTX = nominal z) while the INTT
   // keeps its correct z relative to the MVTX.  0: true global z.
   void setActsZShiftCm(double dz) { m_actsZShift = dz; }
+  // HARDWARE coordinates (Uphi, Vz) used by the blobs and the chaining, with setUseActsGeometry(true):
+  // true (default): taken from the official (ActsGeometry) position of every hit,
+  //   Uphi = atan2(detector-frame y, x) - uphiRotation,  Vz = detector-frame z  (detector frame =
+  //   global (+ setActsZShiftCm) - MVTX centre / INTT centre, as for the physics points),
+  // false: the previous analytic model (ideal staves / ladders on the design cylinders at uniform
+  //   pitch, Uphi = phi0 + 2 pi k / n + lx / R, + setApplySiAlignment).  That model is wrong for the
+  //   INTT: design instead of survey radii (scale ~3.6 %), per-ladder offsets up to ~0.03 rad around the
+  //   displaced barrel, a few sensors with the opposite strip direction (errors up to ~0.15 rad), and a
+  //   ~15 mrad rotation between the MVTX and the INTT hardware frames.
+  // Hits without an official position keep the analytic coordinates.  End prints analytic - official
+  // per layer (mean / rms of dUphi, dVz, and the number of hits with |dUphi| > 0.05 rad).
+  void setHardwareFromActs(bool v) { m_hwFromActs = v; }
+  // Translation added to the INTT (layers 3-6) PHYSICS points [cm], after the geometry / alignment
+  // (official or own).  The physics-step study (plot_phys_steps.C) measures b_INTT - b_MVTX; an INTT
+  // shift adds to b_INTT one to one (measured: +(0.019, -0.034) cm moved b_INTT by +(0.019, -0.034)),
+  // so iterate: new offset = old offset - (b_INTT - b_MVTX).  Chaining (hardware Uphi, Vz) unchanged.
+  void setInttPhysicsOffsetCm(double dx, double dy)
+  {
+    m_inttPhysOffset[0] = dx;
+    m_inttPhysOffset[1] = dy;
+  }
+  // Per-layer z correction of the PHYSICS points [cm] (layers 0-2 MVTX, 3-6 INTT), added after the
+  // geometry / alignment (own or official).  For the z-alignment iteration of plot_z_alignment.C:
+  // new offset = old offset - <residual_z> of that layer.  Chaining (hardware Vz) is not changed.
+  void setSiLayerZOffsetCm(int layer, double dz)
+  {
+    if (layer >= 0 && layer < 7)
+    {
+      m_layerZOffset[layer] = dz;
+    }
+  }
   // per-layer table at End: own physics position (flat sensors / cylinders) - official position
   void setCompareWithActsGeometry(bool v) { m_compareActs = v; }
   void setSiAlignmentParamsFile(const std::string& f) { m_alignmentFile = f; }
@@ -479,6 +510,13 @@ class SiHitSeedReco : public SubsysReco
   bool m_useActsGeometry = false;
   bool m_compareActs = false;
   double m_actsZShift = 0.0;
+  bool m_hwFromActs = true;
+  std::array<double, 2> m_inttPhysOffset{};  // [cm], INTT physics points
+  // analytic - official hardware coordinates, per layer: n, sum dUphi, sum dUphi^2, sum dVz, sum dVz^2, n(|dUphi| > 0.05)
+  std::array<std::array<double, 6>, 7> m_hwCmp{};
+  unsigned long m_hwActs = 0;      // hits with hardware coordinates from the official position
+  unsigned long m_hwAnalytic = 0;  // ... from the analytic model
+  std::array<double, 7> m_layerZOffset{};
   ActsGeometry* m_tGeometry = nullptr;
   PHG4CylinderGeomContainer* m_geomMvtx = nullptr;
   PHG4CylinderGeomContainer* m_geomIntt = nullptr;

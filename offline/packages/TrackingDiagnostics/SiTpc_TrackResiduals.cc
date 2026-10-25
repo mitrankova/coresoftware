@@ -10,6 +10,9 @@
 #include <sitrackreco/SiTpc_Track.h>
 #include <sitrackreco/SiTpc_TrackContainer.h>
 
+#include <globalvertex/SvtxVertex.h>
+#include <globalvertex/SvtxVertexMap.h>
+
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phool/PHCompositeNode.h>
 #include <phool/getClass.h>
@@ -58,7 +61,10 @@ namespace
   }
 
   // nominal Si layer radii [cm], as in SiHitSeedReco
-  constexpr double kSiRadius[7] = {2.523, 3.336, 4.148, 7.188 - 0.0036, 7.732 - 0.0036, 9.680 - 0.0036, 10.262 - 0.0036};
+  // layer radii for the hardware ddphi prediction: MVTX nominal, INTT SURVEY sensor radii (the hardware
+  // Uphi of SiHitSeedReco::setHardwareFromActs(true) are the angles of the official positions, which sit
+  // at the survey radii; the design radii 7.188 / 7.732 / 9.680 / 10.262 cm are ~3.6 % too small)
+  constexpr double kSiRadius[7] = {2.523, 3.336, 4.148, 7.453, 8.046, 9.934, 10.569};
 
   constexpr const char* kChargeName[2] = {"neg", "pos"};
   constexpr const char* kChargeTitle[2] = {"q<0", "q>0"};
@@ -135,6 +141,20 @@ int SiTpc_TrackResiduals::Init(PHCompositeNode* /*unused*/)
   m_tree->Branch("vertex_z_mean", &m_vertexZMean, "vertex_z_mean/D");
   m_tree->Branch("vertex_z_rms", &m_vertexZRms, "vertex_z_rms/D");
   m_tree->Branch("vertex_z_err", &m_vertexZErr, "vertex_z_err/D");
+  m_tree->Branch("pv_sitpc_z", &m_pvSiTpcZ, "pv_sitpc_z/D");
+  m_tree->Branch("pv_sitpc_ez", &m_pvSiTpcEz, "pv_sitpc_ez/D");
+  m_tree->Branch("pv_sitpc_n", &m_pvSiTpcN, "pv_sitpc_n/I");
+  m_tree->Branch("pv_sitpc_in", &m_pvSiTpcIn, "pv_sitpc_in/I");
+  m_tree->Branch("pv_sitpc_z_excl", &m_pvSiTpcZExcl, "pv_sitpc_z_excl/D");
+  // x, y of that vertex (SiTpc_VertexFinder, common frame) and the signed DCA_xy of this track's circle to it
+  // (> 0: vertex outside the circle); pv_sitpc_in tells whether the track is in the vertex (biased DCA)
+  m_tree->Branch("pv_sitpc_x", &m_pvSiTpcX, "pv_sitpc_x/D");
+  m_tree->Branch("pv_sitpc_y", &m_pvSiTpcY, "pv_sitpc_y/D");
+  m_tree->Branch("pv_sitpc_ex", &m_pvSiTpcEx, "pv_sitpc_ex/D");
+  m_tree->Branch("pv_sitpc_ey", &m_pvSiTpcEy, "pv_sitpc_ey/D");
+  m_tree->Branch("pv_sitpc_dca_xy", &m_pvSiTpcDcaXY, "pv_sitpc_dca_xy/D");
+  m_tree->Branch("pv_si_z", &m_pvSiZ, "pv_si_z/D");
+  m_tree->Branch("pv_si_n", &m_pvSiN, "pv_si_n/I");
   m_tree->Branch("circle_rms", &m_circleRms, "circle_rms/D");
   m_tree->Branch("z_rms", &m_zRms, "z_rms/D");
   m_tree->Branch("pca_x", &m_pcaX, "pca_x/D");
@@ -477,6 +497,9 @@ void SiTpc_TrackResiduals::reset_tree_values()
   m_trackVertexZ = m_vertexZ = m_vertexDz = m_vertexScore = kNaN;
   m_vertexZMean = m_vertexZRms = m_vertexZErr = kNaN;
   m_vertexStatus = m_vertexOwnZ = m_vertexNSi = 0;
+  m_pvSiTpcZ = m_pvSiTpcEz = m_pvSiTpcZExcl = m_pvSiZ = kNaN;
+  m_pvSiTpcX = m_pvSiTpcY = m_pvSiTpcEx = m_pvSiTpcEy = m_pvSiTpcDcaXY = kNaN;
+  m_pvSiTpcN = m_pvSiTpcIn = m_pvSiN = 0;
   for (int l = 0; l < kNLayers; ++l)
   {
     m_resRPhiLayer[l] = kNaN;
@@ -526,6 +549,8 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
   m_clusters = findNode::getClass<Tpc_PolyClusterContainer>(topNode, m_clusterNodeName);
   m_siSeeds = findNode::getClass<SiHitSeedEvent>(topNode, m_siSeedNodeName);
   m_decisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_crossingNodeName);
+  m_sitpcVertices = m_sitpcVertexMapName.empty() ? nullptr : findNode::getClass<SvtxVertexMap>(topNode, m_sitpcVertexMapName);
+  m_siVertices = m_siVertexMapName.empty() ? nullptr : findNode::getClass<SvtxVertexMap>(topNode, m_siVertexMapName);
 
   // ---- matching tree
   m_event = m_evt;
@@ -858,6 +883,65 @@ int SiTpc_TrackResiduals::process_event(PHCompositeNode* topNode)
     if (m_tpcCrossing != kNoCrossing && m_inttCrossing != kNoCrossing)
     {
       m_crossingDiff = m_inttCrossing - m_tpcCrossing;
+    }
+    // ---- pair-finder vertices of this crossing (nearest in z to the track)
+    if (m_tpcCrossing != kNoCrossing)
+    {
+      auto nearest = [this](const SvtxVertexMap* map, double zt) -> const SvtxVertex*
+      {
+        const SvtxVertex* best = nullptr;
+        if (!map || !std::isfinite(zt))
+        {
+          return best;
+        }
+        for (auto iv = map->begin(); iv != map->end(); ++iv)
+        {
+          const SvtxVertex* v = iv->second;
+          if (!v || static_cast<int>(v->get_beam_crossing()) != m_tpcCrossing)
+          {
+            continue;
+          }
+          if (!best || std::fabs(v->get_z() - zt) < std::fabs(best->get_z() - zt))
+          {
+            best = v;
+          }
+        }
+        return best;
+      };
+      if (const SvtxVertex* v = nearest(m_sitpcVertices, m_z0))
+      {
+        m_pvSiTpcZ = v->get_z();
+        m_pvSiTpcEz = std::sqrt(std::max(0.0, static_cast<double>(v->get_error(2, 2))));
+        m_pvSiTpcN = static_cast<int>(v->size_tracks());
+        m_pvSiTpcX = v->get_x();
+        m_pvSiTpcY = v->get_y();
+        m_pvSiTpcEx = std::sqrt(std::max(0.0, static_cast<double>(v->get_error(0, 0))));
+        m_pvSiTpcEy = std::sqrt(std::max(0.0, static_cast<double>(v->get_error(1, 1))));
+        if (helix.fitted() && helix.R > 0 && helix.R < SiTpcHelixFit::kStraightRadius)
+        {
+          m_pvSiTpcDcaXY = std::hypot(m_pvSiTpcX - helix.cx, m_pvSiTpcY - helix.cy) - helix.R;
+        }
+        for (auto itk = v->begin_tracks(); itk != v->end_tracks(); ++itk)
+        {
+          if (*itk == m_trackId)
+          {
+            m_pvSiTpcIn = 1;
+          }
+        }
+        if (!m_pvSiTpcIn)
+        {
+          m_pvSiTpcZExcl = m_pvSiTpcZ;
+        }
+        else if (m_pvSiTpcN >= 2)
+        {
+          m_pvSiTpcZExcl = (m_pvSiTpcN * m_pvSiTpcZ - m_z0) / (m_pvSiTpcN - 1);
+        }
+      }
+      if (const SvtxVertex* v = nearest(m_siVertices, m_siZ0))
+      {
+        m_pvSiZ = v->get_z();
+        m_pvSiN = static_cast<int>(v->size_tracks());
+      }
     }
 
     m_tree->Fill();

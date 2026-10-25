@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstddef>
 #include <map>
 #include <numeric>
@@ -159,12 +160,19 @@ bool PairVertexFinder::fromPointsWithCurvature(unsigned int id, const std::vecto
     m.phi0 = std::atan2(u.y(), u.x());
     m.dir = Eigen::Vector3d(u.x(), u.y(), tanl).normalized();
   }
-  double sumZ = 0;
+  // z at p1 from every point, weighted by its z resolution: MVTX pixels (r < kMaxPixelR) ~0.003 cm,
+  // INTT strips ~0.46 cm (weight kStripZWeight ~ (0.003/0.46)^2); with equal weights the INTT strips
+  // moved z_ref by ~1-2 mm (Si+TPC vertex z much worse than the Si-only one)
+  constexpr double kMaxPixelR = 6.0;       // [cm] MVTX layers r < ~5 cm, INTT > ~7 cm
+  constexpr double kStripZWeight = 1.0e-4;
+  double sumWZ = 0, sumW = 0;
   for (const auto& q : points)
   {
-    sumZ += q.z() - tanl * arc(q);
+    const double w = q.head<2>().norm() < kMaxPixelR ? 1.0 : kStripZWeight;
+    sumWZ += w * (q.z() - tanl * arc(q));
+    sumW += w;
   }
-  m.z0 = sumZ / static_cast<double>(points.size());
+  m.z0 = sumW > 0 ? sumWZ / sumW : std::numeric_limits<double>::quiet_NaN();
   return std::isfinite(m.z0) && std::isfinite(m.phi0);
 }
 

@@ -153,6 +153,23 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
               << (m_useActsGeometry ? "the OFFICIAL tracking geometry (ActsGeometry), z shifted by " + std::to_string(m_actsZShift) + " cm"
                                     : std::string("own geometry"))
               << (m_compareActs ? ", compared with ActsGeometry at End" : "") << std::endl;
+    std::cout << Name() << ": silicon HARDWARE coordinates (blobs, chaining) from "
+              << (m_useActsGeometry && m_hwFromActs ? std::string("the official positions (Uphi about the MVTX / INTT centre)")
+                                                    : std::string("the analytic stave / ladder model"))
+              << std::endl;
+  }
+  if (m_inttPhysOffset[0] != 0.0 || m_inttPhysOffset[1] != 0.0)
+  {
+    std::cout << Name() << ": INTT physics points shifted by (" << 10 * m_inttPhysOffset[0] << ", " << 10 * m_inttPhysOffset[1] << ") mm" << std::endl;
+  }
+  if (std::any_of(m_layerZOffset.begin(), m_layerZOffset.end(), [](double v) { return v != 0.0; }))
+  {
+    std::cout << Name() << ": per-layer z offsets of the physics points [mm]:";
+    for (int l = 0; l < nlayers; ++l)
+    {
+      std::cout << " L" << l << " " << 10 * m_layerZOffset[l];
+    }
+    std::cout << std::endl;
   }
   if (m_applyAlignment)
   {
@@ -452,6 +469,23 @@ int SiHitSeedReco::process_event(PHCompositeNode* topNode)
 
 int SiHitSeedReco::End(PHCompositeNode*)
 {
+  if (m_hwActs > 0)
+  {
+    std::cout << Name() << ": hardware coordinates from the official positions for " << m_hwActs << " hits, analytic for " << m_hwAnalytic
+              << "; analytic model - official per layer (dUphi [mrad], dVz [mm]: mean / rms; hits with |dUphi| > 50 mrad):" << std::endl;
+    for (int l = 0; l < nlayers; ++l)
+    {
+      const auto& c = m_hwCmp[l];
+      if (c[0] <= 0)
+      {
+        continue;
+      }
+      const double mu = c[1] / c[0], mz = c[3] / c[0];
+      std::printf("%s:   layer %d  n %9.0f  dUphi %+8.2f / %7.2f   dVz %+7.3f / %6.3f   |dUphi|>50 mrad: %.0f (%.2f %%)\n", Name().c_str(), l, c[0], 1e3 * mu,
+                  1e3 * std::sqrt(std::max(0.0, c[2] / c[0] - mu * mu)), 10 * mz, 10 * std::sqrt(std::max(0.0, c[4] / c[0] - mz * mz)), c[5],
+                  100.0 * c[5] / c[0]);
+    }
+  }
   if (m_compareActs)
   {
     std::cout << Name() << ": own silicon hit positions (" << (m_flatSensors ? "flat sensors" : "cylinders")
@@ -1067,10 +1101,12 @@ bool SiHitSeedReco::fillHits(PHCompositeNode* topNode)
         h.adc = it->second ? it->second->getAdc() : 0;
         h.lx = lx;
         h.ly = ly;
-        // hardware coordinates for blobs and chaining (as before)
+        // hardware coordinates for blobs and chaining: analytic model, replaced below by the official
+        // position of the hit (setHardwareFromActs, with setUseActsGeometry)
         h.z = longitudinalZ(layer, chip, ladderz, ly);
         h.phi = intrinsicPhi(layer, stave, ladderphi, lx);
         alignHardware(hskey, layer, h.z, h.phi);
+        bool hwFromActs = false;
         // physics position on the sensor for the track fits
         Eigen::Vector3d pos = alignPoint(hskey, sensorPoint(layer, stave, chip, ladderphi, ladderz, lx, ly));
         Eigen::Vector3d g;
@@ -1095,11 +1131,39 @@ bool SiHitSeedReco::fillHits(PHCompositeNode* topNode)
           {
             const auto dg = m_frame.toDetectorFromGlobal(layer, {g.x(), g.y(), g.z() + m_actsZShift});
             pos = Eigen::Vector3d(dg.x, dg.y, dg.z);
+            if (m_hwFromActs && std::hypot(dg.x, dg.y) > 0)
+            {
+              // hardware coordinates of the same hit from its official position (same detector frame
+              // as SiDetectorFrame::toDetector: angle about the layer's centre minus the Uphi rotation)
+              double u = std::fmod(std::atan2(dg.y, dg.x) - m_frame.uphiRotation(), twopi);
+              if (u < 0)
+              {
+                u += twopi;
+              }
+              const double du = std::remainder(h.phi - u, twopi);
+              const double dz = h.z - dg.z;
+              auto& c = m_hwCmp[layer];
+              c[0] += 1;
+              c[1] += du;
+              c[2] += du * du;
+              c[3] += dz;
+              c[4] += dz * dz;
+              c[5] += std::abs(du) > 0.05 ? 1 : 0;
+              h.phi = u;
+              h.z = dg.z;
+              hwFromActs = true;
+            }
           }
+        }
+        ++(hwFromActs ? m_hwActs : m_hwAnalytic);
+        if (layer >= 3)
+        {
+          pos.x() += m_inttPhysOffset[0];
+          pos.y() += m_inttPhysOffset[1];
         }
         h.px = pos.x();
         h.py = pos.y();
-        h.pz = pos.z();
+        h.pz = pos.z() + m_layerZOffset[layer];
         m_eventData->hits.push_back(h);
       }
     }
