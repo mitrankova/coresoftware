@@ -74,7 +74,10 @@ class SiTpc_VertexFinder : public SubsysReco
   void setTrackPtCut(double v) { m_minPt = v; }               // tracks with a measured pt
   void setMinTpcClusters(unsigned int v) { m_minTpcClusters = v; }  // Tpc, SiTpc
   void setMinSiPoints(unsigned int v) { m_minSiPoints = v; }        // Si, SiTpc
-  void setMinMvtxPoints(unsigned int v) { m_minMvtx = v; }          // Si
+  void setMinMvtxPoints(unsigned int v) { m_minMvtx = v; }          // Si, SiTpc (MVTX points of the track)
+  //    SiTpc: |phi_Si - phi_TPC| of the Si-TPC match below this (wrong chains / secondaries have large
+  //    values; <= 0: no cut)
+  void setMaxMatchDphi(double rad) { m_maxMatchDphi = rad; }
   void setTrackQualityCut(double chi2ndf) { m_maxChi2Ndf = chi2ndf; }  // Tpc fit chi2/ndf
   void setUseStraightLines(bool v) { m_useLines = v; }             // fits without curvature
   void setMagneticFieldTesla(double v) { m_bz = v; }                // Tpc helix radius from pt
@@ -158,6 +161,9 @@ class SiTpc_VertexFinder : public SubsysReco
   unsigned int m_minTpcClusters{10};
   unsigned int m_minSiPoints{3};
   unsigned int m_minMvtx{2};
+  double m_maxMatchDphi{-1.0};
+  unsigned long m_nRejMvtx{0};
+  unsigned long m_nRejMatch{0};
   double m_maxChi2Ndf{1.0e9};
   bool m_useLines{true};
   double m_bz{1.4};

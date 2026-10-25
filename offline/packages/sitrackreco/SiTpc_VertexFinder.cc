@@ -28,6 +28,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string>
 
 namespace
 {
@@ -112,6 +113,9 @@ int SiTpc_VertexFinder::InitRun(PHCompositeNode* topNode)
             << c.maxDcaXY << " cm, |z| < " << c.maxAbsZ << " cm" << (c.useBeamSpotConstraint ? ", beam-spot constraint" : "")
             << "; output shift (" << m_shift[0] << ", " << m_shift[1] << ", " << m_shift[2] << ") cm"
             << (m_source == Source::SiTpc ? (m_siTpcPositionFromSi ? "; SiTpc position from the Si points" : "; SiTpc position from the Si+TPC fit") : "")
+            << (m_source != Source::Tpc ? "; tracks with >= " + std::to_string(m_minMvtx) + " MVTX points" : std::string())
+            << (m_source == Source::SiTpc && m_maxMatchDphi > 0 ? ", |match dphi| < " + std::to_string(m_maxMatchDphi) + " rad" : std::string())
+            << (m_minPt > 0 ? ", pt > " + std::to_string(m_minPt) + " GeV" : std::string())
             << std::endl;
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -395,6 +399,22 @@ void SiTpc_VertexFinder::collectSiTpc(PHCompositeNode* topNode)
     {
       continue;
     }
+    // quality of the Si seed: MVTX points (2-point chains define position and direction with no redundancy)
+    unsigned int nMvtx = 0;
+    for (unsigned int k = 0; k < t->size_points(); ++k)
+    {
+      nMvtx += t->get_point_type(k) == SiTpc_Track::SiPoint && t->get_point_layer(k) >= 0 && t->get_point_layer(k) <= 2;
+    }
+    if (nMvtx < m_minMvtx)
+    {
+      ++m_nRejMvtx;
+      continue;
+    }
+    if (m_maxMatchDphi > 0.0 && !(std::fabs(t->get_match_dphi()) < m_maxMatchDphi))
+    {
+      ++m_nRejMatch;
+      continue;
+    }
     const double pt = t->get_pt();
     if (good(pt) && pt < m_minPt)
     {
@@ -512,6 +532,11 @@ int SiTpc_VertexFinder::End(PHCompositeNode* /*unused*/)
             << ", selected " << m_nSelected << " (without a usable crossing " << m_nNoCrossing << (m_requireCrossing ? ", skipped" : "")
             << "), crossings with tracks " << m_nGroups << ", vertices " << m_nVertices << ", tracks in vertices "
             << m_nTracksInVertices << std::endl;
+  if (m_source == Source::SiTpc)
+  {
+    std::cout << Name() << "::End - SiTpc track selection: rejected with < " << m_minMvtx << " MVTX points " << m_nRejMvtx
+              << ", with |match dphi| >= " << m_maxMatchDphi << " rad " << m_nRejMatch << std::endl;
+  }
   if (m_source == Source::SiTpc && m_siTpcPositionFromSi)
   {
     std::cout << Name() << "::End - tracks positioned by their Si points with the Si+TPC curvature " << m_nSiPosition << std::endl;

@@ -30,6 +30,7 @@ namespace SiTpcHelixFit
     double wxy = 1;  // weight in the circle fit (0 = not used in xy)
     double wz = 1;   // weight in the z(s) fit  (0 = not used in z)
     int group = 0;   // 0 = silicon, 1 = TPC (gets the optional z offset)
+    double wpos = 0; // weight in the hybrid centre refit (Config::hybridMinPoints; 0 = not used)
   };
 
   struct Config
@@ -40,6 +41,15 @@ namespace SiTpcHelixFit
     double minLeverArm = 0;    // [cm] radial span below which a straight line is fitted
     double beamWeight = 0;     // > 0: beam position added to the xy fit with this weight
     bool groupZOffset = false;  // free z offset for group 1
+    // Hybrid xy (> 0): after the circle fit with the wxy weights (e.g. TPC points only: curvature),
+    // the circle CENTRE is refitted with the radius kept fixed to the points with wpos > 0 (e.g. the
+    // silicon points: position and direction at the beam), if at least this many have wpos > 0.
+    // pca, phi, dca, helicity, s and the z fit then use the refitted circle; pt is unchanged.
+    // The refit is rejected (Result::hybrid false) if the centre moves by more than hybridMaxAngle * R:
+    // a change of the track direction at the beam by dphi moves the centre by ~R dphi (1 cm for
+    // R = 1 m and 10 mrad), the position change (dca) only by ~dca.
+    unsigned int hybridMinPoints = 0;
+    double hybridMaxAngle = 0.15;  // [rad]
   };
 
   // fit status values, identical to Si_Trajectory::FitStatus
@@ -69,6 +79,7 @@ namespace SiTpcHelixFit
     double z0 = 0, tanl = 0;
     double zOffset = 0;            // fitted offset of group 1 (0 if not fitted)
     double zRms = 0;               // rms of the z residuals (points with wz > 0, offset applied)
+    bool hybrid = false;           // circle centre refitted to the wpos points (Config::hybridMinPoints)
     std::vector<double> s;         // path length of every input point
     bool fitted() const { return status == Ok || status == StraightLine; }
   };

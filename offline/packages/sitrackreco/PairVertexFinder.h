@@ -131,7 +131,8 @@ class PairVertexFinder
   //! helix through the silicon points with a given curvature (from a longer fit, e.g. the Si+TPC
   //! radius and helicity): circle of radius R through the innermost and outermost point (side
   //! from the helicity, short arc), reference point = innermost point, z = z_ref + tanl * s with
-  //! z_ref from all points (arc length s from the innermost point).  Not finite radius: line
+  //! z_ref from all points weighted by their z resolution (MVTX r < 6 cm: 1, INTT: 1e-4; arc length s
+  //! from the innermost point).  Not finite radius: line
   //! through the two points.  Points: (x, y, z) [cm], at least two at different radius.
   static bool fromPointsWithCurvature(unsigned int id, const std::vector<Eigen::Vector3d>& points, double radius, int helicity,
                                       double tanl, double pt, TrackModel& m);

@@ -11,6 +11,7 @@ class PHCompositeNode;
 class SiHitSeedEvent;
 struct SiHitChain;
 class SiTpc_TrackContainer;
+class SvtxVertexMap;
 class TpcCrossingDecisionContainer;
 class Tpc_PolyClusterContainer;
 class TFile;
@@ -61,6 +62,15 @@ class TTree;
 //     vertex_z_rms          sample standard deviation of those z (NaN if fewer than 2)
 //     vertex_z_err          setVertexTrackZSigma / sqrt(vertex_n_si) (expected uncertainty)
 //     si_z0 - vertex_z      (plot it) Si-only fit z0 versus the decided vertex
+//   Pair-finder vertices of the same crossing (SiTpc_VertexFinder; NaN / 0 if absent or the node is
+//   missing), for the z-alignment / DCA_z study (plot_z_alignment.C):
+//     pv_sitpc_z, pv_sitpc_ez, pv_sitpc_n   SiTpcPolyVertexMap vertex of this crossing nearest in z
+//                                           to the track z0: z, sigma_z, number of tracks
+//     pv_sitpc_in                           1 if this track is one of its tracks
+//     pv_sitpc_z_excl                       vertex z WITHOUT this track (unweighted leave-one-out
+//                                           (n z - z0) / (n - 1); = z if the track is not in it)
+//     pv_si_z, pv_si_n                      SiPolyVertexMap vertex of this crossing nearest to si_z0
+//   -> prompt DCA_z = z0 - pv_sitpc_z_excl (Si+TPC track), si_z0 - pv_si_z (Si-only track)
 // Tree "vertices": one entry per (event, decided crossing with a vertex), i.e. per collision
 //   event, crossing, vertex_z, n_tracks (all Si+TPC tracks), n_si (own Si z), n_tier0,
 //   z_mean, z_rms, z_err (as above), and per track of the collision (vectors):
@@ -135,6 +145,9 @@ class SiTpc_TrackResiduals : public SubsysReco
   void setMinTpcClusters(unsigned int v) { m_minTpcClusters = v; }
   void setMinSiPoints(unsigned int v) { m_minSiPoints = v; }
   void setWriteMatchingTree(bool v) { m_writeMatching = v; }
+  // pair-finder vertex maps (SiTpc_VertexFinder) for the pv_* branches, "" = not used
+  void setSiTpcVertexMapName(const std::string& n) { m_sitpcVertexMapName = n; }
+  void setSiVertexMapName(const std::string& n) { m_siVertexMapName = n; }
   // collision vertices: "vertices" tree, and the single-track Si z resolution at the beam [cm]
   // used for vertex_z_err (measured ~0.22 cm from the spread of multi-track vertices)
   void setWriteVertexTree(bool v) { m_writeVertices = v; }
@@ -190,6 +203,14 @@ class SiTpc_TrackResiduals : public SubsysReco
   std::string m_clusterNodeName{"TPC_POLYCLUSTERS"};
   std::string m_siSeedNodeName{"SI_HIT_SEED_EVENT"};
   std::string m_crossingNodeName{"TPC_CROSSING_DECISIONS"};
+  std::string m_sitpcVertexMapName{"SiTpcPolyVertexMap"};
+  std::string m_siVertexMapName{"SiPolyVertexMap"};
+  SvtxVertexMap* m_sitpcVertices{nullptr};
+  SvtxVertexMap* m_siVertices{nullptr};
+  // pair-finder vertices of the track's crossing
+  double m_pvSiTpcZ{0}, m_pvSiTpcEz{0}, m_pvSiTpcZExcl{0}, m_pvSiZ{0};
+  double m_pvSiTpcX{0}, m_pvSiTpcY{0}, m_pvSiTpcEx{0}, m_pvSiTpcEy{0}, m_pvSiTpcDcaXY{0};
+  int m_pvSiTpcN{0}, m_pvSiTpcIn{0}, m_pvSiN{0};
 
   double m_minPt{0.0};
   double m_maxPt{1.0e30};

@@ -50,6 +50,7 @@ class SiTpcTrackMatcher : public SubsysReco
 
   int InitRun(PHCompositeNode*) override;
   int process_event(PHCompositeNode*) override;
+  int End(PHCompositeNode*) override;
 
   enum class Association
   {
@@ -107,6 +108,19 @@ class SiTpcTrackMatcher : public SubsysReco
     m_wz[2] = tpc;
   }
   void setFitTpcZOffset(bool v) { m_fitTpcZOffset = v; }
+  // Hybrid xy: curvature from the circle fit with the xy weights above (with setXYWeights(0, 0, 1)
+  // the TPC-only circle: TPC pt unchanged), circle CENTRE refitted with that radius to the silicon
+  // points (weights wMvtx, wIntt ~ 1/sigma_rphi^2 relative to the MVTX: MVTX ~5 um, INTT ~25 um ->
+  // 0.04).  The Si+TPC dca, pca, phi and z0 then have silicon precision; the TPC stays free in
+  // position (its distortions / offsets do not move the track at the beam).  Needs at least
+  // minPoints silicon points with weight > 0; otherwise the plain fit is kept.
+  void setHybridXY(bool on, double wMvtx = 1.0, double wIntt = 0.04, unsigned int minPoints = 2)
+  {
+    m_hybrid = on;
+    m_hybridW[0] = wMvtx;
+    m_hybridW[1] = wIntt;
+    m_hybridMinPoints = minPoints;
+  }
   void setBeamConstraint(bool on, double weight = 1.0)
   {
     m_beamConstraint = on;
@@ -142,6 +156,11 @@ class SiTpcTrackMatcher : public SubsysReco
   double m_wxy[3] = {10.0, 10.0, 1.0};  // MVTX, INTT, TPC
   double m_wz[3] = {10.0, 0.01, 1.0};
   bool m_fitTpcZOffset = true;
+  bool m_hybrid = false;
+  double m_hybridW[2] = {1.0, 0.04};  // MVTX, INTT
+  unsigned int m_hybridMinPoints = 2;
+  unsigned long m_nFitted = 0;
+  unsigned long m_nHybrid = 0;
   bool m_beamConstraint = false;
   double m_beamWeight = 1.0;
 

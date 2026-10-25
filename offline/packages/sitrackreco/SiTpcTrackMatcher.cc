@@ -106,7 +106,23 @@ int SiTpcTrackMatcher::InitRun(PHCompositeNode* topNode)
               << ", TPC z offset " << (m_fitTpcZOffset ? "free" : "fixed") << ", Si halves on TPC beam axis "
               << (m_alignment.enabled() ? "on" : "off") << ", beam (" << beamX() << ", " << beamY() << ") cm" << std::endl;
   }
+  std::cout << Name() << ": hybrid xy (TPC curvature, circle centre from the silicon points) "
+            << (m_hybrid ? "ON, Si weights MVTX/INTT " + std::to_string(m_hybridW[0]) + "/" + std::to_string(m_hybridW[1]) + ", min points " +
+                               std::to_string(m_hybridMinPoints)
+                         : std::string("off"))
+            << std::endl;
   return createNodes(topNode);
+}
+
+int SiTpcTrackMatcher::End(PHCompositeNode* /*topNode*/)
+{
+  std::cout << Name() << ": " << m_nEvents << " events, " << m_nMatched << " Si+TPC tracks, " << m_nFitted << " fitted";
+  if (m_hybrid)
+  {
+    std::cout << ", " << m_nHybrid << " with the hybrid xy (" << (m_nFitted ? 100.0 * m_nHybrid / m_nFitted : 0.0) << " %)";
+  }
+  std::cout << std::endl;
+  return Fun4AllReturnCodes::EVENT_OK;
 }
 
 int SiTpcTrackMatcher::createNodes(PHCompositeNode* topNode)
@@ -350,6 +366,7 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
   cfg.bz = m_bz;
   cfg.groupZOffset = m_fitTpcZOffset;
   cfg.beamWeight = m_beamConstraint ? m_beamWeight : 0.0;
+  cfg.hybridMinPoints = m_hybrid ? m_hybridMinPoints : 0;
 
   for (const Candidate* c : order)
   {
@@ -390,7 +407,7 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
     {
       const int layer = s.t->get_point_layer(k);
       const int d = detIndex(layer);
-      pts.push_back({s.t->get_point_x(k), s.t->get_point_y(k), s.t->get_point_z(k), m_wxy[d], m_wz[d], 0});
+      pts.push_back({s.t->get_point_x(k), s.t->get_point_y(k), s.t->get_point_z(k), m_wxy[d], m_wz[d], 0, m_hybrid ? m_hybridW[d] : 0.0});
       track->add_point(SiTpc_Track::SiPoint, layer, k, s.t->get_point_x(k), s.t->get_point_y(k), s.t->get_point_z(k));
     }
     for (const auto& p : t.points)
@@ -403,6 +420,8 @@ int SiTpcTrackMatcher::process_event(PHCompositeNode* topNode)
 
     const auto r = SiTpcHelixFit::fit(pts, cfg);
     track->set_fit_status(r.status);
+    m_nFitted += r.fitted();
+    m_nHybrid += r.hybrid;
     if (r.fitted())
     {
       track->set_circle_x(r.cx);
