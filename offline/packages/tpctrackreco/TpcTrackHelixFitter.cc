@@ -1,5 +1,7 @@
 #include "TpcTrackHelixFitter.h"
 
+#include <trackbase/TrackFitUtils.h>
+
 #include <Eigen/Dense>
 
 #include <algorithm>
@@ -418,28 +420,25 @@ bool TpcTrackHelixFitter::fit_circle_least_squares(const std::vector<TpcTrackPoi
     return false;
   }
 
-  Eigen::MatrixXd matrix(nfit, 3);
-  Eigen::VectorXd rhs(nfit);
+  // Taubin circle fit, as in the standard sPHENIX seeding and Tpc_FittingTools::fit; the previous
+  // algebraic (Kasa) fit underestimates R on short arcs, which gives a charge-dependent phi0 bias.
+  // (Name kept for the callers.)
+  TrackFitUtils::position_vector_t xy;
+  xy.reserve(nfit);
   for (std::size_t i = 0; i < nfit; ++i)
   {
     const auto &pos = points[i].position;
-    matrix(static_cast<int>(i), 0) = pos.x;
-    matrix(static_cast<int>(i), 1) = pos.y;
-    matrix(static_cast<int>(i), 2) = 1.0;
-    rhs(static_cast<int>(i)) = -(square(pos.x) + square(pos.y));
+    xy.emplace_back(pos.x, pos.y);
   }
-
-  const Eigen::Vector3d solution = matrix.colPivHouseholderQr().solve(rhs);
-  cx = -0.5 * solution(0);
-  cy = -0.5 * solution(1);
-  const double radius2 = square(cx) + square(cy) - solution(2);
-  if (radius2 <= 0.0 || !std::isfinite(radius2))
+  const auto [r, xc, yc] = TrackFitUtils::circle_fit_by_taubin(xy);
+  if (!std::isfinite(r) || !std::isfinite(xc) || !std::isfinite(yc) || r <= 0.0)
   {
     return false;
   }
-
-  radius = std::sqrt(radius2);
-  return radius > 0.0 && std::isfinite(radius);
+  cx = xc;
+  cy = yc;
+  radius = r;
+  return true;
 }
 
 bool TpcTrackHelixFitter::fit_circle_curvature_refined(const std::vector<TpcTrackPoint> &points,
