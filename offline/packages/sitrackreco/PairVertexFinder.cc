@@ -559,6 +559,17 @@ PairVertexFinder::VertexFit PairVertexFinder::fitVertex(const std::vector<TrackM
 }
 
 //____________________________________________________________________________
+PairVertexFinder::VertexFit PairVertexFinder::fit(const std::vector<TrackModel>& models, const Eigen::Vector3d& seed) const
+{
+  std::vector<unsigned int> tracks(models.size());
+  for (unsigned int i = 0; i < tracks.size(); ++i)
+  {
+    tracks[i] = i;
+  }
+  return fitVertex(models, std::move(tracks), seed);
+}
+
+//____________________________________________________________________________
 std::vector<PairVertexFinder::VertexFit> PairVertexFinder::find(const std::vector<TrackModel>& models, Stats* stats) const
 {
   std::vector<VertexFit> vertices;

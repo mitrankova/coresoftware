@@ -143,6 +143,13 @@ class PairVertexFinder
   //! vertices of one group of tracks, largest first
   std::vector<VertexFit> find(const std::vector<TrackModel>& models, Stats* stats = nullptr) const;
 
+  //! weighted least-squares fit of ALL given tracks (no pair finding), started at `seed`: the step 4
+  //! of find() - re-linearised every iteration, the worst track dropped while its chi2 exceeds
+  //! maxTrackChi2 (keeping >= minTracksPerVertex), beam-spot constraint as configured.
+  //! VertexFit::tracks are indices into `models`.  Used to refit a vertex without some of its
+  //! tracks (e.g. the daughters of a D0 candidate) with the same weights.
+  VertexFit fit(const std::vector<TrackModel>& models, const Eigen::Vector3d& seed) const;
+
   LinearTrack linearize(const TrackModel& m, const Eigen::Vector3d& target) const;
   double trackChi2(const TrackModel& m, const Eigen::Vector3d& vtx) const;
 
