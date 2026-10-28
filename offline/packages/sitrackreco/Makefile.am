@@ -21,6 +21,9 @@ pkginclude_HEADERS = \
   SiDetectorFrame.h \
   SiTpcBeamAlignment.h \
   SiTpcHelixFit.h \
+  SiSeedComparisonQA.h \
+  SiTpc_ResolutionQA.h \
+  SiTpcActsFitter.h \
   SiTpcReference.h \
   SiTpc_Track.h \
   SiTpc_Trackv1.h \
@@ -57,6 +60,9 @@ libsitrackreco_la_SOURCES = \
   SiTpc_Trackv1.cc \
   SiTpc_TrackContainerv1.cc \
   SiTpcTrackMatcher.cc \
+  SiTpc_ResolutionQA.cc \
+  SiSeedComparisonQA.cc \
+  SiTpcActsFitter.cc \
   SiHitSeedReco.cc \
   TpcCrossingResolver.cc \
   PairVertexFinder.cc \
@@ -71,6 +77,9 @@ libsitrackreco_la_LIBADD = \
   -ltrack_io \
   -ltrackbase_historic_io \
   -ltrack \
+  -ltrackbase_historic \
+  -lActsCore \
+  -lActsExamplesFramework \
   -lmvtx \
   -lmvtx_io \
   -lintt \
