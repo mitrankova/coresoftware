@@ -2,26 +2,33 @@
 
 // SiTpcTrackSeedFiller
 //
-// Puts the own reconstruction into the standard sPHENIX seed containers, in place of the standard silicon
-// seeding (Tracking_Reco_SiliconSeed_run2pp) and of PHSiliconTpcTrackMatching, so that the rest of the official
-// chain (TPOT matching, PHTpcDeltaZCorrection, PHActsTrkFitter, PHSimpleVertexFinder, TrackResiduals) runs on it:
+// One module from the own Si chains to the standard sPHENIX seed containers.  It replaces
+// SiTrajectoryFitter + SiTpcTrackMatcher (and the standard Si seeding + PHSiliconTpcTrackMatching), so
+// the official chain (TPOT matching, PHTpcDeltaZCorrection, PHActsTrkFitter, PHSimpleVertexFinder,
+// TrackResiduals) runs directly on the own pattern recognition.
 //
-//   SiliconTrackSeedContainer : one TrackSeed_v2 per own Si trajectory (SI_TRAJECTORY)
-//       cluster keys: per layer the official TRKR_CLUSTER cluster that contains most chain hits
-//       (TRKR_CLUSTERHITASSOC, with the recovery of MVTX clusters removed by MvtxClusterPruner as duplicates of
-//       the neighbouring strobe), else the closest official cluster of the sensor to the chain point;
-//       optionally (setUseProjectedChainPoints) a new cluster at the projected chain point.
-//       parameters: the own Si trajectory helix, moved to the official frame (+ Si beam spot, z - Si acts z shift):
-//       circle centre (X0, Y0), q/R (charge from the bending and the sign of B_z), z0 and phi at the point of the
-//       circle closest to the origin (TrackSeedHelper::get_xyz), slope = tan(lambda).
-//   SvtxTrackSeedContainer    : one SvtxTrackSeed_v3 per own Si+TPC track (SITPC_TRACKS): Si seed index of its
-//       trajectory, TPC seed index of its TPC poly track in TpcTrackSeedContainer (TpcPolyTrackSeedConverter,
-//       must run before), crossing = crossing estimate = TPC_CROSSING_DECISIONS of its assembled TPC track.
-//       Optionally (setAddUnmatchedTpcSeeds) TPC-only entries for the TPC seeds without Si+TPC track, as
-//       PHSiliconTpcTrackMatching does.
+// Input
+//   SI_HIT_SEED_EVENT          SiHitSeedReco: TPC-driven Si chains.  A selected chain belongs to one TPC track
+//                              (SiHitChain::tpc_assembled_track_id), so the Si-TPC association is already done.
+//   TpcTrackSeedContainer      TpcPolyTrackSeedConverter (register it before this module)
+//   TPC_POLYCLUSTERS           cluster key -> assembled TPC track id of the TPC seeds
+//   TPC_CROSSING_DECISIONS     crossing of the assembled TPC track
+//   TRKR_CLUSTER (+ TRKR_CLUSTERHITASSOC)   official Si clusters, TPC clusters of TpcPolyClusterTrkrClusterConverter
 //
-// The TPC clusters and seeds come from the official converters (TpcPolyClusterTrkrClusterConverter,
-// TpcPolyTrackSeedConverter): the TPC is in the official frame, the own Si-TPC beam-line matching is not used.
+// Per selected chain whose TPC track has a TPC seed and a crossing:
+//   Si clusters : per chain layer the official cluster that contains most hits of the chain blob
+//                 (TRKR_CLUSTERHITASSOC; MVTX clusters removed by MvtxClusterPruner as duplicates are taken
+//                 from the neighbouring strobe), else the closest official cluster of the sensor to the
+//                 chain point (SiHitChain::phys_*, own frame -> official with setSiBeamSpotCm /
+//                 setSiActsZShiftCm), optionally a new cluster at the projected chain point.
+//   Si seed     : hybrid helix fit (SiTpcHelixFit, as SiTpcTrackMatcher::setHybridXY) in the OFFICIAL frame on
+//                 the official cluster positions: curvature from the TPC clusters of the TPC seed (with the
+//                 crossing), circle centre refitted to the Si clusters with that radius; z(s) with the MVTX /
+//                 INTT / TPC weights and a free TPC z offset.  Stored as TrackSeed_v2: circle centre, q/R
+//                 (charge from the bending and the sign of B_z), z0 and phi at the point closest to the origin
+//                 (TrackSeedHelper::get_xyz = perigee of PHActsTrkFitter), tan(lambda), crossing.
+//   SvtxTrackSeed_v3: Si seed index, TPC seed index, crossing (= crossing estimate).
+//   Optionally TPC-only SvtxTrackSeeds for TPC seeds without selected chain (as PHSiliconTpcTrackMatching).
 
 #include <fun4all/SubsysReco.h>
 
@@ -42,9 +49,8 @@ class SiTpcTrackSeedFiller : public SubsysReco
   int End(PHCompositeNode* topNode) override;
 
   // ---- input nodes
-  void setSiTpcTrackNodeName(const std::string& s) { m_siTpcTrackNodeName = s; }
-  void setSiTrajectoryNodeName(const std::string& s) { m_siTrajectoryNodeName = s; }
-  void setTpcPolyTrackNodeName(const std::string& s) { m_tpcPolyTrackNodeName = s; }
+  void setSiSeedEventNodeName(const std::string& s) { m_siSeedEventName = s; }
+  void setTpcClusterNodeName(const std::string& s) { m_tpcClusterNodeName = s; }
   void setCrossingDecisionNodeName(const std::string& s) { m_crossingNodeName = s; }
   void setClusterNodeName(const std::string& s) { m_clusterNodeName = s; }
   void setTpcSeedContainerName(const std::string& s) { m_tpcSeedName = s; }
@@ -53,16 +59,30 @@ class SiTpcTrackSeedFiller : public SubsysReco
   void setSiliconSeedContainerName(const std::string& s) { m_siSeedName = s; }
   void setSvtxSeedContainerName(const std::string& s) { m_svtxSeedName = s; }
 
-  // ---- own frame -> official frame [cm]: Si_own = Si_official (z + siActsZShift) - SiBeam
+  // ---- own frame of the chain points -> official frame [cm]: Si_own = Si_official (z + siActsZShift) - SiBeam.
+  // Only used for the position match of chain layers without hit-associated cluster; the Si beam spot is also the
+  // reference point of the seed fit.
   void setSiBeamSpotCm(double x, double y) { m_siBeam = {x, y}; }
   void setSiActsZShiftCm(double dz) { m_siActsZShift = dz; }
 
+  // ---- seed fit weights (defaults = the SiTpcTrackMatcher settings of the macro)
+  void setXYWeights(double mvtx, double intt, double tpc) { m_wxy = {mvtx, intt, tpc}; }
+  void setZWeights(double mvtx, double intt, double tpc) { m_wz = {mvtx, intt, tpc}; }
+  void setHybridXY(bool on, double wMvtx = 1.0, double wIntt = 0.04, unsigned int minPoints = 2)
+  {
+    m_hybrid = on;
+    m_hybridW = {wMvtx, wIntt};
+    m_hybridMinPoints = minPoints;
+  }
+  void setFitTpcZOffset(bool b) { m_fitTpcZOffset = b; }
+
   // ---- options
-  // write a new cluster (into the cluster container) at the projected chain point of layers without official cluster
+  // all chains instead of the selected one per TPC track (one SvtxTrackSeed per TPC seed in any case: best rank)
+  void setUseSelectedChainsOnly(bool b) { m_selectedOnly = b; }
+  // new cluster (into the cluster container) at the projected chain point of layers without official cluster
   void setUseProjectedChainPoints(bool b) { m_useProjected = b; }
-  // TPC-only SvtxTrackSeeds for the TPC seeds without own Si+TPC track
+  // TPC-only SvtxTrackSeeds for TPC seeds without chain
   void setAddUnmatchedTpcSeeds(bool b) { m_addUnmatchedTpc = b; }
-  // Si seeds: minimum number of MVTX / Si clusters
   void setMinMvtx(unsigned int n) { m_minMvtx = n; }
   void setMinSi(unsigned int n) { m_minSi = n; }
 
@@ -70,9 +90,8 @@ class SiTpcTrackSeedFiller : public SubsysReco
   struct Impl;
   std::unique_ptr<Impl> m_impl;
 
-  std::string m_siTpcTrackNodeName{"SITPC_TRACKS"};
-  std::string m_siTrajectoryNodeName{"SI_TRAJECTORY"};
-  std::string m_tpcPolyTrackNodeName{"TPC_POLYTRACKS"};
+  std::string m_siSeedEventName{"SI_HIT_SEED_EVENT"};
+  std::string m_tpcClusterNodeName{"TPC_POLYCLUSTERS"};
   std::string m_crossingNodeName{"TPC_CROSSING_DECISIONS"};
   std::string m_clusterNodeName{"TRKR_CLUSTER"};
   std::string m_tpcSeedName{"TpcTrackSeedContainer"};
@@ -82,6 +101,14 @@ class SiTpcTrackSeedFiller : public SubsysReco
   std::array<double, 2> m_siBeam{0, 0};
   double m_siActsZShift{0};
 
+  std::array<double, 3> m_wxy{0.0, 0.0, 1.0};      // MVTX, INTT, TPC
+  std::array<double, 3> m_wz{1.0, 1.0e-4, 1.0e-4};  // MVTX, INTT, TPC
+  bool m_hybrid{true};
+  std::array<double, 2> m_hybridW{1.0, 0.04};  // MVTX, INTT
+  unsigned int m_hybridMinPoints{2};
+  bool m_fitTpcZOffset{true};
+
+  bool m_selectedOnly{true};
   bool m_useProjected{false};
   bool m_addUnmatchedTpc{false};
   unsigned int m_minMvtx{2};

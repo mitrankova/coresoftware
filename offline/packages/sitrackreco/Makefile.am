@@ -21,23 +21,15 @@ pkginclude_HEADERS = \
   SiDetectorFrame.h \
   SiTpcBeamAlignment.h \
   SiTpcHelixFit.h \
-  SiSeedComparisonQA.h \
-  SiTpc_ResolutionQA.h \
-  SiTpcActsFitter.h \
-  SiTpcActsSeeder.h \
   SiTpcTrackSeedFiller.h \
   SiTpcReference.h \
   SiTpc_Track.h \
   SiTpc_Trackv1.h \
   SiTpc_TrackContainer.h \
   SiTpc_TrackContainerv1.h \
-  SiTpcTrackMatcher.h \
-  SiTrajectoryFitter.h \
   SiHitSeedData.h \
   SiHitSeedReco.h \
-  TpcCrossingResolver.h \
-  PairVertexFinder.h \
-  SiTpc_VertexFinder.h
+  TpcCrossingResolver.h
 
 ROOTDICTS = \
   Si_Trajectory_Dict.cc \
@@ -57,20 +49,12 @@ lib_LTLIBRARIES = libsitrackreco.la
 libsitrackreco_la_SOURCES = \
   Si_Trajectoryv1.cc \
   Si_TrajectoryContainerv1.cc \
-  SiTrajectoryFitter.cc \
   SiTpcHelixFit.cc \
   SiTpc_Trackv1.cc \
   SiTpc_TrackContainerv1.cc \
-  SiTpcTrackMatcher.cc \
-  SiTpc_ResolutionQA.cc \
-  SiSeedComparisonQA.cc \
-  SiTpcActsFitter.cc \
-  SiTpcActsSeeder.cc \
   SiTpcTrackSeedFiller.cc \
   SiHitSeedReco.cc \
   TpcCrossingResolver.cc \
-  PairVertexFinder.cc \
-  SiTpc_VertexFinder.cc \
   $(ROOTDICTS)
 
 libsitrackreco_la_LIBADD = \
