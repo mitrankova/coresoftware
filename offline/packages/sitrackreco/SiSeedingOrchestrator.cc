@@ -8,6 +8,8 @@
 #include <tpctrackreco/Tpc_CrossingTrajectory.h>
 #include <tpctrackreco/Tpc_CrossingTrajectoryContainer.h>
 
+#include <trackbase/InttDefs.h>
+
 #include <fun4all/Fun4AllReturnCodes.h>
 
 #include <phool/PHCompositeNode.h>
@@ -20,6 +22,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -227,7 +230,7 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
   m_nNone += noneIds.size();
 
   // ================================ BOOTSTRAP VERTICES ================================
-  std::map<short, std::vector<double>> zByCrossing;
+  std::map<short, std::vector<std::pair<double, int>>> zByCrossing;  // crossing -> (Si z, chain index)
   for (std::size_t c = 0; c < ev->chains.size(); ++c)
   {
     if (good[c])
@@ -235,33 +238,33 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
       const double z = siZ(ev->chains[c]);
       if (std::isfinite(z))
       {
-        zByCrossing[ev->chains[c].tpc_crossing].push_back(z);
+        zByCrossing[ev->chains[c].tpc_crossing].emplace_back(z, static_cast<int>(c));
       }
     }
   }
   std::vector<BootVertex> vertices;
   for (auto& [crossing, zs] : zByCrossing)
   {
-    std::sort(zs.begin(), zs.end());
+    std::sort(zs.begin(), zs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     double sum = 0;
-    unsigned int n = 0;
+    std::vector<int> members;
     auto flush = [&]()
     {
-      if (n >= m_vertexMinTracks)
+      if (members.size() >= m_vertexMinTracks)
       {
-        vertices.push_back({crossing, sum / n, n});
+        vertices.push_back({crossing, sum / members.size(), static_cast<unsigned int>(members.size()), members});
       }
       sum = 0;
-      n = 0;
+      members.clear();
     };
-    for (const double z : zs)
+    for (const auto& [z, c] : zs)
     {
-      if (n > 0 && std::fabs(z - sum / n) > m_vertexWindow)
+      if (!members.empty() && std::fabs(z - sum / members.size()) > m_vertexWindow)
       {
         flush();
       }
       sum += z;
-      ++n;
+      members.push_back(c);
     }
     flush();
   }
@@ -269,6 +272,60 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
   for (const auto& v : vertices)
   {
     m_nVertexTracks += v.n;
+  }
+
+  // ---- INTT time buckets of the vertices (one entry per INTT layer of every member chain) and
+  // vertices in neighbouring crossings: is the smaller one made of the bigger one's tracks, placed one
+  // crossing off (the +-1 INTT crossing window lets INTT hits of crossing c time crossing c +- 1)?
+  auto bucketsOf = [&](const BootVertex& v)
+  {
+    std::map<int, unsigned int> b;
+    for (const int c : v.members)
+    {
+      const SiHitChain& ch = ev->chains[c];
+      for (std::size_t i = 0; i < ch.layers.size() && i < ch.point_hit_ids.size(); ++i)
+      {
+        const int hid = ch.point_hit_ids[i];
+        if (ch.layers[i] >= 3 && hid >= 0 && hid < static_cast<int>(ev->hits.size()))
+        {
+          ++b[static_cast<int>(InttDefs::getTimeBucketId(ev->hits[hid].hitsetkey))];
+        }
+      }
+    }
+    return b;
+  };
+  std::vector<std::string> adjacentLines;
+  for (std::size_t i = 0; i < vertices.size(); ++i)
+  {
+    for (std::size_t j = 0; j < vertices.size(); ++j)
+    {
+      // ordered pair (big, small): |crossing difference| = 1, small = fewer tracks (ties: later crossing)
+      const auto& big = vertices[i];
+      const auto& small = vertices[j];
+      if (std::abs(big.crossing - small.crossing) != 1 || big.n < small.n || (big.n == small.n && big.crossing > small.crossing))
+      {
+        continue;
+      }
+      ++m_nAdjacentPairs;
+      unsigned int own = 0, neighbour = 0, other = 0;
+      for (const auto& [b, n] : bucketsOf(small))
+      {
+        (b == small.crossing ? own : (b == big.crossing ? neighbour : other)) += n;
+      }
+      m_adjSmallOwn += own;
+      m_adjSmallNeighbour += neighbour;
+      m_adjSmallOther += other;
+      m_adjDz.push_back(small.z - big.z);
+      if (Verbosity() > 0)
+      {
+        char line[256];
+        std::snprintf(line, sizeof(line),
+                      "  neighbouring vertices: crossing %d (z %.2f cm, %u tracks) and %d (z %.2f cm, %u tracks), dz %.2f cm; INTT buckets of the "
+                      "smaller one: own crossing %u, the other vertex's crossing %u, other %u",
+                      big.crossing, big.z, big.n, small.crossing, small.z, small.n, small.z - big.z, own, neighbour, other);
+        adjacentLines.emplace_back(line);
+      }
+    }
   }
 
   // ================================ PASS 2 ================================
@@ -300,7 +357,36 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
           }
         }
       }
-      const std::vector<int> newChains = m_finder->rechain(targets, excluded, m_pass2Cfg, 2);
+      // TPC inputs to chain again: the target tracks' trajectories, without the ones that cannot change
+      // (no usable TPC prediction does not depend on the free blobs) and, in streaming mode, only at
+      // crossings that have a bootstrap vertex (the selection below needs one anyway)
+      std::set<short> vertexCrossings;
+      for (const auto& v : vertices)
+      {
+        vertexCrossings.insert(v.crossing);
+      }
+      std::set<int> inputs;
+      for (const auto& info : ev->tpc_seeds)
+      {
+        if (targets.count(info.tpc_assembled_track_id) == 0)
+        {
+          continue;
+        }
+        if (m_pass2SkipUnpredictable && (info.status == SiTpcSeedInfo::TooFewClusters || info.status == SiTpcSeedInfo::FitFailed ||
+                                         info.status == SiTpcSeedInfo::NoPrediction))
+        {
+          ++m_nPass2SkippedNoPred;
+          continue;
+        }
+        if (m_pass2VertexCrossingsOnly && !m_triggeredMode && vertexCrossings.count(info.tpc_crossing) == 0)
+        {
+          ++m_nPass2SkippedNoVertex;
+          continue;
+        }
+        inputs.insert(info.tpc_track_index);
+      }
+      m_nPass2Inputs += inputs.size();
+      const std::vector<int> newChains = m_finder->rechainInputs(inputs, excluded, m_pass2Cfg, 2);
       nP2Chains = static_cast<unsigned int>(newChains.size());
       m_nPass2Chains += newChains.size();
 
@@ -533,7 +619,23 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
     // best chains first: they get the free blobs if two chains want the same one
     std::sort(ids.begin(), ids.end(), [&](int a, int b) { return betterChain(ev->chains[a], ev->chains[b]); });
     m_nPass3Chains += ids.size();
-    added = m_finder->recoverHits(ids, excluded, m_pass3Cfg);
+    // bootstrap vertex z of every selected chain (its crossing, within the vertex window), else NaN
+    std::vector<double> vertexZ(ev->chains.size(), std::numeric_limits<double>::quiet_NaN());
+    for (const int c : ids)
+    {
+      const double z = siZ(ev->chains[c]);
+      double best = m_vertexWindow;
+      for (const auto& v : vertices)
+      {
+        if (v.crossing == ev->chains[c].tpc_crossing && std::isfinite(z) && std::fabs(z - v.z) <= best)
+        {
+          best = std::fabs(z - v.z);
+          vertexZ[c] = v.z;
+        }
+      }
+      m_nPass3WithVertex += std::isfinite(vertexZ[c]);
+    }
+    added = m_finder->recoverHits(ids, excluded, m_pass3Cfg, &vertexZ);
     for (int l = 0; l < 7; ++l)
     {
       m_pass3Added[l] += added[l];
@@ -555,8 +657,17 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
     {
       for (const auto& v : vertices)
       {
-        std::cout << Name() << ":   bootstrap vertex crossing " << v.crossing << " z " << v.z << " cm, " << v.n << " good tracks" << std::endl;
+        std::cout << Name() << ":   bootstrap vertex crossing " << v.crossing << " z " << v.z << " cm, " << v.n << " good tracks, INTT time buckets:";
+        for (const auto& [b, n] : bucketsOf(v))
+        {
+          std::cout << " " << b << "(" << n << ")";
+        }
+        std::cout << std::endl;
       }
+    }
+    for (const auto& l : adjacentLines)
+    {
+      std::cout << Name() << ":" << l << std::endl;
     }
   }
 
@@ -591,7 +702,9 @@ int SiSeedingOrchestrator::End(PHCompositeNode* topNode)
             << (m_nVertices > 0 ? static_cast<double>(m_nVertexTracks) / m_nVertices : 0.0) << " good tracks per vertex)" << std::endl;
   if (m_pass2)
   {
-    std::cout << Name() << ":   pass 2: " << m_nPass2Targets << " target tracks, " << m_nPass2Chains << " candidate chains ("
+    std::cout << Name() << ":   pass 2: " << m_nPass2Targets << " target tracks, " << m_nPass2Inputs << " TPC inputs chained again (skipped: "
+              << m_nPass2SkippedNoPred << " without usable TPC prediction, " << m_nPass2SkippedNoVertex << " at crossings without a bootstrap vertex), "
+              << m_nPass2Chains << " candidate chains ("
               << m_nPass2NoVertex << " not at a bootstrap vertex of their crossing); rescued " << m_nPass2Rescued << ", improved weak "
               << m_nPass2Improved << ", weak kept " << m_nPass2WeakKept << ", ambiguous between crossings " << m_nPass2Ambiguous
               << ", all candidates taken by better tracks " << m_nPass2Shared << std::endl;
@@ -603,12 +716,29 @@ int SiSeedingOrchestrator::End(PHCompositeNode* topNode)
     {
       nAdded += n;
     }
-    std::cout << Name() << ":   pass 3: " << m_nPass3Chains << " selected chains with missing layers, " << nAdded << " layers added (L0-6:";
+    std::cout << Name() << ":   pass 3: " << m_nPass3Chains << " selected chains with missing layers (" << m_nPass3WithVertex
+              << " at a bootstrap vertex), " << nAdded << " layers added (L0-6:";
     for (const auto n : m_pass3Added)
     {
       std::cout << " " << n;
     }
     std::cout << ")" << std::endl;
+  }
+  {
+    const unsigned long nb = m_adjSmallOwn + m_adjSmallNeighbour + m_adjSmallOther;
+    std::sort(m_adjDz.begin(), m_adjDz.end());
+    std::cout << Name() << ":   bootstrap vertices in neighbouring crossings: " << m_nAdjacentPairs << " pairs";
+    if (nb > 0)
+    {
+      std::cout << "; INTT hits of the smaller vertex: at its own crossing " << m_adjSmallOwn << ", at the other vertex's crossing "
+                << m_adjSmallNeighbour << ", elsewhere " << m_adjSmallOther
+                << " (mostly 'other vertex' = the same collision split over two crossings)";
+    }
+    if (!m_adjDz.empty())
+    {
+      std::cout << "; z(small) - z(big) median " << m_adjDz[m_adjDz.size() / 2] << " cm";
+    }
+    std::cout << std::endl;
   }
   return Fun4AllReturnCodes::EVENT_OK;
 }

@@ -38,9 +38,11 @@ class PHCompositeNode;
 //           the beam (TPC z0 of the chain's trajectory + Si - TPC dz, as the resolver), window
 //           setVertexClusterWindow, >= setVertexMinTracks tracks.
 //   MASK    blobs of the good chains (and of the weak ones unless setPass2RedoWeak) are removed.
-//   PASS 2  (setPass2) finder.rechain on the free blobs for the tracks without a chain (+ the weak
-//           ones with setPass2RedoWeak), with the looser cuts of pass2Config() (e.g. 2 MVTX layers,
-//           wider z windows for large |eta|).  Selection is VERTEX-CONSTRAINED: a candidate counts
+//   PASS 2  (setPass2) finder.rechainInputs on the free blobs for the tracks without a chain (+ the
+//           weak ones with setPass2RedoWeak), with the looser cuts of pass2Config() (e.g. 2 MVTX layers,
+//           wider z windows for large |eta|).  Only their TPC inputs (crossing trajectories) that can
+//           change: not those without a usable TPC prediction in pass 1 (setPass2SkipUnpredictable) and,
+//           in streaming mode, only at crossings with a bootstrap vertex (setPass2VertexCrossingsOnly).  Selection is VERTEX-CONSTRAINED: a candidate counts
 //           only if its Si z at the beam is within setPass2VertexNSigma of a bootstrap vertex of ITS
 //           crossing (sigma^2 = setTrackZSigma^2 (1 + 1/n_vertex)).  Per track the best candidate
 //           (score = (layers/7) exp(-chi2/2) exp(-pull^2/2), x setNoInttFactor without INTT) wins if
@@ -51,7 +53,11 @@ class PHCompositeNode;
 //           rewritten (crossing, tier setPass2Tier, Si vertex z, dz, SelectedByVertexLoose);
 //           triggered mode: the decision is not touched (crossing fixed).
 //   PASS 3  (setPass3) finder.recoverHits for every selected chain with < 7 layers, on the blobs not
-//           used by any selected chain, windows / cuts of pass3Config().
+//           used by any selected chain, windows / cuts of pass3Config().  Default: only the INTT pairs
+//           (3, 4) / (5, 6) in which the chain has no hit, predicted with the vertex-assisted helix (TPC
+//           curvature, centre from the chain + beam, z from the MVTX + the chain's bootstrap vertex).
+//   DIAGNOSTICS  Verbosity 2: INTT time buckets of every bootstrap vertex; Verbosity 1: vertices in
+//           neighbouring crossings with the time buckets of the smaller one (End: summary).
 //   FIT     fitter.process_event (setRunTrajectoryFit) on the final selection.
 class SiSeedingOrchestrator : public SubsysReco
 {
@@ -138,6 +144,10 @@ class SiSeedingOrchestrator : public SubsysReco
   void setPass2AmbiguityRatio(double v) { m_pass2AmbiguityRatio = v; }
   void setPass2MinSharedBlobs(unsigned int n) { m_pass2MinShared = n; }
   void setPass2Tier(unsigned int t) { m_pass2Tier = static_cast<unsigned char>(t); }
+  // skip TPC inputs whose pass-1 status was too few TPC points / TPC fit failed / no prediction (default on)
+  void setPass2SkipUnpredictable(bool v) { m_pass2SkipUnpredictable = v; }
+  // streaming: chain again only TPC inputs at crossings with a bootstrap vertex (default on)
+  void setPass2VertexCrossingsOnly(bool v) { m_pass2VertexCrossingsOnly = v; }
   void setNoInttFactor(double v) { m_noInttFactor = v; }
 
   // ---- pass 3
@@ -150,6 +160,7 @@ class SiSeedingOrchestrator : public SubsysReco
     short crossing = 0;
     double z = 0;
     unsigned int n = 0;
+    std::vector<int> members;  // chain indices (good chains)
   };
 
   std::unique_ptr<SiHitSeedReco> m_finder;
@@ -179,6 +190,8 @@ class SiSeedingOrchestrator : public SubsysReco
   double m_pass2AmbiguityRatio = 1.5;
   unsigned int m_pass2MinShared = 2;
   unsigned char m_pass2Tier = 1;
+  bool m_pass2SkipUnpredictable = true;
+  bool m_pass2VertexCrossingsOnly = true;
   double m_noInttFactor = 0.5;
 
   bool m_pass3 = true;
@@ -193,6 +206,9 @@ class SiSeedingOrchestrator : public SubsysReco
   unsigned long m_nVertexTracks = 0;
   unsigned long m_nPass2Targets = 0;
   unsigned long m_nPass2Chains = 0;
+  unsigned long m_nPass2Inputs = 0;          // TPC inputs chained again
+  unsigned long m_nPass2SkippedNoPred = 0;   // ... skipped: no usable TPC prediction in pass 1
+  unsigned long m_nPass2SkippedNoVertex = 0; // ... skipped: crossing without a bootstrap vertex
   unsigned long m_nPass2NoVertex = 0;     // candidate chains not compatible with a bootstrap vertex
   unsigned long m_nPass2Ambiguous = 0;    // tracks with compatible candidates in two crossings
   unsigned long m_nPass2Shared = 0;       // tracks whose candidates were all taken by better pass-2 tracks
@@ -200,6 +216,13 @@ class SiSeedingOrchestrator : public SubsysReco
   unsigned long m_nPass2Improved = 0;     // weak tracks that took a better pass-2 chain
   unsigned long m_nPass2WeakKept = 0;     // weak tracks that kept their pass-1 chain
   unsigned long m_nPass3Chains = 0;
+  unsigned long m_nPass3WithVertex = 0;
+  // bootstrap vertices in neighbouring crossings
+  unsigned long m_nAdjacentPairs = 0;
+  unsigned long m_adjSmallOwn = 0;        // INTT hits of the smaller vertex at its own crossing
+  unsigned long m_adjSmallNeighbour = 0;  // ... at the other vertex's crossing
+  unsigned long m_adjSmallOther = 0;      // ... elsewhere
+  std::vector<double> m_adjDz;            // z(small) - z(big)
   std::array<unsigned long, 7> m_pass3Added{};
 };
 
