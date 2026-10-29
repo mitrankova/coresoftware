@@ -13,6 +13,7 @@
 
 #include <trackbase_historic/SvtxTrack.h>
 #include <trackbase_historic/SvtxTrackMap.h>
+#include <trackbase_historic/SvtxTrackState.h>
 #include <trackbase_historic/TrackSeed.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -378,6 +379,26 @@ int SiTpc_ResolutionQA::process_event(PHCompositeNode* topNode)
         {
           q.ntpc += TrkrDefs::getTrkrId(*it) == TrkrDefs::tpcId;
         }
+      }
+      // fitted measurements (track states): also counts Si points that are not official clusters
+      // (SiTpcActsFitter: projected chain points, not in the silicon seed)
+      {
+        int nm = 0, ni = 0, nt = 0;
+        for (auto it = trk->begin_states(); it != trk->end_states(); ++it)
+        {
+          const auto ckey = it->second->get_cluskey();
+          if (ckey == std::numeric_limits<TrkrDefs::cluskey>::max())
+          {
+            continue;
+          }
+          const auto id = TrkrDefs::getTrkrId(ckey);
+          nm += id == TrkrDefs::mvtxId;
+          ni += id == TrkrDefs::inttId;
+          nt += id == TrkrDefs::tpcId;
+        }
+        q.nmvtx = std::max(q.nmvtx, nm);
+        q.nintt = std::max(q.nintt, ni);
+        q.ntpc = std::max(q.ntpc, nt);
       }
       const Eigen::Vector3d n = normalXY(q);
       Eigen::Matrix2d cxy;

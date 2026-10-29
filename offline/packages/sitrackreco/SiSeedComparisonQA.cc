@@ -15,6 +15,7 @@
 #include <trackbase/ActsGeometry.h>
 #include <trackbase/ClusterErrorPara.h>
 #include <trackbase/InttDefs.h>
+#include <trackbase/MvtxDefs.h>
 #include <trackbase/TrkrCluster.h>
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrClusterHitAssoc.h>
@@ -62,6 +63,7 @@ namespace
     TrkrDefs::cluskey key = TrkrDefs::CLUSKEYMAX;
     TrkrCluster* cluster = nullptr;
     bool hasCluster = false;
+    bool otherStrobe = false;  // the cluster copy of the neighbouring MVTX strobe (pruned duplicate)
     double cx = 0, cy = 0, cz = 0;  // cluster, own frame [cm]
   };
 
@@ -107,7 +109,7 @@ struct SiSeedComparisonQA::Impl
   struct PointRow
   {
     int event = 0, traj = 0, chain = 0, layer = 0, in_sitpc = 0;
-    int nchain = 0, nsensors = 0, nclusters = 0, nshared = 0, ncluster_hits = 0, has_cluster = 0;
+    int nchain = 0, nsensors = 0, nclusters = 0, nshared = 0, ncluster_hits = 0, has_cluster = 0, other_strobe = 0;
     int phisize = 0, zsize = 0;
     float px = fnan, py = fnan, pz = fnan, cx = fnan, cy = fnan, cz = fnan;
     float d_rphi = fnan, d_z = fnan, d_r = fnan, err_rphi = fnan, err_z = fnan, pt = fnan;
@@ -144,7 +146,7 @@ struct SiSeedComparisonQA::Impl
 
   // summary counters
   std::map<int, std::array<double, 6>> layerSums;  // n, sum drphi, sum drphi^2, sum dz, sum dz^2, n identical
-  std::map<int, std::array<long, 5>> layerCounts;   // points, no cluster, identical, split, merged
+  std::map<int, std::array<long, 6>> layerCounts;   // points, no cluster, identical, split, merged, other strobe
   long nChains = 0, nChainsAll = 0, nChainsPartial = 0, nChainsNone = 0;
   long nChainsSiTpc = 0, nChainsSiTpcAll = 0, nChainsSiTpcPartial = 0, nChainsSiTpcNone = 0;
   long nStd = 0, nStdMatched = 0, nStdNearSiTpc = 0;
@@ -172,6 +174,42 @@ struct SiSeedComparisonQA::Impl
     }
     const auto f = it->second.find(hk);
     return f == it->second.end() ? TrkrDefs::CLUSKEYMAX : f->second;
+  }
+
+  // official cluster of a chain hit.  MVTX: MvtxClusterPruner removes the copy of a cluster duplicated in the
+  // next strobe (identical pixels) from TRKR_CLUSTER without updating TRKR_CLUSTERHITASSOC, so a chain hit
+  // can point to a removed cluster: then the cluster with the same pixel in the neighbouring strobe is used.
+  TrkrDefs::cluskey officialClusterOfHit(TrkrClusterHitAssoc* assoc, TrkrClusterContainer* clusters, TrkrDefs::hitsetkey hsk,
+                                         TrkrDefs::hitkey hk, bool& otherStrobe)
+  {
+    otherStrobe = false;
+    if (!clusters)
+    {
+      return TrkrDefs::CLUSKEYMAX;
+    }
+    const auto ckey = clusterOfHit(assoc, hsk, hk);
+    if (ckey != TrkrDefs::CLUSKEYMAX && clusters->findCluster(ckey))
+    {
+      return ckey;
+    }
+    if (TrkrDefs::getTrkrId(hsk) != TrkrDefs::mvtxId)
+    {
+      return TrkrDefs::CLUSKEYMAX;
+    }
+    const auto layer = TrkrDefs::getLayer(hsk);
+    const auto stave = MvtxDefs::getStaveId(hsk);
+    const auto chip = MvtxDefs::getChipId(hsk);
+    const int strobe = MvtxDefs::getStrobeId(hsk);
+    for (const int ds : {-1, 1})
+    {
+      const auto other = clusterOfHit(assoc, MvtxDefs::genHitSetKey(layer, stave, chip, strobe + ds), hk);
+      if (other != TrkrDefs::CLUSKEYMAX && clusters->findCluster(other))
+      {
+        otherStrobe = true;
+        return other;
+      }
+    }
+    return TrkrDefs::CLUSKEYMAX;
   }
 };
 
@@ -204,6 +242,7 @@ int SiSeedComparisonQA::InitRun(PHCompositeNode* /*topNode*/)
   d.points->Branch("nshared", &p.nshared);
   d.points->Branch("ncluster_hits", &p.ncluster_hits);
   d.points->Branch("has_cluster", &p.has_cluster);
+  d.points->Branch("other_strobe", &p.other_strobe);
   d.points->Branch("phisize", &p.phisize);
   d.points->Branch("zsize", &p.zsize);
   d.points->Branch("px", &p.px);
@@ -397,13 +436,19 @@ int SiSeedComparisonQA::process_event(PHCompositeNode* topNode)
       lm.nChainHits = static_cast<int>(hits.size());
       std::set<TrkrDefs::hitsetkey> sensors;
       std::map<TrkrDefs::cluskey, int> shared;
+      std::set<TrkrDefs::cluskey> fromOtherStrobe;
       for (const auto& hit : hits)
       {
         sensors.insert(hit.first);
-        const auto ckey = d.clusterOfHit(assoc, hit.first, hit.second);
+        bool otherStrobe = false;
+        const auto ckey = d.officialClusterOfHit(assoc, clusters, hit.first, hit.second, otherStrobe);
         if (ckey != TrkrDefs::CLUSKEYMAX)
         {
           ++shared[ckey];
+          if (otherStrobe)
+          {
+            fromOtherStrobe.insert(ckey);
+          }
         }
       }
       lm.nSensors = static_cast<int>(sensors.size());
@@ -429,6 +474,7 @@ int SiSeedComparisonQA::process_event(PHCompositeNode* topNode)
           lm.cy = o.y();
           lm.cz = o.z();
           lm.hasCluster = true;
+          lm.otherStrobe = fromOtherStrobe.contains(lm.key);
           oc.clusters.insert(lm.key);
         }
       }
@@ -494,6 +540,7 @@ int SiSeedComparisonQA::process_event(PHCompositeNode* topNode)
         p.nshared = lm.nShared;
         p.ncluster_hits = lm.nClusterHits;
         p.has_cluster = lm.hasCluster;
+        p.other_strobe = lm.otherStrobe;
         if (lm.hasCluster)
         {
           p.cx = lm.cx;
@@ -513,6 +560,7 @@ int SiSeedComparisonQA::process_event(PHCompositeNode* topNode)
           cnt[2] += identical;
           cnt[3] += lm.nClustersTouched > 1;
           cnt[4] += lm.nClusterHits > lm.nShared;
+          cnt[5] += lm.otherStrobe;
           auto& sums = d.layerSums[layer];
           sums[0] += 1;
           sums[1] += p.d_rphi;
@@ -624,7 +672,9 @@ int SiSeedComparisonQA::process_event(PHCompositeNode* topNode)
 
   // ---- 3) standard silicon seeds
   // the standard seeding ran only if its converted track map exists too (SiTpcActsFitter creates an empty
-  // SiliconTrackSeedContainer placeholder when the standard seeding is off)
+  // SiliconTrackSeedContainer placeholder when the standard seeding is off).  Only seeds with a converted track
+  // are standard seeds: TrackSeedTrackMapConverter converts every seed, and SiTpcActsSeeder appends its own
+  // seeds (for PHActsTrkFitter) to the same container after the conversion.
   auto* stdSeeds = findNode::getClass<TrackSeedContainer>(topNode, m_stdSeedNode);
   if (stdSeeds && findNode::getClass<SvtxTrackMap>(topNode, m_stdTrackNode))
   {
@@ -644,7 +694,7 @@ int SiSeedComparisonQA::process_event(PHCompositeNode* topNode)
     for (std::size_t i = 0; i < stdSeeds->size(); ++i)
     {
       const TrackSeed* seed = stdSeeds->get(i);
-      if (!seed)
+      if (!seed || !trackOfSeed.contains(seed))
       {
         continue;
       }
@@ -884,13 +934,13 @@ int SiSeedComparisonQA::End(PHCompositeNode* /*topNode*/)
   auto& d = *m_impl;
   std::cout << Name() << "::End - " << d.event << " events" << std::endl;
   std::cout << "  own chain point vs official cluster (own frame) [um]:" << std::endl
-            << "  layer   points  no-cluster  identical  split  merged     <d_rphi>  rms(d_rphi)     <d_z>  rms(d_z)" << std::endl;
+            << "  layer   points  no-cluster  other-strobe  identical  split  merged     <d_rphi>  rms(d_rphi)     <d_z>  rms(d_z)" << std::endl;
   for (const auto& [layer, cnt] : d.layerCounts)
   {
     const auto& s = d.layerSums[layer];
     const double n = std::max(1., s[0]);
     const double mr = s[1] / n, mz = s[3] / n;
-    std::cout << std::fixed << std::setprecision(1) << "  " << std::setw(5) << layer << std::setw(9) << cnt[0] << std::setw(12) << cnt[1]
+    std::cout << std::fixed << std::setprecision(1) << "  " << std::setw(5) << layer << std::setw(9) << cnt[0] << std::setw(12) << cnt[1] << std::setw(14) << cnt[5]
               << std::setw(11) << cnt[2] << std::setw(7) << cnt[3] << std::setw(8) << cnt[4] << std::setw(13) << 1e4 * mr << std::setw(13)
               << 1e4 * std::sqrt(std::max(0., s[2] / n - mr * mr)) << std::setw(10) << 1e4 * mz << std::setw(10)
               << 1e4 * std::sqrt(std::max(0., s[4] / n - mz * mz)) << std::endl;

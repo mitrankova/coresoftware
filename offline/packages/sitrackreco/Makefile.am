@@ -24,6 +24,8 @@ pkginclude_HEADERS = \
   SiSeedComparisonQA.h \
   SiTpc_ResolutionQA.h \
   SiTpcActsFitter.h \
+  SiTpcActsSeeder.h \
+  SiTpcTrackSeedFiller.h \
   SiTpcReference.h \
   SiTpc_Track.h \
   SiTpc_Trackv1.h \
@@ -63,6 +65,8 @@ libsitrackreco_la_SOURCES = \
   SiTpc_ResolutionQA.cc \
   SiSeedComparisonQA.cc \
   SiTpcActsFitter.cc \
+  SiTpcActsSeeder.cc \
+  SiTpcTrackSeedFiller.cc \
   SiHitSeedReco.cc \
   TpcCrossingResolver.cc \
   PairVertexFinder.cc \

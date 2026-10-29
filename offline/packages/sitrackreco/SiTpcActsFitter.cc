@@ -15,8 +15,10 @@
 #include <trackbase/ActsTrackFittingAlgorithm.h>
 #include <trackbase/Calibrator.h>
 #include <trackbase/ClusterErrorPara.h>
+#include <trackbase/MvtxDefs.h>
 #include <trackbase/TrkrCluster.h>
 #include <trackbase/TrkrClusterContainer.h>
+#include <trackbase/TrkrClusterv5.h>
 #include <trackbase/TrkrClusterHitAssoc.h>
 #include <trackbase/TrkrDefs.h>
 #include <trackbase/alignmentTransformationContainer.h>
@@ -65,6 +67,7 @@
 #include <Acts/TrackFitting/GainMatrixUpdater.hpp>
 #include <Acts/TrackFitting/KalmanFitter.hpp>
 #include <Acts/Utilities/Logger.hpp>
+#include <Acts/Utilities/TrackHelpers.hpp>
 
 #include <TFile.h>
 #include <TTree.h>
@@ -79,6 +82,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -115,11 +119,6 @@ namespace
   T square(T x)
   {
     return x * x;
-  }
-
-  int detOfLayer(unsigned int layer)
-  {
-    return layer < 3 ? kMvtx : (layer < 7 ? kIntt : kTpc);
   }
 
   int tpcModule(unsigned int layer)
@@ -204,6 +203,28 @@ namespace
   };
 
   // KF source link -> surface (the artificial planes are not in the tracking geometry)
+  // KF outlier rejection: a measurement whose predicted chi2 (before the update) exceeds the cut of its
+  // detector is not used (kept as an outlier state).  Cut <= 0: off.
+  struct ChiOutlierFinder
+  {
+    double tpcCut = 0;
+    double siCut = 0;
+    bool operator()(Acts::VectorMultiTrajectory::ConstTrackStateProxy state) const
+    {
+      if (!state.hasCalibrated() || !state.hasPredicted())
+      {
+        return false;
+      }
+      const auto key = state.getUncalibratedSourceLink().template get<ActsSourceLink>().cluskey();
+      const double cut = TrkrDefs::getTrkrId(key) == TrkrDefs::tpcId ? tpcCut : siCut;
+      if (cut <= 0)
+      {
+        return false;
+      }
+      return Acts::calculatePredictedChi2(state) > cut;
+    }
+  };
+
   struct IndexSurfaceAccessor
   {
     const std::vector<const Acts::Surface*>* surfaces = nullptr;
@@ -227,6 +248,8 @@ namespace
     TrackContainer tracks{trackContainer, trackStates};
     std::optional<TrackContainer::TrackProxy> track;
     int nMaterial = 0;
+    std::vector<std::pair<double, const Acts::Surface*>> ordered;  // navigation sequence with path length (debug)
+    std::string failReason;
   };
 
   // perigee parameters of a fit, for the QA tree
@@ -259,6 +282,10 @@ struct SiTpcActsFitter::Impl
   Acts::GeometryContext gctx = Acts::GeometryContext::dangerouslyDefaultConstruct();
   std::unique_ptr<const Acts::Logger> logger;
   std::unique_ptr<DirectFitter> fitter;
+  std::unique_ptr<const Acts::Logger> verboseLogger;
+  std::unique_ptr<DirectFitter> verboseFitter;  // debug of failed fits (setDebugFailedFits)
+  int nDebugged = 0;
+  unsigned long nTpcErrStd = 0, nTpcErrFallback = 0;
   Acts::GainMatrixUpdater updater;
   Acts::GainMatrixSmoother smoother;
   Calibrator calibrator;
@@ -272,9 +299,12 @@ struct SiTpcActsFitter::Impl
 
   // counters
   unsigned long nEvents = 0, nInput = 0, nSelected = 0, nFitOk = 0, nFitFail = 0;
-  unsigned long nSiOfficialAssoc = 0, nSiOfficialPosition = 0, nSiProjected = 0, nSiMissing = 0;
+  unsigned long nSiOfficialAssoc = 0, nSiOfficialPosition = 0, nSiProjected = 0, nSiMissing = 0, nSiOtherStrobe = 0;
   unsigned long nTpc = 0, nTpcAngleCut = 0, nTpcMaterial = 0, nChargeFlip = 0;
+  unsigned long nRecoveredNoMaterial = 0, nOutlierTpc = 0, nOutlierSi = 0;
   std::map<std::string, unsigned long> rejected;
+  // failed fits: reason -> counts per pT bin (< 0.5, 0.5 - 1, 1 - 2, > 2 GeV)
+  std::map<std::string, std::array<unsigned long, 4>> failReasons;
 
   // QA
   TFile* qaFile = nullptr;
@@ -283,7 +313,7 @@ struct SiTpcActsFitter::Impl
   struct TrackRow
   {
     int event = 0, track = 0, crossing = 0, charge = 0;
-    int nmvtx = 0, nintt = 0, ntpc = 0, nsiProjected = 0, nmaterial = 0;
+    int nmvtx = 0, nintt = 0, ntpc = 0, nsiProjected = 0, nmaterial = 0, noutliers = 0, retry_no_material = 0;
     float own_pt = NAN, own_phi = NAN, own_tanl = NAN, own_z0 = NAN, own_tpcZOffset = NAN;
     PerigeeSummary full, tpc, si;
     float beamX = NAN, beamY = NAN;
@@ -301,6 +331,10 @@ struct SiTpcActsFitter::Impl
   void moveInttSurface(const Acts::Surface& surface, const std::array<double, 2>& offset);
   void restoreIntt();
   TrkrDefs::cluskey clusterOfHit(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk);
+  // official cluster of a chain hit.  MVTX: MvtxClusterPruner removes the copy of a cluster duplicated in the
+  // next strobe (identical pixels) from TRKR_CLUSTER without updating TRKR_CLUSTERHITASSOC, so a chain hit
+  // can point to a removed cluster: then the cluster with the same pixel in the neighbouring strobe is used.
+  TrkrDefs::cluskey officialClusterOfHit(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, bool& otherStrobe);
 };
 
 //____________________________________________________________________________________________________
@@ -352,6 +386,35 @@ TrkrDefs::cluskey SiTpcActsFitter::Impl::clusterOfHit(TrkrDefs::hitsetkey hsk, T
 }
 
 //____________________________________________________________________________________________________
+TrkrDefs::cluskey SiTpcActsFitter::Impl::officialClusterOfHit(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, bool& otherStrobe)
+{
+  otherStrobe = false;
+  const auto ckey = clusterOfHit(hsk, hk);
+  if (ckey != TrkrDefs::CLUSKEYMAX && siClusters->findCluster(ckey))
+  {
+    return ckey;
+  }
+  if (TrkrDefs::getTrkrId(hsk) != TrkrDefs::mvtxId)
+  {
+    return TrkrDefs::CLUSKEYMAX;
+  }
+  const auto layer = TrkrDefs::getLayer(hsk);
+  const auto stave = MvtxDefs::getStaveId(hsk);
+  const auto chip = MvtxDefs::getChipId(hsk);
+  const int strobe = MvtxDefs::getStrobeId(hsk);
+  for (const int ds : {-1, 1})
+  {
+    const auto other = clusterOfHit(MvtxDefs::genHitSetKey(layer, stave, chip, strobe + ds), hk);
+    if (other != TrkrDefs::CLUSKEYMAX && siClusters->findCluster(other))
+    {
+      otherStrobe = true;
+      return other;
+    }
+  }
+  return TrkrDefs::CLUSKEYMAX;
+}
+
+//____________________________________________________________________________________________________
 SiTpcActsFitter::SiTpcActsFitter(const std::string& name)
   : SubsysReco(name)
   , m_impl(std::make_unique<Impl>())
@@ -382,6 +445,14 @@ int SiTpcActsFitter::InitRun(PHCompositeNode* topNode)
   Acts::DirectNavigator navigator{d.logger->cloneWithSuffix("DirectNavigator")};
   DirectPropagator propagator(std::move(stepper), std::move(navigator), d.logger->cloneWithSuffix("DirectPropagator"));
   d.fitter = std::make_unique<DirectFitter>(std::move(propagator), d.logger->cloneWithSuffix("DirectFitter"));
+  if (m_debugFailedFits > 0)
+  {
+    d.verboseLogger = Acts::getDefaultLogger(Name() + "Debug", Acts::Logging::VERBOSE);
+    Stepper vstepper(d.geometry->geometry().magField);
+    Acts::DirectNavigator vnavigator{d.verboseLogger->cloneWithSuffix("DirectNavigator")};
+    DirectPropagator vpropagator(std::move(vstepper), std::move(vnavigator), d.verboseLogger->cloneWithSuffix("DirectPropagator"));
+    d.verboseFitter = std::make_unique<DirectFitter>(std::move(vpropagator), d.verboseLogger->cloneWithSuffix("DirectFitter"));
+  }
 
   // field direction: the charge given to the fit follows the bending of the own track
   {
@@ -431,6 +502,8 @@ int SiTpcActsFitter::InitRun(PHCompositeNode* topNode)
     d.trackTree->Branch("ntpc", &t.ntpc);
     d.trackTree->Branch("nsi_projected", &t.nsiProjected);
     d.trackTree->Branch("nmaterial", &t.nmaterial);
+    d.trackTree->Branch("noutliers", &t.noutliers);
+    d.trackTree->Branch("retry_no_material", &t.retry_no_material);
     d.trackTree->Branch("own_pt", &t.own_pt);
     d.trackTree->Branch("own_phi", &t.own_phi);
     d.trackTree->Branch("own_tanl", &t.own_tanl);
@@ -611,10 +684,12 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
   // ------------------------------------------------------------------------------------------
   // fit of a measurement subset along the guess; the surface sequence is built here
   auto runFit = [&](FitJob& job, const std::vector<const Measurement*>& meas, const HelixGuess& h,
-                    const ActsTrackFittingAlgorithm::TrackParameters& seed, const Acts::Surface* perigee) -> bool
+                    const ActsTrackFittingAlgorithm::TrackParameters& seed, const Acts::Surface* perigee,
+                    bool withMaterial = true, const DirectFitter* fitter = nullptr) -> bool
   {
     if (meas.empty() || meas.size() > 250)
     {
+      job.failReason = "number of measurements 0 or > 250";
       return false;
     }
     std::vector<std::pair<double, const Acts::Surface*>> ordered;
@@ -638,6 +713,10 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
     }
     for (const auto* surface : d.materialSurfaces)
     {
+      if (!withMaterial)
+      {
+        break;
+      }
       double r = 0, ox = 0, oy = 0;
       const Acts::Vector3 center = surface->center(d.gctx) / cm;
       if (surface->type() == Acts::Surface::Cylinder)
@@ -669,6 +748,7 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
     }
     std::stable_sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b)
                      { return a.first < b.first; });
+    job.ordered = ordered;
     for (const auto& [s, surface] : ordered)
     {
       job.sequence.push_back(surface);
@@ -682,22 +762,30 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
     extensions.smoother.connect<&Acts::GainMatrixSmoother::operator()<Acts::VectorMultiTrajectory>>(&d.smoother);
     extensions.calibrator.connect<&CalibratorAdapter::calibrate>(&calibratorAdapter);
     extensions.surfaceAccessor.connect<&IndexSurfaceAccessor::operator()>(&accessor);
+    ChiOutlierFinder outlierFinder{m_tpcOutlierChi2, m_siOutlierChi2};
+    if (m_tpcOutlierChi2 > 0 || m_siOutlierChi2 > 0)
+    {
+      extensions.outlierFinder.connect<&ChiOutlierFinder::operator()>(&outlierFinder);
+    }
 
     Acts::PropagatorPlainOptions plainOptions(d.gctx, magContext);
+    plainOptions.maxSteps = m_maxSteps;
     Acts::KalmanFitterOptions<Acts::VectorMultiTrajectory> kfOptions(
         d.gctx, magContext, calibContext, extensions, plainOptions, perigee, m_multipleScattering, m_energyLoss);
 
-    auto result = d.fitter->fit(job.sourceLinks.begin(), job.sourceLinks.end(), seed, kfOptions, job.sequence, job.tracks);
+    auto result = (fitter ? fitter : d.fitter.get())->fit(job.sourceLinks.begin(), job.sourceLinks.end(), seed, kfOptions, job.sequence, job.tracks);
     if (!result.ok())
     {
+      job.failReason = result.error().message();
       if (Verbosity() > 1)
       {
-        std::cout << Name() << ": fit failed - " << result.error().message() << std::endl;
+        std::cout << Name() << ": fit failed - " << job.failReason << std::endl;
       }
       return false;
     }
     if (!result.value().hasReferenceSurface())
     {
+      job.failReason = "no parameters at the perigee (extrapolation to the beam failed)";
       return false;
     }
     job.track.emplace(result.value());
@@ -856,14 +944,21 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
       {
         // 1) official cluster containing most chain hits
         TrkrDefs::cluskey best = TrkrDefs::CLUSKEYMAX;
+        std::set<TrkrDefs::cluskey> otherStrobes;  // clusters found only in the neighbouring MVTX strobe
         {
           std::map<TrkrDefs::cluskey, int> nPerCluster;
           for (const auto& hit : hits)
           {
-            const auto ckey = d.clusterOfHit(hit.first, hit.second);
+            bool otherStrobe = false;
+            const auto ckey = d.officialClusterOfHit(hit.first, hit.second, otherStrobe);
             if (ckey != TrkrDefs::CLUSKEYMAX)
             {
               ++nPerCluster[ckey];
+              otherStrobes.insert(ckey);
+              if (!otherStrobe)
+              {
+                otherStrobes.erase(ckey);
+              }
             }
           }
           int nbest = 0;
@@ -936,6 +1031,7 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
             m.official = true;
             done = true;
             ++(byPosition ? d.nSiOfficialPosition : d.nSiOfficialAssoc);
+            d.nSiOtherStrobe += otherStrobes.contains(best);
           }
         }
       }
@@ -1068,9 +1164,38 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
       m.key = key;
       m.surface = plane;
       m.local = Acts::ActsVector<2>::Zero();
-      const auto& err = m_tpcErr[tpcModule(layer)];
-      m.cov(0, 0) = square(err[0] * cm);
-      m.cov(1, 1) = square(err[1] * cm);
+      // errors: the standard sPHENIX parametrisation (ClusterErrorPara, as PHActsTrkFitter) on top of the
+      // TpcClusterizer-type base errors stored by Tpc_PolyClusterizer (rms_x: r*phi, rms_z: z) and the cluster
+      // sizes (pads, time bins); or constants per module
+      bool stdErrors = false;
+      if (m_tpcErrorMode == TpcErrors::Standard)
+      {
+        TrkrClusterv5 tmp;
+        tmp.setPhiError(static_cast<float>(std::hypot(cluster->get_rms_x(), cluster->get_rms_y())));
+        tmp.setZError(static_cast<float>(std::abs(cluster->get_rms_z())));
+        tmp.setPhiSize(static_cast<char>(std::min(cluster->get_phi_width(), 127U)));
+        tmp.setZSize(static_cast<char>(std::min(cluster->get_time_width(), 127U)));
+        tmp.setEdge(0);
+        tmp.setOverlap(0);
+        const auto e = ClusterErrorPara::get_clusterv5_modified_error(&tmp, std::hypot(pos.x(), pos.y()), key);
+        if (std::isfinite(e.first) && std::isfinite(e.second) && e.first > 0 && e.second > 0)
+        {
+          m.cov(0, 0) = e.first * cm * cm * square(m_tpcErrorScale[0]);
+          m.cov(1, 1) = e.second * cm * cm * square(m_tpcErrorScale[1]);
+          stdErrors = true;
+          ++d.nTpcErrStd;
+        }
+        else
+        {
+          ++d.nTpcErrFallback;
+        }
+      }
+      if (!stdErrors)
+      {
+        const auto& err = m_tpcErr[tpcModule(layer)];
+        m.cov(0, 0) = square(err[0] * cm);
+        m.cov(1, 1) = square(err[1] * cm);
+      }
       m.global = pos;
       m.s = h.arcLength(pos.x(), pos.y());
       m.official = false;
@@ -1124,10 +1249,81 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
     {
       all.push_back(&m);
     }
-    FitJob job;
-    if (!runFit(job, all, h, *seed, perigee.get()))
+    FitJob jobMaterial;
+    bool ok = runFit(jobMaterial, all, h, *seed, perigee.get());
+    bool retriedNoMaterial = false;
+    FitJob jobPlain;
+    if (!ok && m_retryWithoutMaterial && m_useMaterialSurfaces)
+    {
+      // diagnosis / recovery: the same fit with the measurement surfaces only
+      ok = runFit(jobPlain, all, h, *seed, perigee.get(), false);
+      retriedNoMaterial = true;
+      if (ok)
+      {
+        ++d.nRecoveredNoMaterial;
+        ++d.failReasons["(recovered without material) " + jobMaterial.failReason][pt < 0.5 ? 0 : (pt < 1.0 ? 1 : (pt < 2.0 ? 2 : 3))];
+      }
+    }
+    FitJob& job = retriedNoMaterial ? jobPlain : jobMaterial;
+    if (!ok && d.verboseFitter && d.nDebugged < m_debugFailedFits)
+    {
+      ++d.nDebugged;
+      std::cout << "==== " << Name() << " debug of failed fit " << d.nDebugged << ": track " << itrack << " crossing " << crossing
+                << " charge " << charge << " own pt " << pt << " tanl " << h.tanl << " reason: " << jobMaterial.failReason << std::endl
+                << "  guess circle (" << h.cx << ", " << h.cy << ") R " << h.R << " omega " << h.omega << ", start (" << h.x0 << ", "
+                << h.y0 << ", " << h.z0 << ") cm, seed direction " << seedDir.transpose() << std::endl;
+      for (const auto& m : meas)
+      {
+        std::cout << "  meas det " << m.det << " layer " << m.layer << " s " << m.s << " cm  global (" << m.global.x() << ", "
+                  << m.global.y() << ", " << m.global.z() << ") r " << std::hypot(m.global.x(), m.global.y()) << "  sigma ("
+                  << std::sqrt(m.cov(0, 0)) / cm << ", " << std::sqrt(m.cov(1, 1)) / cm << ") cm" << (m.official ? "" : " projected")
+                  << std::endl;
+      }
+      for (const auto& [sOrd, surface] : jobMaterial.ordered)
+      {
+        const bool isMeas = std::any_of(meas.begin(), meas.end(), [surface](const auto& m)
+                                        { return m.surface.get() == surface; });
+        const Acts::Vector3 c = surface->center(d.gctx) / cm;
+        std::cout << "  seq s " << sOrd << " " << (isMeas ? "meas" : "mat ") << " " << surface->geometryId() << " type "
+                  << static_cast<int>(surface->type()) << " centre (" << c.x() << ", " << c.y() << ", " << c.z() << ")" << std::endl;
+      }
+      std::cout << "  ---- Acts verbose refit" << std::endl;
+      FitJob debugJob;
+      runFit(debugJob, all, h, *seed, perigee.get(), true, d.verboseFitter.get());
+      std::cout << "  ---- end of debug (" << (debugJob.track ? "ok" : debugJob.failReason) << ")" << std::endl;
+    }
+    if (!ok)
     {
       ++d.nFitFail;
+      const int ptBin = pt < 0.5 ? 0 : (pt < 1.0 ? 1 : (pt < 2.0 ? 2 : 3));
+      ++d.failReasons[job.failReason][ptBin];
+      if (d.trackTree)
+      {
+        // failed fits are kept in the QA tree (ok = 0) to study them against pT, eta, hits
+        auto& r = d.trackRow;
+        r.event = static_cast<int>(d.nEvents - 1);
+        r.track = -1;
+        r.crossing = crossing;
+        r.charge = charge;
+        r.nmvtx = static_cast<int>(nmvtx);
+        r.nintt = static_cast<int>(nsi - nmvtx);
+        r.ntpc = static_cast<int>(ntpc);
+        r.nsiProjected = static_cast<int>(nProjected);
+        r.nmaterial = job.nMaterial;
+        r.noutliers = 0;
+        r.retry_no_material = retriedNoMaterial ? 1 : 0;
+        r.own_pt = pt;
+        r.own_phi = track->get_phi();
+        r.own_tanl = track->get_tanl();
+        r.own_z0 = track->get_z0();
+        r.own_tpcZOffset = track->get_tpc_z_offset();
+        r.beamX = m_siBeam[0];
+        r.beamY = m_siBeam[1];
+        r.full = PerigeeSummary();
+        r.tpc = PerigeeSummary();
+        r.si = PerigeeSummary();
+        d.trackTree->Fill();
+      }
       continue;
     }
     ++d.nFitOk;
@@ -1200,6 +1396,17 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
     }
     d.trackMap->insertWithKey(&svtx, id);
 
+    int nOutliers = 0;
+    job.tracks.trackStateContainer().visitBackwards(job.track->tipIndex(), [&](const auto& state)
+                                                    {
+      if (state.typeFlags().isOutlier())
+      {
+        ++nOutliers;
+        const auto key = state.getUncalibratedSourceLink().template get<ActsSourceLink>().cluskey();
+        ++(TrkrDefs::getTrkrId(key) == TrkrDefs::tpcId ? d.nOutlierTpc : d.nOutlierSi);
+      }
+      return true; });
+
     if (Verbosity() > 1)
     {
       std::cout << Name() << ": track " << itrack << " crossing " << crossing << " Si " << nsi << " (projected " << nProjected
@@ -1220,6 +1427,8 @@ int SiTpcActsFitter::process_event(PHCompositeNode* /*topNode*/)
       r.ntpc = static_cast<int>(ntpc);
       r.nsiProjected = static_cast<int>(nProjected);
       r.nmaterial = job.nMaterial;
+      r.noutliers = nOutliers;
+      r.retry_no_material = retriedNoMaterial ? 1 : 0;
       r.own_pt = pt;
       r.own_phi = track->get_phi();
       r.own_tanl = track->get_tanl();
@@ -1311,15 +1520,28 @@ int SiTpcActsFitter::End(PHCompositeNode* /*topNode*/)
   auto& d = *m_impl;
   std::cout << Name() << "::End - events " << d.nEvents << ", input tracks " << d.nInput << ", selected " << d.nSelected
             << ", fit ok " << d.nFitOk << ", fit failed " << d.nFitFail << std::endl
-            << "  Si measurements: official cluster by hit association " << d.nSiOfficialAssoc << ", by position "
+            << "  Si measurements: official cluster by hit association " << d.nSiOfficialAssoc
+            << " (of them the copy in the neighbouring MVTX strobe, pruned duplicate " << d.nSiOtherStrobe << "), by position "
             << d.nSiOfficialPosition << ", projected chain points " << d.nSiProjected << ", layers without measurement "
             << d.nSiMissing << std::endl
             << "  TPC clusters " << d.nTpc << ", dropped by the crossing angle " << d.nTpcAngleCut << ", planes with copied material "
             << d.nTpcMaterial << std::endl
-            << "  tracks with a fit charge different from the own charge (sense of rotation vs field) " << d.nChargeFlip << std::endl;
+            << "  tracks with a fit charge different from the own charge (sense of rotation vs field) " << d.nChargeFlip << std::endl
+            << "  fits recovered by the retry without the material surfaces " << d.nRecoveredNoMaterial << std::endl
+            << "  TPC errors: standard parametrisation " << d.nTpcErrStd << ", constant (fallback or mode) " << d.nTpc - d.nTpcErrStd << std::endl
+            << "  outlier measurements (chi2 cut TPC " << m_tpcOutlierChi2 << ", Si " << m_siOutlierChi2 << "): TPC " << d.nOutlierTpc
+            << ", Si " << d.nOutlierSi << std::endl;
   for (const auto& [why, n] : d.rejected)
   {
     std::cout << "  rejected (" << why << "): " << n << std::endl;
+  }
+  if (!d.failReasons.empty())
+  {
+    std::cout << "  failed fits by reason (pT < 0.5 / 0.5-1 / 1-2 / > 2 GeV), max propagation steps " << m_maxSteps << ":" << std::endl;
+    for (const auto& [why, n] : d.failReasons)
+    {
+      std::cout << "    " << why << ": " << n[0] << " / " << n[1] << " / " << n[2] << " / " << n[3] << std::endl;
+    }
   }
   if (d.qaFile)
   {
