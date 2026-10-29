@@ -535,7 +535,8 @@ int SiHitSeedReco::End(PHCompositeNode*)
       std::cout << " " << n;
     }
     std::cout << "), no free blob in the window " << m_recoveryNoBlob << ", blob found but chain no longer agrees with the TPC "
-              << m_recoveryBadChi2 << std::endl;
+              << m_recoveryBadChi2 << "; predictions: vertex-assisted " << m_recoveryVertexPred << ", TPC + offset fallback "
+              << m_recoveryFallbackPred << ", none " << m_recoveryNoPred << std::endl;
   }
   if (Verbosity() > 0)
   {
@@ -2608,11 +2609,26 @@ void SiHitSeedReco::updateHwDdphiPulls(SiHitChain& chain) const
   }
 }
 
+
 std::vector<int> SiHitSeedReco::rechain(const std::set<unsigned int>& assembledIds, const std::vector<char>& excludedBlobs,
                                         const RechainConfig& cfg, int passTag)
 {
+  std::set<int> inputs;
+  for (const auto& in : m_tpcInputs)
+  {
+    if (assembledIds.count(in.assembledId) != 0)
+    {
+      inputs.insert(in.index);
+    }
+  }
+  return rechainInputs(inputs, excludedBlobs, cfg, passTag);
+}
+
+std::vector<int> SiHitSeedReco::rechainInputs(const std::set<int>& tpcInputIndices, const std::vector<char>& excludedBlobs,
+                                              const RechainConfig& cfg, int passTag)
+{
   std::vector<int> out;
-  if (!m_eventData || assembledIds.empty())
+  if (!m_eventData || tpcInputIndices.empty())
   {
     return out;
   }
@@ -2647,14 +2663,16 @@ std::vector<int> SiHitSeedReco::rechain(const std::set<unsigned int>& assembledI
   buildHitGrid(&excludedBlobs);
   const std::size_t nChains0 = m_eventData->chains.size();
   const std::size_t nSeeds0 = m_eventData->tpc_seeds.size();
+  unsigned int nInputs = 0;
   for (const auto& in : m_tpcInputs)
   {
-    if (assembledIds.count(in.assembledId) != 0)
+    if (tpcInputIndices.count(in.index) != 0)
     {
       processTpcTrack(in);
-      ++m_rechainInputs;
+      ++nInputs;
     }
   }
+  m_rechainInputs += nInputs;
   // tpc_seeds keeps one entry per TPC input (pass 1); the new chains carry their TPC input themselves
   m_eventData->tpc_seeds.erase(m_eventData->tpc_seeds.begin() + static_cast<std::ptrdiff_t>(nSeeds0), m_eventData->tpc_seeds.end());
   for (std::size_t c = nChains0; c < m_eventData->chains.size(); ++c)
@@ -2689,14 +2707,142 @@ std::vector<int> SiHitSeedReco::rechain(const std::set<unsigned int>& assembledI
   buildHitGrid();  // full grid again
   if (Verbosity() > 0)
   {
-    std::cout << Name() << ": rechain pass " << passTag << ": " << assembledIds.size() << " assembled tracks, "
-              << out.size() << " new candidate chains" << std::endl;
+    std::cout << Name() << ": rechain pass " << passTag << ": " << nInputs << " TPC inputs, " << out.size()
+              << " new candidate chains" << std::endl;
   }
   return out;
 }
 
+// Vertex-assisted prediction on `layer`: helix with the TPC curvature (synthetic points on the TPC helix
+// between 25 and 75 cm, circle fit), centre refitted with the radius fixed to the chain's physics points
+// and the beam (SiTpcHelixFit hybrid), z(s) from the MVTX points (+ INTT, small weight) and the vertex z.
+// The crossing with the layer is searched at the radius where the DETECTOR-frame radius of the point
+// equals the mean detector-frame radius of this event's hits on the layer (INTT: survey radii), and
+// converted back to hardware (Uphi about the layer centre - rotation, Vz), as fillHits does for the hits.
+bool SiHitSeedReco::predictWithVertex(const SiHitChain& chain, const SiTpcHelixFit::Result& tpcFit, int layer, double vertexZ,
+                                      const RecoveryConfig& cfg, const std::array<double, 7>& layerRadius, double& z, double& phi) const
+{
+  if (!(m_useActsGeometry && m_hwFromActs) || !tpcFit.fitted() || layerRadius[layer] <= 0 || chain.phys_x.size() != chain.layers.size())
+  {
+    return false;
+  }
+  std::vector<SiTpcHelixFit::Point> pts;
+  const double bx = m_beamAlign.referenceBeamX(), by = m_beamAlign.referenceBeamY();
+  {
+    SiTpcHelixFit::Point b;
+    b.x = bx;
+    b.y = by;
+    b.z = std::isfinite(vertexZ) ? vertexZ : 0.0;
+    b.wxy = 0;
+    b.wz = std::isfinite(vertexZ) ? cfg.vertexZWeight : 0.0;
+    b.wpos = cfg.beamPosWeight;
+    pts.push_back(b);
+  }
+  std::vector<SiTpcHelixFit::Point> si;
+  for (std::size_t i = 0; i < chain.layers.size(); ++i)
+  {
+    const bool intt = chain.layers[i] >= 3;
+    SiTpcHelixFit::Point p;
+    p.x = chain.phys_x[i];
+    p.y = chain.phys_y[i];
+    p.z = chain.phys_z[i];
+    p.wxy = 0;
+    p.wz = intt ? 1.0e-4 : 1.0;
+    p.wpos = intt ? cfg.inttPosWeight : 1.0;
+    si.push_back(p);
+  }
+  std::sort(si.begin(), si.end(), [](const auto& a, const auto& b) { return a.x * a.x + a.y * a.y < b.x * b.x + b.y * b.y; });
+  pts.insert(pts.end(), si.begin(), si.end());
+  unsigned int nTpc = 0;
+  for (double rad = 25.0; rad <= 75.0; rad += 10.0)
+  {
+    SiTpcHelixFit::Pos hp;
+    double s = 0;
+    if (!SiTpcHelixFit::atRadius(tpcFit, rad, tpcFit.z0 + tpcFit.tanl * rad, hp, s))
+    {
+      continue;
+    }
+    SiTpcHelixFit::Point p;
+    p.x = hp.x;
+    p.y = hp.y;
+    p.z = hp.z;
+    p.wxy = 1;
+    p.wz = 0;
+    p.wpos = 0;
+    pts.push_back(p);
+    ++nTpc;
+  }
+  if (nTpc < 3)
+  {
+    return false;
+  }
+  SiTpcHelixFit::Config fc;
+  fc.beamX = bx;
+  fc.beamY = by;
+  fc.bz = m_bz;
+  fc.hybridMinPoints = 2;
+  const auto r = SiTpcHelixFit::fit(pts, fc);
+  if (!r.fitted() || !r.hybrid)
+  {
+    return false;
+  }
+  // nearest chain point: z reference for the crossing (the helix crosses the radius twice per turn)
+  double zRef = chain.phys_z.front();
+  double best = 1e9;
+  for (std::size_t i = 0; i < chain.layers.size(); ++i)
+  {
+    const double d = std::abs(m_radius[chain.layers[i]] - m_radius[layer]);
+    if (d < best)
+    {
+      best = d;
+      zRef = chain.phys_z[i];
+    }
+  }
+  const double target = layerRadius[layer];
+  double rho = target;
+  SiDetectorFrame::Point det;
+  bool ok = false;
+  for (int it = 0; it < 5; ++it)
+  {
+    SiTpcHelixFit::Pos hp;
+    double s = 0;
+    if (!SiTpcHelixFit::atRadius(r, rho, zRef, hp, s))
+    {
+      return false;
+    }
+    const auto g = m_beamAlign.siTpcFrameToGlobal(m_frame, {hp.x, hp.y, hp.z});
+    det = m_frame.toDetectorFromGlobal(layer, g);
+    const double rd = std::hypot(det.x, det.y);
+    ok = true;
+    if (std::abs(rd - target) < 1e-3)
+    {
+      break;
+    }
+    rho += target - rd;
+  }
+  if (!ok)
+  {
+    return false;
+  }
+  // physics detector frame -> hardware (inverse of fillHits: INTT physics offset, per-layer z offset)
+  double hx = det.x, hy = det.y;
+  if (layer >= 3)
+  {
+    hx -= m_inttPhysOffset[0];
+    hy -= m_inttPhysOffset[1];
+  }
+  double u = std::fmod(std::atan2(hy, hx) - m_frame.uphiRotation(), twopi);
+  if (u < 0)
+  {
+    u += twopi;
+  }
+  phi = u;
+  z = det.z - m_layerZOffset[layer];
+  return true;
+}
+
 std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& chainIds, const std::vector<char>& excludedBlobs,
-                                                       const RecoveryConfig& cfg)
+                                                       const RecoveryConfig& cfg, const std::vector<double>* vertexZ)
 {
   std::array<unsigned int, 7> added{};
   if (!m_eventData || chainIds.empty())
@@ -2710,6 +2856,24 @@ std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& c
   const double dz = (m_zmax - m_zmin) / m_nz, dp = twopi / m_nphi;
   const int savedCrossing = m_curCrossing;
 
+  // mean detector-frame radius of this event's hits per layer (physics positions: INTT survey radii)
+  std::array<double, 7> layerRadius{};
+  {
+    std::array<double, 7> n{};
+    for (const auto& h : ev.hits)
+    {
+      if (h.layer >= 0 && h.layer < nlayers)
+      {
+        layerRadius[h.layer] += std::hypot(h.px, h.py);
+        n[h.layer] += 1;
+      }
+    }
+    for (int l = 0; l < nlayers; ++l)
+    {
+      layerRadius[l] = n[l] > 0 ? layerRadius[l] / n[l] : 0.0;
+    }
+  }
+
   for (const int cid : chainIds)
   {
     if (cid < 0 || cid >= static_cast<int>(ev.chains.size()))
@@ -2717,6 +2881,10 @@ std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& c
       continue;
     }
     SiHitChain& ch = ev.chains[cid];
+    if (ch.layers.empty())
+    {
+      continue;
+    }
     const auto ip = m_tpcInputPos.find(ch.tpc_track_index);
     if (ip == m_tpcInputPos.end())
     {
@@ -2728,10 +2896,7 @@ std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& c
     {
       continue;
     }
-    if (ch.layers.empty())
-    {
-      continue;
-    }
+    const double vz = (vertexZ && cid < static_cast<int>(vertexZ->size())) ? (*vertexZ)[cid] : std::numeric_limits<double>::quiet_NaN();
     m_curCrossing = ch.tpc_crossing;  // INTT time window of the (resolved) crossing
     for (const int b : ch.blob_ids)
     {
@@ -2745,17 +2910,46 @@ std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& c
     toPhysics(in.fit, before);
     double chi2Before = before.tpc_chi2;
 
-    for (int layer = 0; layer < nlayers; ++layer)
+    // layers to search
+    auto has = [&](int l) { return std::find(ch.layers.begin(), ch.layers.end(), l) != ch.layers.end(); };
+    std::vector<int> toSearch;
+    if (cfg.mvtx)
     {
-      if (std::find(ch.layers.begin(), ch.layers.end(), layer) != ch.layers.end())
+      for (int l = 0; l <= 2; ++l)
       {
-        continue;
+        if (!has(l))
+        {
+          toSearch.push_back(l);
+        }
+      }
+    }
+    if (cfg.intt)
+    {
+      for (const auto& [a, b] : {std::pair<int, int>{3, 4}, std::pair<int, int>{5, 6}})
+      {
+        const bool ha = has(a), hb = has(b);
+        if (cfg.inttEmptyPairsOnly && (ha || hb))
+        {
+          continue;
+        }
+        if (!ha)
+        {
+          toSearch.push_back(a);
+        }
+        if (!hb)
+        {
+          toSearch.push_back(b);
+        }
+      }
+    }
+
+    for (const int layer : toSearch)
+    {
+      if (has(layer))
+      {
+        continue;  // added by an earlier search of this chain
       }
       const bool intt = layer >= 3;
-      if (intt ? !cfg.intt : !cfg.mvtx)
-      {
-        continue;
-      }
       ++m_recoveryTried;
 
       // nearest chain layer (reference of the step, and the 'near' point of the line propagation)
@@ -2769,8 +2963,12 @@ std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& c
       }
 
       double pz = 0, pp = 0;
-      bool havePred = false;
-      if (!intt)
+      bool havePred = cfg.useVertex && predictWithVertex(ch, in.fit, layer, vz, cfg, layerRadius, pz, pp);
+      if (havePred)
+      {
+        ++m_recoveryVertexPred;
+      }
+      if (!havePred && !intt)
       {
         // missing MVTX layer: straight line through the MVTX chain points, as the pass-1 propagation
         std::vector<Eigen::Vector3d> pts;
@@ -2785,6 +2983,7 @@ std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& c
         {
           havePred = propagate(fitLine(pts), layer, xyz(ch.layers[iNear], ch.z[iNear], ch.phi[iNear]), pz, pp);
         }
+        m_recoveryFallbackPred += havePred;
       }
       if (!havePred)
       {
@@ -2829,11 +3028,12 @@ std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& c
           }
           pz = tp->z + sZ / n;
           havePred = true;
+          ++m_recoveryFallbackPred;
         }
       }
       if (!havePred)
       {
-        ++m_recoveryNoBlob;
+        ++m_recoveryNoPred;
         continue;
       }
 

@@ -442,12 +442,29 @@ class SiHitSeedReco : public SubsysReco
   // (the caller selects).  Returns the ids (SiHitChain::id) of the new chains.
   std::vector<int> rechain(const std::set<unsigned int>& assembledIds, const std::vector<char>& excludedBlobs,
                            const RechainConfig& cfg, int passTag = 2);
+  // Same, for an explicit list of TPC inputs (SiTpcSeedInfo::tpc_track_index of this event), so the
+  // caller can skip inputs that cannot change (no prediction on the seed layers, ...) or crossings
+  // without a vertex.
+  std::vector<int> rechainInputs(const std::set<int>& tpcInputIndices, const std::vector<char>& excludedBlobs,
+                                 const RechainConfig& cfg, int passTag = 2);
 
   // Hit recovery on the missing layers of existing chains (pass 3).
   struct RecoveryConfig
   {
-    bool mvtx = true;               // look for missing MVTX layers
+    bool mvtx = false;              // look for missing MVTX layers
     bool intt = true;               // look for missing INTT layers
+    // INTT layers come in staggered pairs (3, 4) and (5, 6): a track normally crosses ONE layer of a
+    // pair, so a chain with layer 3 but not 4 is complete.  true (default): search only the pairs in
+    // which the chain has no hit at all (both layers of the pair are tried).
+    bool inttEmptyPairsOnly = true;
+    // Vertex-assisted prediction (default on; needs setUseActsGeometry + setHardwareFromActs, else the
+    // TPC + offset prediction below is used): helix with the TPC curvature, circle CENTRE fitted to the
+    // chain's physics points + the beam (and, if the chain has a bootstrap vertex, z from the MVTX points
+    // + the vertex z), extrapolated to the layer and converted back to hardware (Uphi, Vz).
+    bool useVertex = true;
+    double beamPosWeight = 1.0;     // weight of the beam point in the centre refit (MVTX point = 1)
+    double inttPosWeight = 0.04;    // weight of an INTT point in the centre refit
+    double vertexZWeight = 1.0;     // weight of the vertex z in z(s) (MVTX = 1, INTT = 1e-4)
     double mvtxPhiHalfBins = 2.0;   // window half widths [Uphi bins, z bins of the event]
     double mvtxZHalfBins = 2.0;
     double inttPhiHalfBins = 4.0;
@@ -455,15 +472,17 @@ class SiHitSeedReco : public SubsysReco
     double maxChi2 = 3.0;           // a recovered chain must still agree with the TPC: chi2/ndf <= maxChi2 ...
     double maxChi2Increase = 1.0;   // ... and <= chi2/ndf before + maxChi2Increase
   };
-  // For every chain in chainIds, every missing layer: prediction = TPC prediction on that layer +
-  // mean offset of the chain points to the TPC prediction (as setInttCentre(TpcOffset)); a missing
-  // MVTX layer with >= 2 MVTX chain points uses the straight line through them (as pass 1).  The best
-  // free blob in the window (not in excludedBlobs, not taken by another chain of this call; INTT:
-  // within setInttCrossingWindow of the chain's crossing) is added if the chain still agrees with
-  // the TPC.  The chain is updated in place (layers, blobs, hits, physics points, residuals, chi2,
-  // hw ddphi pulls, n_recovered_layers).  Returns the number of added layers per layer.
+  // For every chain in chainIds, every layer to search (see RecoveryConfig): predicted (Uphi, Vz)
+  // from the vertex-assisted helix, or (fallback) the TPC prediction on that layer + the mean offset of
+  // the chain points to it (a missing MVTX layer with >= 2 MVTX points: straight line, as pass 1).  The
+  // best free blob in the window (not in excludedBlobs, not taken by another chain of this call; INTT:
+  // within setInttCrossingWindow of the chain's crossing) is added if the chain still agrees with the
+  // TPC.  The chain is updated in place (layers, blobs, hits, physics points, residuals, chi2, hw ddphi
+  // pulls, n_recovered_layers).  vertexZ (optional, indexed like SiHitSeedEvent::chains): z of the
+  // chain's bootstrap vertex in the Si physics frame, NaN = none (beam in xy only).
+  // Returns the number of added layers per layer.
   std::array<unsigned int, 7> recoverHits(const std::vector<int>& chainIds, const std::vector<char>& excludedBlobs,
-                                          const RecoveryConfig& cfg);
+                                          const RecoveryConfig& cfg, const std::vector<double>* vertexZ = nullptr);
 
   SiHitSeedEvent* eventData() const { return m_eventData; }
   // pca z [cm] of the TPC-only fit of the TPC input with this index in the current event (NaN if unknown)
@@ -519,6 +538,9 @@ class SiHitSeedReco : public SubsysReco
   void buildHitGrid(const std::vector<char>* excludedBlobs = nullptr);
   // hardware ddphi pulls of a complete chain (layers 0, 1), as at the end of buildChain
   void updateHwDdphiPulls(SiHitChain& chain) const;
+  // vertex-assisted prediction of (Vz, Uphi) of `chain` on `layer` (recoverHits); false if not possible
+  bool predictWithVertex(const SiHitChain& chain, const SiTpcHelixFit::Result& tpcFit, int layer, double vertexZ,
+                         const RecoveryConfig& cfg, const std::array<double, 7>& layerRadius, double& z, double& phi) const;
   std::vector<TpcTrackInput> collectTpcTracks(PHCompositeNode*) const;
   void processTpcTrack(const TpcTrackInput&);
   void resolveSharedChains();
@@ -573,6 +595,9 @@ class SiHitSeedReco : public SubsysReco
   unsigned long m_recoveryTried = 0;      // (chain, missing layer) pairs searched
   unsigned long m_recoveryNoBlob = 0;     // ... without a free blob in the window
   unsigned long m_recoveryBadChi2 = 0;    // ... blob found, chain no longer agrees with the TPC
+  unsigned long m_recoveryVertexPred = 0;   // predictions from the vertex-assisted helix
+  unsigned long m_recoveryFallbackPred = 0; // predictions from the TPC + offset fallback
+  unsigned long m_recoveryNoPred = 0;       // no prediction at all
 
   int m_minLayers = 3;
   int m_minMvtxLayers = 2;
