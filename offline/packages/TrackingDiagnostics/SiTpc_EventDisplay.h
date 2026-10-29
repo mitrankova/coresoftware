@@ -16,6 +16,7 @@ class Tpc_PolyClusterContainer;
 class Tpc_PolyTrackContainer;
 class Tpc_PolyTrackVertexContainer;
 class SiTpc_TrackContainer;
+class SvtxTrackMap;
 class TpcCrossingDecisionContainer;
 
 // Event display of the silicon seeds / trajectories together with the TPC poly clusters and
@@ -69,6 +70,18 @@ class TpcCrossingDecisionContainer;
 //   c3_evtN_phys_si_z_x_y   zoom on the silicon, all crossings, with the event summary and all
 //                           unassociated Si hits (grey)
 //   Optional (setDrawSiTpcTracks): fitted Si+TPC tracks as solid lines in all physics views.
+//   ACTS fit (SiTpcActsFitter, SvtxTrackMap): when the track map is present (setDrawActsTracks, default
+//   on), the ACTS tracks are drawn INSTEAD of the Si+TPC fit lines (setActsTrackColor, default black,
+//   solid).  The ACTS track of a Si+TPC track is found through its TPC clusters.  Si+TPC tracks whose
+//   ACTS fit failed are drawn dotted (setDrawSiTpcForFailedActs, default on).  The ACTS track is the
+//   line through its smoothed states (official frame): between two states the circle tangent to the
+//   fitted direction at the first state and passing through the next one (no field / charge needed, the
+//   line is continuous; a real kink of the fit shows as a change of direction at a state).  Moved into the
+//   display frame by setActsFrameShiftCm (official -> own frame: -Si beam spot in x, y, +Si acts z shift
+//   in z).  The TPC states are moved back by the TPC-only shifts the fitter applied (per-track TPC z
+//   offset, setActsTpcZOffset, default on; setActsTpcExtraShiftCm = SiTpcActsFitter::setTpcExtraShiftCm),
+//   so the TPC part of the line lies on the drawn TPC clusters; the Si -> TPC gap then shows the Si - TPC
+//   z offset of the track.
 //
 // Coordinates of the physics views: TPC frame (SiTpcBeamAlignment), beam on the TPC beam axis.
 //   TPC: clusters, poly tracks, pca and collision vertices as reconstructed (reference).
@@ -114,6 +127,28 @@ class SiTpc_EventDisplay : public SubsysReco
   void setDrawSiTpcTracks(bool v) { m_drawSiTpcTracks = v; }
   void setSiTpcTrackNodeName(const std::string& s) { m_siTpcTrackNodeName = s; }
   void setSiTpcTrackColor(int c) { m_siTpcTrackColor = c; }
+  // ACTS-fitted tracks (SiTpcActsFitter): drawn instead of the Si+TPC fit lines when the map exists
+  void setDrawActsTracks(bool v) { m_drawActsTracks = v; }
+  void setActsTrackMapName(const std::string& s) { m_actsTrackMapName = s; }
+  void setActsTrackColor(int c) { m_actsTrackColor = c; }
+  // official (ACTS) frame -> display frame [cm]: (-SiBeamX, -SiBeamY, +SiActsZShift) with the Si beam-spot correction
+  void setActsFrameShiftCm(double dx, double dy, double dz)
+  {
+    m_actsShift[0] = dx;
+    m_actsShift[1] = dy;
+    m_actsShift[2] = dz;
+  }
+  // Si+TPC tracks without an ACTS fit (failed): dotted Si+TPC fit line
+  void setDrawSiTpcForFailedActs(bool v) { m_drawSiTpcForFailedActs = v; }
+  // TPC states: add back the per-track TPC z offset subtracted by the fitter (SiTpc_Track::get_tpc_z_offset)
+  void setActsTpcZOffset(bool v) { m_actsTpcZOffset = v; }
+  // TPC states: the extra TPC shift of the fitter (SiTpcActsFitter::setTpcExtraShiftCm), subtracted here
+  void setActsTpcExtraShiftCm(double dx, double dy, double dz)
+  {
+    m_actsTpcExtra[0] = dx;
+    m_actsTpcExtra[1] = dy;
+    m_actsTpcExtra[2] = dz;
+  }
   // With SITPC_TRACKS present: TPC clusters / tracks matched to a Si trajectory are drawn in the
   // colour of that Si chain, unmatched TPC in grey (default).  false: colour by assembled id.
   void setColorTpcByMatch(bool v) { m_colorTpcByMatch = v; }
@@ -242,6 +277,14 @@ class SiTpc_EventDisplay : public SubsysReco
   bool m_drawSiTpcTracks = false;
   bool m_colorTpcByMatch = true;
   int m_siTpcTrackColor = 1;  // kBlack
+  SvtxTrackMap* m_actsTracks = nullptr;
+  std::string m_actsTrackMapName = "SvtxTrackMap";
+  bool m_drawActsTracks = true;
+  int m_actsTrackColor = 1;  // kBlack
+  double m_actsShift[3] = {0.0, 0.0, 0.0};
+  bool m_drawSiTpcForFailedActs = true;
+  bool m_actsTpcZOffset = true;
+  double m_actsTpcExtra[3] = {0.0, 0.0, 0.0};
   bool m_drawCandidateChains = false;
 
   bool m_drawDetector = true;

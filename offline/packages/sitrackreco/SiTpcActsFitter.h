@@ -53,6 +53,12 @@ class SiTpcActsFitter : public SubsysReco
     OfficialWorld = 1
   };
 
+  enum class TpcErrors
+  {
+    Standard = 0,  // ClusterErrorPara::get_clusterv5_modified_error (as PHActsTrkFitter) on the poly-cluster base errors
+    Constant = 1   // setTpcErrorCm per module
+  };
+
   enum class SiMeasurement
   {
     OfficialClusters = 0,  // official TRKR_CLUSTER clusters, fallback: projected chain point
@@ -107,6 +113,9 @@ class SiTpcActsFitter : public SubsysReco
       m_tpcErr[module] = {rphi, z};
     }
   }
+  void setTpcErrorMode(TpcErrors m) { m_tpcErrorMode = m; }
+  // scale of the standard TPC errors (r*phi, z)
+  void setTpcErrorScale(double rphi, double z) { m_tpcErrorScale = {rphi, z}; }
   // drop TPC clusters crossed at an angle (track direction vs radial normal) above this [rad]
   void setMaxTpcCrossingAngle(double a) { m_maxTpcCrossingAngle = a; }
   // copy the official TPC surface material onto the artificial planes
@@ -131,6 +140,16 @@ class SiTpcActsFitter : public SubsysReco
     m_seedSigmaRelQop = relQop;
   }
   void setFillSvtxTrackStates(bool b) { m_fillStates = b; }
+  // KF outlier rejection: predicted chi2 (2 dof) above the cut -> measurement not used; <= 0: off.
+  // Only meaningful once the measurement errors are right (the pulls of the QA).
+  void setTpcOutlierChi2(double c) { m_tpcOutlierChi2 = c; }
+  void setSiOutlierChi2(double c) { m_siOutlierChi2 = c; }
+  // a failed fit is repeated without the material surfaces (counted in End, flag in the QA tree)
+  void setRetryWithoutMaterial(bool b) { m_retryWithoutMaterial = b; }
+  // print measurements, navigation sequence and the Acts VERBOSE log of the first n failed fits
+  void setDebugFailedFits(int n) { m_debugFailedFits = n; }
+  // propagation step limit per fit (Acts default 1000)
+  void setMaxSteps(unsigned int n) { m_maxSteps = n; }
 
   // ---- QA
   void setQaFileName(const std::string& s) { m_qaFileName = s; }
@@ -181,6 +200,13 @@ class SiTpcActsFitter : public SubsysReco
   double m_seedSigmaAngle{0.02};
   double m_seedSigmaRelQop{0.2};
   bool m_fillStates{true};
+  unsigned int m_maxSteps{10000};
+  double m_tpcOutlierChi2{0};
+  double m_siOutlierChi2{0};
+  bool m_retryWithoutMaterial{true};
+  int m_debugFailedFits{0};
+  TpcErrors m_tpcErrorMode{TpcErrors::Standard};
+  std::array<double, 2> m_tpcErrorScale{1.0, 1.0};
 
   std::string m_qaFileName;
   bool m_qaSubFits{false};

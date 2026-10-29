@@ -16,6 +16,13 @@
 #include <sitrackreco/SiTpc_Track.h>
 #include <sitrackreco/SiTpc_TrackContainer.h>
 
+#include <trackbase/TrkrDefs.h>
+
+#include <trackbase_historic/SvtxTrack.h>
+#include <trackbase_historic/SvtxTrackMap.h>
+#include <trackbase_historic/SvtxTrackState.h>
+#include <trackbase_historic/TrackSeed.h>
+
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <phool/PHCompositeNode.h>
 #include <phool/getClass.h>
@@ -570,6 +577,7 @@ void SiTpc_EventDisplay::get_nodes(PHCompositeNode* topNode)
   m_tpcVertices = m_drawTpc ? findNode::getClass<Tpc_PolyTrackVertexContainer>(topNode, m_tpcVertexNodeName) : nullptr;
   m_siTpcTracks = findNode::getClass<SiTpc_TrackContainer>(topNode, m_siTpcTrackNodeName);
   m_decisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_crossingNodeName);
+  m_actsTracks = m_drawActsTracks ? findNode::getClass<SvtxTrackMap>(topNode, m_actsTrackMapName) : nullptr;
 
   if (Verbosity() > 0)
   {
@@ -579,6 +587,7 @@ void SiTpc_EventDisplay::get_nodes(PHCompositeNode* topNode)
               << ", TPC tracks " << (m_tpcTracks ? "yes" : "no")
               << ", TPC vertices " << (m_tpcVertices ? "yes" : "no")
               << ", Si+TPC tracks " << (m_siTpcTracks ? "yes" : "no")
+              << ", ACTS tracks " << (m_actsTracks ? "yes" : "no")
               << ", crossing decisions " << (m_decisions ? "yes" : "no") << std::endl;
   }
 }
@@ -939,7 +948,8 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
   else
   {
     siTpcSummary = std::format("{} Si+TPC tracks ({}), TPC coloured by {}", m_siTpcTracks->size(),
-                               m_drawSiTpcTracks ? "drawn" : "lines off: setDrawSiTpcTracks(true)",
+                               m_actsTracks ? std::format("ACTS fit drawn: {} tracks, failed fits dotted", m_actsTracks->size())
+                                            : (m_drawSiTpcTracks ? "drawn" : "lines off: setDrawSiTpcTracks(true)"),
                                colorByMatch ? "matched Si chain, unmatched grey" : "assembled id");
   }
   const std::string siSummary = std::format("{} chains: {} drawn, {} below {:.2f} GeV{}, {} not fitted (#diamond)",
@@ -1390,10 +1400,170 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
     const auto& pts = extension ? l.ext : l.pts;
     return zoom ? clip_curve(pts, kSiZoomR, zoomZ) : std::vector<std::vector<XYZ>>{pts};
   };
-  // Si+TPC fitted tracks (optional): from the pca outward through the whole tracker
+  // Si+TPC fitted tracks (optional): from the pca outward through the whole tracker.
+  // With the ACTS track map: the ACTS tracks instead (solid), Si+TPC tracks without ACTS fit dotted.
   std::vector<std::vector<XYZ>> siTpcCurves;
   std::vector<unsigned int> siTpcIds;  // assembled track id of every curve
-  if (m_siTpcTracks && m_drawSiTpcTracks)
+  std::vector<int> siTpcStyles;        // line style of every curve
+  std::vector<int> siTpcColors;        // line colour of every curve
+  std::set<unsigned int> actsAssembled;  // assembled ids with an ACTS track
+  if (m_actsTracks)
+  {
+    // TPC cluster key -> assembled track id (the TPC seed of an ACTS track holds its poly cluster keys)
+    std::map<TrkrDefs::cluskey, unsigned int> assembledOfKey;
+    if (m_tpcClusters)
+    {
+      for (unsigned int i = 0; i < m_tpcClusters->size(); ++i)
+      {
+        const Tpc_PolyCluster* c = m_tpcClusters->get_cluster(i);
+        if (c && c->get_trkr_cluster_key() != TrkrDefs::CLUSKEYMAX)
+        {
+          assembledOfKey[c->get_trkr_cluster_key()] = c->get_source_assembled_track_id();
+        }
+      }
+    }
+    // assembled TPC track id -> per-track TPC z offset of its Si+TPC track
+    std::map<unsigned int, double> zOffsetOfAssembled;
+    if (m_siTpcTracks)
+    {
+      for (unsigned int i = 0; i < m_siTpcTracks->size(); ++i)
+      {
+        const SiTpc_Track* t = m_siTpcTracks->get_track(i);
+        if (t && t->isValid())
+        {
+          zOffsetOfAssembled[t->get_tpc_assembled_track_id()] = t->get_tpc_z_offset();
+        }
+      }
+    }
+    for (const auto& [key, trk] : *m_actsTracks)
+    {
+      if (!trk)
+      {
+        continue;
+      }
+      // assembled id: majority of the TPC clusters of the track
+      std::map<unsigned int, int> votes;
+      if (const TrackSeed* tpcSeed = trk->get_tpc_seed())
+      {
+        for (auto it = tpcSeed->begin_cluster_keys(); it != tpcSeed->end_cluster_keys(); ++it)
+        {
+          const auto f = assembledOfKey.find(*it);
+          if (f != assembledOfKey.end())
+          {
+            ++votes[f->second];
+          }
+        }
+      }
+      if (votes.empty())
+      {
+        continue;
+      }
+      const unsigned int assembledId = std::max_element(votes.begin(), votes.end(), [](const auto& a, const auto& b)
+                                                        { return a.second < b.second; })
+                                           ->first;
+      // line through the fitted states, in the display frame.  Si states: + frame shift; TPC states also
+      // minus the TPC-only shifts of the fitter (per-track TPC z offset, extra TPC shift).
+      double tpcZOffset = 0;
+      if (m_actsTpcZOffset)
+      {
+        const auto f = zOffsetOfAssembled.find(assembledId);
+        if (f != zOffsetOfAssembled.end())
+        {
+          tpcZOffset = f->second;
+        }
+      }
+      struct State
+      {
+        double s, x, y, z, px, py, pz;
+      };
+      std::vector<State> states;
+      states.push_back({0.0, trk->get_x() + m_actsShift[0], trk->get_y() + m_actsShift[1], trk->get_z() + m_actsShift[2],
+                        trk->get_px(), trk->get_py(), trk->get_pz()});
+      for (auto it = trk->begin_states(); it != trk->end_states(); ++it)
+      {
+        const SvtxTrackState* st = it->second;
+        if (!st || st->get_pathlength() <= 0)
+        {
+          continue;  // the state at path length 0 holds no position (perigee = track position)
+        }
+        const bool tpc = st->get_cluskey() != std::numeric_limits<TrkrDefs::cluskey>::max() &&
+                         TrkrDefs::getTrkrId(st->get_cluskey()) == TrkrDefs::tpcId;
+        const double dx = m_actsShift[0] - (tpc ? m_actsTpcExtra[0] : 0.0);
+        const double dy = m_actsShift[1] - (tpc ? m_actsTpcExtra[1] : 0.0);
+        const double dz = m_actsShift[2] + (tpc ? tpcZOffset - m_actsTpcExtra[2] : 0.0);
+        states.push_back({st->get_pathlength(), st->get_x() + dx, st->get_y() + dy, st->get_z() + dz, st->get_px(), st->get_py(), st->get_pz()});
+      }
+      std::sort(states.begin(), states.end(), [](const State& a, const State& b) { return a.s < b.s; });
+      // between two states: the circle tangent to the fitted direction at the first state through the
+      // second one (transverse plane), z linear in the transverse arc length
+      std::vector<XYZ> pts;
+      bool outside = false;
+      auto add = [&](const XYZ& v)
+      {
+        if (std::hypot(v.x, v.y) > m_xymax || std::fabs(v.z) > zabs)
+        {
+          outside = true;
+          return;
+        }
+        pts.push_back(v);
+      };
+      for (std::size_t k = 0; k + 1 < states.size() && !outside; ++k)
+      {
+        const State& a = states[k];
+        const State& b = states[k + 1];
+        const double pt = std::hypot(a.px, a.py);
+        const double cx = b.x - a.x;
+        const double cy = b.y - a.y;
+        const double chord = std::hypot(cx, cy);
+        if (!(pt > 0) || chord < 1e-6)
+        {
+          add({a.x, a.y, a.z});
+          continue;
+        }
+        const double tx = a.px / pt;
+        const double ty = a.py / pt;
+        const double kappa = 2.0 * (tx * cy - ty * cx) / (chord * chord);  // signed curvature [1/cm]
+        const double half = 0.5 * kappa * chord;
+        double len = chord;  // transverse arc length
+        bool circle = std::fabs(kappa) * chord > 1e-6;
+        if (circle)
+        {
+          if (std::fabs(half) < 1.0 && (tx * cx + ty * cy) > 0)
+          {
+            len = 2.0 * std::asin(half) / kappa;
+          }
+          else
+          {
+            circle = false;  // next state behind the fitted direction: straight connection
+          }
+        }
+        const double psi0 = std::atan2(ty, tx);
+        for (double sv = 0; sv < len && !outside; sv += kHelixStep)
+        {
+          const double z = a.z + (b.z - a.z) * sv / len;
+          if (circle)
+          {
+            add({a.x + (std::sin(psi0 + kappa * sv) - std::sin(psi0)) / kappa, a.y - (std::cos(psi0 + kappa * sv) - std::cos(psi0)) / kappa, z});
+          }
+          else
+          {
+            add({a.x + cx * sv / len, a.y + cy * sv / len, z});
+          }
+        }
+      }
+      if (!outside && !states.empty())
+      {
+        const State& b = states.back();
+        add({b.x, b.y, b.z});
+      }
+      siTpcCurves.push_back(std::move(pts));
+      siTpcIds.push_back(assembledId);
+      siTpcStyles.push_back(1);
+      siTpcColors.push_back(m_actsTrackColor);
+      actsAssembled.insert(assembledId);
+    }
+  }
+  if (m_siTpcTracks && (m_actsTracks ? m_drawSiTpcForFailedActs : m_drawSiTpcTracks))
   {
     for (unsigned int i = 0; i < m_siTpcTracks->size(); ++i)
     {
@@ -1401,6 +1571,10 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       if (!t || !t->isValid())
       {
         continue;
+      }
+      if (m_actsTracks && actsAssembled.contains(t->get_tpc_assembled_track_id()))
+      {
+        continue;  // drawn as ACTS track
       }
       const auto hx = SiTpcHelixFit::fromTrack(*t);
       const double smax = std::min(kPi * hx.R, 4.0 * m_xymax + 100.0);
@@ -1416,6 +1590,8 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       }
       siTpcCurves.push_back(std::move(pts));
       siTpcIds.push_back(t->get_tpc_assembled_track_id());
+      siTpcStyles.push_back(m_actsTracks ? 3 : 1);  // dotted: no ACTS fit for this Si+TPC track
+      siTpcColors.push_back(m_siTpcTrackColor);
     }
   }
   auto siTpcSegments = [&](const std::vector<XYZ>& pts, const bool zoom)
@@ -1496,7 +1672,7 @@ int SiTpc_EventDisplay::process_event(PHCompositeNode* topNode)
       }
       for (const auto& seg : siTpcSegments(siTpcCurves[i], zoom))
       {
-        draw_line_zxy(seg, m_siTpcTrackColor, 1, 2);
+        draw_line_zxy(seg, siTpcColors[i], siTpcStyles[i], 2);
       }
     }
     for (std::size_t i = 0; i < siTrajs.size(); ++i)
