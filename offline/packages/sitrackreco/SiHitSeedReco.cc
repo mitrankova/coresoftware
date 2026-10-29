@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <iostream>
 #include <limits>
@@ -424,8 +425,14 @@ int SiHitSeedReco::process_event(PHCompositeNode* topNode)
   buildBlobs();
   buildHitGrid();
 
-  const auto tpcTracks = collectTpcTracks(topNode);
-  for (const auto& t : tpcTracks)
+  // kept for the worker interface (rechain / recoverHits of SiSeedingOrchestrator)
+  m_tpcInputs = collectTpcTracks(topNode);
+  m_tpcInputPos.clear();
+  for (std::size_t i = 0; i < m_tpcInputs.size(); ++i)
+  {
+    m_tpcInputPos[m_tpcInputs[i].index] = i;
+  }
+  for (const auto& t : m_tpcInputs)
   {
     processTpcTrack(t);
   }
@@ -509,6 +516,26 @@ int SiHitSeedReco::End(PHCompositeNode*)
       }
       std::printf("\n");
     }
+  }
+  if (m_rechainCalls > 0)
+  {
+    std::cout << Name() << ": rechain (pass 2 on free blobs): " << m_rechainCalls << " calls, " << m_rechainInputs
+              << " TPC inputs chained again, " << m_rechainChains << " new candidate chains (not in the pass-1 counts below)" << std::endl;
+  }
+  if (m_recoveryTried > 0)
+  {
+    unsigned long nAdded = 0;
+    for (const auto n : m_recoveredPerLayer)
+    {
+      nAdded += n;
+    }
+    std::cout << Name() << ": hit recovery (pass 3): " << m_recoveryTried << " missing layers searched, " << nAdded << " added (L0-6:";
+    for (const auto n : m_recoveredPerLayer)
+    {
+      std::cout << " " << n;
+    }
+    std::cout << "), no free blob in the window " << m_recoveryNoBlob << ", blob found but chain no longer agrees with the TPC "
+              << m_recoveryBadChi2 << std::endl;
   }
   if (Verbosity() > 0)
   {
@@ -1355,7 +1382,7 @@ void SiHitSeedReco::buildBlobsFromPixels()
 
 // Hit -> blob map and a (layer, iz, iphi) cell index, so that every windowed search
 // only visits the few cells inside its window instead of all hits of the layer.
-void SiHitSeedReco::buildHitGrid()
+void SiHitSeedReco::buildHitGrid(const std::vector<char>* excludedBlobs)
 {
   const auto& hits = m_eventData->hits;
   m_hitBlob.assign(hits.size(), -1);
@@ -1375,6 +1402,10 @@ void SiHitSeedReco::buildHitGrid()
     if (m_hitBlob[i] < 0)
     {
       continue;  // outside the z binning: not used by the finder
+    }
+    if (excludedBlobs && static_cast<std::size_t>(m_hitBlob[i]) < excludedBlobs->size() && (*excludedBlobs)[m_hitBlob[i]])
+    {
+      continue;  // blob not available in this search (worker interface: used by a kept chain)
     }
     const int iz = (int) std::floor(hits[i].zbin);
     const int ip = ((int) std::floor(hits[i].phibin) % m_nphi + m_nphi) % m_nphi;
@@ -2543,4 +2574,371 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
     ++m_nChains;
   }
   finish(pass ? SiTpcSeedInfo::Chained : SiTpcSeedInfo::Rejected);
+}
+// ============================================================================================
+// Worker interface (SiSeedingOrchestrator): pass 2 (rechain on free blobs), pass 3 (hit recovery)
+// ============================================================================================
+double SiHitSeedReco::tpcInputZ0(int tpcInputIndex) const
+{
+  const auto it = m_tpcInputPos.find(tpcInputIndex);
+  if (it == m_tpcInputPos.end())
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  const auto& in = m_tpcInputs[it->second];
+  return in.fit.fitted() ? in.fit.z0 : std::numeric_limits<double>::quiet_NaN();
+}
+
+void SiHitSeedReco::updateHwDdphiPulls(SiHitChain& chain) const
+{
+  std::map<int, double> uphi;
+  for (std::size_t i = 0; i < chain.layers.size() && i < chain.phi.size(); ++i)
+  {
+    uphi[chain.layers[i]] = chain.phi[i];
+  }
+  for (int l = 0; l < 2; ++l)
+  {
+    chain.hw_ddphi_pull[l] = std::numeric_limits<double>::quiet_NaN();
+    double d = 0, pred = 0;
+    if (!m_hwDdphiCheck[l] || m_hwDdphiSigma[l] <= 0 || !hwDdphiTerms(l, uphi, d, pred))
+    {
+      continue;
+    }
+    chain.hw_ddphi_pull[l] = (d - m_hwDdphiOffset[l] - m_hwDdphiSlope[l] * pred) / m_hwDdphiSigma[l];
+  }
+}
+
+std::vector<int> SiHitSeedReco::rechain(const std::set<unsigned int>& assembledIds, const std::vector<char>& excludedBlobs,
+                                        const RechainConfig& cfg, int passTag)
+{
+  std::vector<int> out;
+  if (!m_eventData || assembledIds.empty())
+  {
+    return out;
+  }
+  ++m_rechainCalls;
+
+  // pass-1 settings and run counters, restored at the end (pass-1 statistics stay pass-1 only)
+  const int minLayers = m_minLayers, minMvtx = m_minMvtxLayers, minIntt = m_minInttLayers;
+  const double anchorRphi = m_anchorRphi, anchorZ = m_anchorZ, seedZHalf = m_seedZHalfCm, seedPhiHalf = m_seedPhiHalf;
+  const double propPhiHalf = m_propPhiHalf, propZHalf = m_propZHalf, inttPropZHalf = m_inttPropZHalf;
+  const double inttTpcPhiHalf = m_inttTpcPhiHalf, agreeMax = m_agreementMaxChi2;
+  const unsigned int maxChains = m_maxChainsPerTrack, maxAnchors = m_maxAnchors;
+  const bool storeSelectedOnly = m_storeSelectedOnly;
+  const auto statusCount = m_statusCount;
+  const unsigned long nChainsRun = m_nChains, rankChanged = m_rankChanged, noAgreeing = m_noAgreeingChain;
+
+  m_minLayers = cfg.minLayers.value_or(m_minLayers);
+  m_minMvtxLayers = cfg.minMvtxLayers.value_or(m_minMvtxLayers);
+  m_minInttLayers = cfg.minInttLayers.value_or(m_minInttLayers);
+  m_anchorRphi = cfg.anchorRphiCm.value_or(m_anchorRphi);
+  m_anchorZ = cfg.anchorZCm.value_or(m_anchorZ);
+  m_seedZHalfCm = cfg.seedZHalfCm.value_or(m_seedZHalfCm);
+  m_seedPhiHalf = cfg.seedPhiHalfBins.value_or(m_seedPhiHalf);
+  m_propPhiHalf = cfg.propPhiHalfBins.value_or(m_propPhiHalf);
+  m_propZHalf = cfg.propZHalfBins.value_or(m_propZHalf);
+  m_inttPropZHalf = cfg.inttPropZHalfBins.value_or(m_inttPropZHalf);
+  m_inttTpcPhiHalf = cfg.inttTpcPhiHalfBins.value_or(m_inttTpcPhiHalf);
+  m_agreementMaxChi2 = cfg.agreementMaxChi2.value_or(m_agreementMaxChi2);
+  m_maxChainsPerTrack = cfg.maxChainsPerTrack.value_or(m_maxChainsPerTrack);
+  m_maxAnchors = cfg.maxAnchorsPerTrack.value_or(m_maxAnchors);
+  m_storeSelectedOnly = false;  // every candidate is stored: the caller selects
+
+  buildHitGrid(&excludedBlobs);
+  const std::size_t nChains0 = m_eventData->chains.size();
+  const std::size_t nSeeds0 = m_eventData->tpc_seeds.size();
+  for (const auto& in : m_tpcInputs)
+  {
+    if (assembledIds.count(in.assembledId) != 0)
+    {
+      processTpcTrack(in);
+      ++m_rechainInputs;
+    }
+  }
+  // tpc_seeds keeps one entry per TPC input (pass 1); the new chains carry their TPC input themselves
+  m_eventData->tpc_seeds.erase(m_eventData->tpc_seeds.begin() + static_cast<std::ptrdiff_t>(nSeeds0), m_eventData->tpc_seeds.end());
+  for (std::size_t c = nChains0; c < m_eventData->chains.size(); ++c)
+  {
+    auto& ch = m_eventData->chains[c];
+    ch.pass = passTag;
+    ch.selected = false;
+    out.push_back(ch.id);
+  }
+  m_rechainChains += out.size();
+
+  m_minLayers = minLayers;
+  m_minMvtxLayers = minMvtx;
+  m_minInttLayers = minIntt;
+  m_anchorRphi = anchorRphi;
+  m_anchorZ = anchorZ;
+  m_seedZHalfCm = seedZHalf;
+  m_seedPhiHalf = seedPhiHalf;
+  m_propPhiHalf = propPhiHalf;
+  m_propZHalf = propZHalf;
+  m_inttPropZHalf = inttPropZHalf;
+  m_inttTpcPhiHalf = inttTpcPhiHalf;
+  m_agreementMaxChi2 = agreeMax;
+  m_maxChainsPerTrack = maxChains;
+  m_maxAnchors = maxAnchors;
+  m_storeSelectedOnly = storeSelectedOnly;
+  m_statusCount = statusCount;
+  m_nChains = nChainsRun;
+  m_rankChanged = rankChanged;
+  m_noAgreeingChain = noAgreeing;
+
+  buildHitGrid();  // full grid again
+  if (Verbosity() > 0)
+  {
+    std::cout << Name() << ": rechain pass " << passTag << ": " << assembledIds.size() << " assembled tracks, "
+              << out.size() << " new candidate chains" << std::endl;
+  }
+  return out;
+}
+
+std::array<unsigned int, 7> SiHitSeedReco::recoverHits(const std::vector<int>& chainIds, const std::vector<char>& excludedBlobs,
+                                                       const RecoveryConfig& cfg)
+{
+  std::array<unsigned int, 7> added{};
+  if (!m_eventData || chainIds.empty())
+  {
+    return added;
+  }
+  auto& ev = *m_eventData;
+  std::vector<char> taken(excludedBlobs);  // + blobs added by this call
+  taken.resize(ev.blobs.size(), 0);
+  buildHitGrid(&excludedBlobs);
+  const double dz = (m_zmax - m_zmin) / m_nz, dp = twopi / m_nphi;
+  const int savedCrossing = m_curCrossing;
+
+  for (const int cid : chainIds)
+  {
+    if (cid < 0 || cid >= static_cast<int>(ev.chains.size()))
+    {
+      continue;
+    }
+    SiHitChain& ch = ev.chains[cid];
+    const auto ip = m_tpcInputPos.find(ch.tpc_track_index);
+    if (ip == m_tpcInputPos.end())
+    {
+      continue;
+    }
+    const TpcTrackInput& in = m_tpcInputs[ip->second];
+    SiTpcReference::TpcReference ref;
+    if (!in.fit.fitted() || !SiTpcReference::buildTpcReference(in.fit, m_map, ref, m_boundaryMargin))
+    {
+      continue;
+    }
+    if (ch.layers.empty())
+    {
+      continue;
+    }
+    m_curCrossing = ch.tpc_crossing;  // INTT time window of the (resolved) crossing
+    for (const int b : ch.blob_ids)
+    {
+      if (b >= 0 && b < static_cast<int>(taken.size()))
+      {
+        taken[b] = 1;
+      }
+    }
+    // agreement before, at the TPC input the chain belongs to now (the resolver may have moved it)
+    SiHitChain before = ch;
+    toPhysics(in.fit, before);
+    double chi2Before = before.tpc_chi2;
+
+    for (int layer = 0; layer < nlayers; ++layer)
+    {
+      if (std::find(ch.layers.begin(), ch.layers.end(), layer) != ch.layers.end())
+      {
+        continue;
+      }
+      const bool intt = layer >= 3;
+      if (intt ? !cfg.intt : !cfg.mvtx)
+      {
+        continue;
+      }
+      ++m_recoveryTried;
+
+      // nearest chain layer (reference of the step, and the 'near' point of the line propagation)
+      std::size_t iNear = 0;
+      for (std::size_t i = 1; i < ch.layers.size(); ++i)
+      {
+        if (std::abs(m_radius[ch.layers[i]] - m_radius[layer]) < std::abs(m_radius[ch.layers[iNear]] - m_radius[layer]))
+        {
+          iNear = i;
+        }
+      }
+
+      double pz = 0, pp = 0;
+      bool havePred = false;
+      if (!intt)
+      {
+        // missing MVTX layer: straight line through the MVTX chain points, as the pass-1 propagation
+        std::vector<Eigen::Vector3d> pts;
+        for (std::size_t i = 0; i < ch.layers.size(); ++i)
+        {
+          if (ch.layers[i] <= 2)
+          {
+            pts.push_back(xyz(ch.layers[i], ch.z[i], ch.phi[i]));
+          }
+        }
+        if (pts.size() >= 2)
+        {
+          havePred = propagate(fitLine(pts), layer, xyz(ch.layers[iNear], ch.z[iNear], ch.phi[iNear]), pz, pp);
+        }
+      }
+      if (!havePred)
+      {
+        // TPC prediction on this layer + mean offset of the chain points to the TPC prediction
+        // (each point with the clamshell translation closer to it, as the pass-1 INTT window)
+        double sR = 0, sZ = 0;
+        int n = 0, nAlt = 0;
+        for (std::size_t i = 0; i < ch.layers.size(); ++i)
+        {
+          const int l = ch.layers[i];
+          const auto& p0 = ref.layers[l];
+          const auto& p1 = ref.alt[l];
+          const SiTpcReference::LayerPrediction* p = nullptr;
+          if (p0.valid && p1.valid)
+          {
+            const bool useAlt = std::abs(wrapDelta(ch.phi[i] - p1.u, twopi)) < std::abs(wrapDelta(ch.phi[i] - p0.u, twopi));
+            p = useAlt ? &p1 : &p0;
+            nAlt += useAlt;
+          }
+          else if (p0.valid)
+          {
+            p = &p0;
+          }
+          if (!p)
+          {
+            continue;
+          }
+          sR += m_radius[l] * wrapDelta(ch.phi[i] - p->u, twopi);
+          sZ += ch.z[i] - p->z;
+          ++n;
+        }
+        const auto& t0 = ref.layers[layer];
+        const auto& t1 = ref.alt[layer];
+        const SiTpcReference::LayerPrediction* tp = (t1.valid && 2 * nAlt > n) ? &t1 : (t0.valid ? &t0 : nullptr);
+        if (n > 0 && tp)
+        {
+          pp = tp->u + (sR / n) / m_radius[layer];
+          pp = std::fmod(pp, twopi);
+          if (pp < 0)
+          {
+            pp += twopi;
+          }
+          pz = tp->z + sZ / n;
+          havePred = true;
+        }
+      }
+      if (!havePred)
+      {
+        ++m_recoveryNoBlob;
+        continue;
+      }
+
+      const double phiHalf = intt ? cfg.inttPhiHalfBins : cfg.mvtxPhiHalfBins;
+      const double zHalf = intt ? cfg.inttZHalfBins : cfg.mvtxZHalfBins;
+      int bestBlob = -1, bestHit = -1;
+      double bestScore = 1e99, bz = 0, bp = 0, rz = 0, rp = 0;
+      forEachHitNear(layer, (pz - m_zmin) / dz, zHalf, pp / dp, phiHalf, [&](int hid)
+      {
+        const int b = m_hitBlob[hid];
+        if (b < 0 || taken[b])
+        {
+          return;
+        }
+        const auto& h = ev.hits[hid];
+        if (intt && m_inttCrossingWindow >= 0 && !m_tpcTrajectoryNodeName.empty())
+        {
+          const int bucket = static_cast<int>(InttDefs::getTimeBucketId(h.hitsetkey));
+          if (std::abs(bucket - m_curCrossing) > m_inttCrossingWindow)
+          {
+            return;
+          }
+        }
+        const double rrphi = wrapDelta(h.phi - pp, twopi) / dp;
+        const double rrz = (h.z - pz) / dz;
+        if (std::abs(rrphi) > phiHalf || std::abs(rrz) > zHalf)
+        {
+          return;
+        }
+        const double sc = (rrphi / phiHalf) * (rrphi / phiHalf) + (rrz / zHalf) * (rrz / zHalf);
+        if (sc < bestScore)
+        {
+          bestScore = sc;
+          bestBlob = b;
+          bestHit = hid;
+          bz = h.z;
+          bp = h.phi;
+          rz = rrz;
+          rp = rrphi;
+        }
+      });
+      if (bestBlob < 0)
+      {
+        ++m_recoveryNoBlob;
+        continue;
+      }
+
+      // trial chain with the new layer (per-layer vectors stay ordered outermost first)
+      SiHitChain trial = ch;
+      std::size_t pos = 0;
+      while (pos < trial.layers.size() && trial.layers[pos] > layer)
+      {
+        ++pos;
+      }
+      const auto at = [pos](auto& v) { return v.begin() + static_cast<std::ptrdiff_t>(pos); };
+      trial.layers.insert(at(trial.layers), layer);
+      trial.blob_ids.insert(at(trial.blob_ids), bestBlob);
+      trial.point_hit_ids.insert(at(trial.point_hit_ids), bestHit);
+      trial.z.insert(at(trial.z), bz);
+      trial.phi.insert(at(trial.phi), bp);
+      for (const int h : ev.blobs[bestBlob].hit_ids)
+      {
+        trial.hit_ids.push_back(h);
+      }
+      ++(intt ? trial.n_intt : trial.n_mvtx);
+      ++trial.n_recovered_layers;
+      SiChainStep st;
+      st.kind = intt ? SiChainStep::InttPropagation : SiChainStep::MvtxPropagation;
+      st.from_layer = ch.layers[iNear];
+      st.to_layer = layer;
+      st.blob_id = bestBlob;
+      st.hit_id = bestHit;
+      st.ref_z = ch.z[iNear];
+      st.ref_phi = ch.phi[iNear];
+      st.pred_z = pz;
+      st.pred_phi = pp;
+      st.z = bz;
+      st.phi = bp;
+      st.delta_z_bins = (bz - ch.z[iNear]) / dz;
+      st.delta_phi_bins = wrapDelta(bp - ch.phi[iNear], twopi) / dp;
+      st.res_z_bins = rz;
+      st.res_phi_bins = rp;
+      st.z_half_window_bins = zHalf;
+      st.phi_half_window_bins = phiHalf;
+      st.score = bestScore;
+      trial.steps.push_back(st);
+      trial.score += bestScore;
+      toPhysics(in.fit, trial);
+      const bool agrees = std::isfinite(trial.tpc_chi2) && trial.tpc_chi2 <= cfg.maxChi2 &&
+                          (!std::isfinite(chi2Before) || trial.tpc_chi2 <= chi2Before + cfg.maxChi2Increase);
+      if (!agrees)
+      {
+        ++m_recoveryBadChi2;
+        continue;
+      }
+      updateHwDdphiPulls(trial);
+      chi2Before = trial.tpc_chi2;
+      ch = std::move(trial);
+      taken[bestBlob] = 1;
+      ++added[layer];
+      ++m_recoveredPerLayer[layer];
+    }
+  }
+
+  m_curCrossing = savedCrossing;
+  buildHitGrid();  // full grid again
+  return added;
 }

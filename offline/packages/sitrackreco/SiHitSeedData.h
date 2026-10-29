@@ -129,6 +129,10 @@ struct SiHitChain
   int tpc_nres = 0;  // chain layers on which the TPC helix could be evaluated (finite r*dphi)
   int rank = -1;          // 0 = best chain of its TPC track (most layers, then best tpc_chi2)
   bool selected = false;  // rank 0 and passing the agreement cut
+
+  // ---- iterative seeding (SiSeedingOrchestrator)
+  int pass = 1;                // 1: TPC-driven pass, 2: pass-2 chain on free blobs (SiHitSeedReco::rechain)
+  int n_recovered_layers = 0;  // layers added by the hit recovery (SiHitSeedReco::recoverHits, pass 3)
   int n_layers() const { return n_mvtx + n_intt; }
 };
 

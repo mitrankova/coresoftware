@@ -14,7 +14,10 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class ActsGeometry;
@@ -406,6 +409,70 @@ class SiHitSeedReco : public SubsysReco
   void setZBins(int n) { m_nz = n; }
   void setPhiBins(int n) { m_nphi = n; }
 
+  // ---------------------------------------------------------------------------
+  // Worker interface for SiSeedingOrchestrator.
+  //   process_event() is pass 1 and is unchanged (the module can still be registered on its own).
+  //   rechain() and recoverHits() act on the SiHitSeedEvent of the CURRENT event, after
+  //   process_event(): same hits, blobs, binning and TPC inputs, nothing is read from the nodes again.
+  //   Blob masks: one entry per SiHitSeedEvent::blobs, non-zero = blob not available (its hits are
+  //   left out of the search grid, so no anchor, seed candidate or propagation can pick it).
+  // ---------------------------------------------------------------------------
+  // Overrides of the chain cuts and windows for rechain(); an empty field keeps the pass-1 value.
+  struct RechainConfig
+  {
+    std::optional<int> minLayers;
+    std::optional<int> minMvtxLayers;
+    std::optional<int> minInttLayers;
+    std::optional<double> anchorRphiCm;
+    std::optional<double> anchorZCm;
+    std::optional<double> seedZHalfCm;
+    std::optional<double> seedPhiHalfBins;
+    std::optional<double> propPhiHalfBins;
+    std::optional<double> propZHalfBins;
+    std::optional<double> inttPropZHalfBins;
+    std::optional<double> inttTpcPhiHalfBins;
+    std::optional<double> agreementMaxChi2;
+    std::optional<unsigned int> maxChainsPerTrack;
+    std::optional<unsigned int> maxAnchorsPerTrack;
+  };
+  // Chain again every TPC input (crossing trajectory or TPC track) of the given assembled tracks on
+  // the blobs NOT flagged in excludedBlobs, with the cuts of cfg.  The new chains are appended to
+  // SI_HIT_SEED_EVENT (pass = passTag, selected = false, rank within their TPC input as in pass 1);
+  // the existing chains, their selection and tpc_seeds are not changed, no exclusive arbitration
+  // (the caller selects).  Returns the ids (SiHitChain::id) of the new chains.
+  std::vector<int> rechain(const std::set<unsigned int>& assembledIds, const std::vector<char>& excludedBlobs,
+                           const RechainConfig& cfg, int passTag = 2);
+
+  // Hit recovery on the missing layers of existing chains (pass 3).
+  struct RecoveryConfig
+  {
+    bool mvtx = true;               // look for missing MVTX layers
+    bool intt = true;               // look for missing INTT layers
+    double mvtxPhiHalfBins = 2.0;   // window half widths [Uphi bins, z bins of the event]
+    double mvtxZHalfBins = 2.0;
+    double inttPhiHalfBins = 4.0;
+    double inttZHalfBins = 5.0;
+    double maxChi2 = 3.0;           // a recovered chain must still agree with the TPC: chi2/ndf <= maxChi2 ...
+    double maxChi2Increase = 1.0;   // ... and <= chi2/ndf before + maxChi2Increase
+  };
+  // For every chain in chainIds, every missing layer: prediction = TPC prediction on that layer +
+  // mean offset of the chain points to the TPC prediction (as setInttCentre(TpcOffset)); a missing
+  // MVTX layer with >= 2 MVTX chain points uses the straight line through them (as pass 1).  The best
+  // free blob in the window (not in excludedBlobs, not taken by another chain of this call; INTT:
+  // within setInttCrossingWindow of the chain's crossing) is added if the chain still agrees with
+  // the TPC.  The chain is updated in place (layers, blobs, hits, physics points, residuals, chi2,
+  // hw ddphi pulls, n_recovered_layers).  Returns the number of added layers per layer.
+  std::array<unsigned int, 7> recoverHits(const std::vector<int>& chainIds, const std::vector<char>& excludedBlobs,
+                                          const RecoveryConfig& cfg);
+
+  SiHitSeedEvent* eventData() const { return m_eventData; }
+  // pca z [cm] of the TPC-only fit of the TPC input with this index in the current event (NaN if unknown)
+  double tpcInputZ0(int tpcInputIndex) const;
+  int inttCrossingWindow() const { return m_inttCrossingWindow; }
+  bool usesCrossingTrajectories() const { return !m_tpcTrajectoryNodeName.empty(); }
+  const std::string& outputNodeName() const { return m_outputNodeName; }
+  const std::string& trajectoryNodeName() const { return m_tpcTrajectoryNodeName; }
+
  private:
   struct Line3D
   {
@@ -448,7 +515,10 @@ class SiHitSeedReco : public SubsysReco
   bool fillHits(PHCompositeNode*);
   void buildBlobs();
   void buildBlobsFromPixels();
-  void buildHitGrid();
+  // excludedBlobs (optional, one entry per blob): hits of flagged blobs are left out of the grid
+  void buildHitGrid(const std::vector<char>* excludedBlobs = nullptr);
+  // hardware ddphi pulls of a complete chain (layers 0, 1), as at the end of buildChain
+  void updateHwDdphiPulls(SiHitChain& chain) const;
   std::vector<TpcTrackInput> collectTpcTracks(PHCompositeNode*) const;
   void processTpcTrack(const TpcTrackInput&);
   void resolveSharedChains();
@@ -492,6 +562,17 @@ class SiHitSeedReco : public SubsysReco
   std::string m_outputNodeName = "SI_HIT_SEED_EVENT";
   unsigned long long m_event = 0;
   SiHitSeedEvent* m_eventData = nullptr;
+  // TPC inputs of the current event (kept for rechain / recoverHits) and TpcTrackInput::index -> position
+  std::vector<TpcTrackInput> m_tpcInputs;
+  std::unordered_map<int, std::size_t> m_tpcInputPos;
+  // run counters of the worker interface
+  unsigned long m_rechainCalls = 0;
+  unsigned long m_rechainInputs = 0;
+  unsigned long m_rechainChains = 0;
+  std::array<unsigned long, 7> m_recoveredPerLayer{};
+  unsigned long m_recoveryTried = 0;      // (chain, missing layer) pairs searched
+  unsigned long m_recoveryNoBlob = 0;     // ... without a free blob in the window
+  unsigned long m_recoveryBadChi2 = 0;    // ... blob found, chain no longer agrees with the TPC
 
   int m_minLayers = 3;
   int m_minMvtxLayers = 2;
