@@ -139,6 +139,9 @@ class TpcCrossingResolver : public SubsysReco
   void setLoneIgnoreSameSi(bool v) { m_loneIgnoreSameSi = v; }
   //    TPC-only tracks: minimum collision support (credit sum of its tracks) to be matched
   void setMinSupportTpcOnly(double v) { m_minSupportTpcOnly = v; }
+  //    false: no TPC-only match here, tracks without a Si chain get tier 2 at the crossing closest to z = 0
+  //    (SiSeedingOrchestrator decides them later with TpcCrossingFinder against the final collisions)
+  void setTpcOnlyMatch(bool v) { m_tpcOnlyMatch = v; }
   // collisions need a winner with INTT hits; MVTX-only chains only join them
   void setRequireInttForCollision(bool v) { m_requireInttForCollision = v; }
   //    a lone winner with an MVTX-only chain that passes the lone robustness test keeps its Si
@@ -188,6 +191,7 @@ class TpcCrossingResolver : public SubsysReco
   double m_minLoneCredit{0.3};
   bool m_loneIgnoreSameSi{true};
   double m_minSupportTpcOnly{1.0};
+  bool m_tpcOnlyMatch{true};
   double m_maxVertexZ{25.0};
   bool m_requireInttForCollision{true};
   bool m_keepUntimedLone{true};
