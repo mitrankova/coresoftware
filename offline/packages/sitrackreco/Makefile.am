@@ -21,6 +21,7 @@ pkginclude_HEADERS = \
   SiDetectorFrame.h \
   SiTpcBeamAlignment.h \
   SiTpcHelixFit.h \
+  SiTpcFitRescue.h \
   SiTpcTrackSeedFiller.h \
   SiTpcReference.h \
   SiTpc_Track.h \
@@ -54,6 +55,7 @@ libsitrackreco_la_SOURCES = \
   SiTpcHelixFit.cc \
   SiTpc_Trackv1.cc \
   SiTpc_TrackContainerv1.cc \
+  SiTpcFitRescue.cc \
   SiTpcTrackSeedFiller.cc \
   SiHitSeedReco.cc \
   SiSeedingOrchestrator.cc \

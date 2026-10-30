@@ -10,6 +10,7 @@
 
 #include <trackbase/ActsGeometry.h>
 #include <trackbase/MvtxDefs.h>
+#include <trackbase/TpcDefs.h>
 #include <trackbase/TrkrCluster.h>
 #include <trackbase/TrkrClusterContainer.h>
 #include <trackbase/TrkrClusterHitAssoc.h>
@@ -30,6 +31,7 @@
 #include <phool/PHObject.h>
 #include <phool/getClass.h>
 #include <phool/phool.h>
+#include <phool/sphenix_constants.h>
 
 #include <Acts/Definitions/Units.hpp>
 #include <Acts/Surfaces/Surface.hpp>
@@ -106,6 +108,9 @@ struct SiTpcTrackSeedFiller::Impl
   std::map<TrkrDefs::hitsetkey, uint32_t> nextIndex;
 
   unsigned long nEvents = 0, nChains = 0, nTpcSeeds = 0, nSeeds = 0, nHybrid = 0, nTpcOnly = 0;
+  unsigned long nTpcOnlyCarrier = 0;  // TPC-only seeds with a crossing carrier silicon seed
+  unsigned long nTpcOnlyZero = 0;     // plain TPC-only seeds (fitted at crossing 0)
+  unsigned long nTpcOnlySkipped = 0;  // TPC-only seeds not added (no usable crossing)
   unsigned long nSiOfficialAssoc = 0, nSiOfficialPosition = 0, nSiProjected = 0, nSiMissing = 0, nSiOtherStrobe = 0;
   std::map<std::string, unsigned long> rejected;
 
@@ -275,7 +280,7 @@ int SiTpcTrackSeedFiller::InitRun(PHCompositeNode* topNode)
             << "  seed fit: xy weights MVTX/INTT/TPC " << m_wxy[0] << "/" << m_wxy[1] << "/" << m_wxy[2] << ", z " << m_wz[0] << "/"
             << m_wz[1] << "/" << m_wz[2] << ", hybrid " << (m_hybrid ? "on" : "off") << " (" << m_hybridW[0] << "/" << m_hybridW[1]
             << ", min " << m_hybridMinPoints << "), TPC z offset " << (m_fitTpcZOffset ? "free" : "fixed") << std::endl
-            << "  projected chain points " << (m_useProjected ? "on" : "off") << ", TPC-only seeds " << (m_addUnmatchedTpc ? "on" : "off")
+            << "  projected chain points " << (m_useProjected ? "on" : "off") << ", TPC-only seeds " << (m_addUnmatchedTpc ? (m_tpcOnlyCrossing == TpcOnlyCrossing::FromDecision ? std::string("on, at the decided crossing (tier <= ") + std::to_string(m_tpcOnlyMaxTier) + (m_tpcOnlyFallbackZero ? "; others at crossing 0)" : "; others not added)") : std::string("on, at crossing 0")) : std::string("off"))
             << ", output " << m_siSeedName << ", " << m_svtxSeedName << std::endl;
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -614,17 +619,78 @@ int SiTpcTrackSeedFiller::process_event(PHCompositeNode* topNode)
     d.nSiProjected += nProj;
   }
 
-  // ---- optional TPC-only entries (as PHSiliconTpcTrackMatching)
+  // ---- optional TPC-only entries
   if (m_addUnmatchedTpc)
   {
+    std::map<unsigned int, unsigned int> assembledOfTpcSeed;
+    for (const auto& [assembled, index] : tpcSeedOfAssembled)
+    {
+      assembledOfTpcSeed[index] = assembled;
+    }
+    const double driftVelocity = d.geometry->get_drift_velocity();
+    const double zBunchSeparation = sphenix_constants::time_between_crossings * driftVelocity;
     for (unsigned int i = 0; i < d.tpcSeeds->size(); ++i)
     {
-      if (d.tpcSeeds->get(i) && !matchedTpcSeeds.contains(i))
+      const TrackSeed* tpcSeed = d.tpcSeeds->get(i);
+      if (!tpcSeed || matchedTpcSeeds.contains(i))
+      {
+        continue;
+      }
+      bool carrier = false;
+      if (m_tpcOnlyCrossing == TpcOnlyCrossing::FromDecision)
+      {
+        // decided crossing of the assembled track and the TPC side of the seed
+        const auto ia = assembledOfTpcSeed.find(i);
+        const TpcCrossingDecision* decision = ia != assembledOfTpcSeed.end() ? d.crossings->get_decision(ia->second) : nullptr;
+        const short crossing = decision ? decision->get_selected_crossing() : static_cast<short>(SHRT_MAX);
+        const bool usable = decision && crossing != SHRT_MAX && decision->get_selected_tier() <= m_tpcOnlyMaxTier;
+        int side = -1;
+        for (auto it = tpcSeed->begin_cluster_keys(); it != tpcSeed->end_cluster_keys(); ++it)
+        {
+          if (TrkrDefs::getTrkrId(*it) == TrkrDefs::tpcId)
+          {
+            side = static_cast<int>(TpcDefs::getSide(TrkrDefs::getHitSetKeyFromClusKey(*it)));
+            break;
+          }
+        }
+        if (usable && side >= 0 && driftVelocity > 0 && std::isfinite(driftVelocity))
+        {
+          // TPC seed z0 is stored for crossing 0 (TpcPolyTrackSeedConverter): undo that for the carrier
+          const double z0 = (side == 0) ? tpcSeed->get_Z0() - static_cast<double>(crossing) * zBunchSeparation
+                                        : tpcSeed->get_Z0() + static_cast<double>(crossing) * zBunchSeparation;
+          TrackSeed_v2 seed;  // crossing carrier: no cluster keys
+          seed.set_X0(tpcSeed->get_X0());
+          seed.set_Y0(tpcSeed->get_Y0());
+          seed.set_qOverR(tpcSeed->get_qOverR());
+          seed.set_Z0(static_cast<float>(z0));
+          seed.set_slope(tpcSeed->get_slope());
+          seed.set_phi(tpcSeed->get_phi());
+          seed.set_crossing(crossing);
+          d.siSeeds->insert(&seed);
+
+          SvtxTrackSeed_v3 svtx;
+          svtx.set_silicon_seed_index(static_cast<unsigned int>(d.siSeeds->size() - 1));
+          svtx.set_tpc_seed_index(i);
+          svtx.set_crossing(crossing);
+          svtx.set_crossing_estimate(crossing);
+          d.svtxSeeds->insert(&svtx);
+          ++d.nTpcOnly;
+          ++d.nTpcOnlyCarrier;
+          carrier = true;
+        }
+        else if (!m_tpcOnlyFallbackZero)
+        {
+          ++d.nTpcOnlySkipped;
+          continue;
+        }
+      }
+      if (!carrier)
       {
         SvtxTrackSeed_v3 svtx;
         svtx.set_tpc_seed_index(i);
         d.svtxSeeds->insert(&svtx);
         ++d.nTpcOnly;
+        ++d.nTpcOnlyZero;
       }
     }
   }
@@ -637,7 +703,8 @@ int SiTpcTrackSeedFiller::End(PHCompositeNode* /*topNode*/)
   auto& d = *m_impl;
   std::cout << Name() << "::End - events " << d.nEvents << ", chains " << d.nChains << ", TPC seeds " << d.nTpcSeeds
             << " -> Si seeds = Si+TPC SvtxTrackSeeds " << d.nSeeds << " (hybrid xy " << d.nHybrid << "), TPC-only SvtxTrackSeeds "
-            << d.nTpcOnly << std::endl
+            << d.nTpcOnly << " (at the decided crossing, with a crossing carrier Si seed " << d.nTpcOnlyCarrier << ", at crossing 0 "
+            << d.nTpcOnlyZero << "; not added, no usable crossing " << d.nTpcOnlySkipped << ")" << std::endl
             << "  Si clusters: official by hit association " << d.nSiOfficialAssoc << " (pruned MVTX duplicate, other strobe "
             << d.nSiOtherStrobe << "), by position " << d.nSiOfficialPosition << ", projected chain points " << d.nSiProjected
             << ", chain layers without cluster " << d.nSiMissing << std::endl;

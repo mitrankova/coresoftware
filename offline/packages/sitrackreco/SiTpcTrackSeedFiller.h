@@ -28,7 +28,16 @@
 //                 (charge from the bending and the sign of B_z), z0 and phi at the point closest to the origin
 //                 (TrackSeedHelper::get_xyz = perigee of PHActsTrkFitter), tan(lambda), crossing.
 //   SvtxTrackSeed_v3: Si seed index, TPC seed index, crossing (= crossing estimate).
-//   Optionally TPC-only SvtxTrackSeeds for TPC seeds without selected chain (as PHSiliconTpcTrackMatching).
+//   Optionally TPC-only SvtxTrackSeeds for TPC seeds without selected chain (setAddUnmatchedTpcSeeds).
+//     PHActsTrkFitter fits a seed WITHOUT silicon seed at crossing 0 (official behaviour), which in streaming
+//     data puts the TPC clusters off in z by the drift of the real crossing.  setTpcOnlyCrossing:
+//       FromDecision (default): the TPC-only seed gets a CROSSING CARRIER silicon seed: a TrackSeed_v2 without
+//         cluster keys, with the TPC seed helix (X0, Y0, q/R, phi, tan(lambda)), z0 corrected for the decided
+//         crossing and that crossing.  PHActsTrkFitter then fits the TPC (+TPOT) clusters at the decided crossing
+//         (its start position = the carrier's perigee).  Only tracks whose decision tier is <= setTpcOnlyMaxTier;
+//         the others as setTpcOnlyFallbackZero says.  The carrier seeds have no clusters: count Si tracks by
+//         their MVTX / INTT clusters, not by the presence of a silicon seed.
+//       Zero: plain TPC-only SvtxTrackSeed (no silicon seed), fitted at crossing 0, as PHSiliconTpcTrackMatching.
 
 #include <fun4all/SubsysReco.h>
 
@@ -83,6 +92,16 @@ class SiTpcTrackSeedFiller : public SubsysReco
   void setUseProjectedChainPoints(bool b) { m_useProjected = b; }
   // TPC-only SvtxTrackSeeds for TPC seeds without chain
   void setAddUnmatchedTpcSeeds(bool b) { m_addUnmatchedTpc = b; }
+  enum class TpcOnlyCrossing
+  {
+    Zero,
+    FromDecision
+  };
+  void setTpcOnlyCrossing(TpcOnlyCrossing m) { m_tpcOnlyCrossing = m; }
+  void setTpcOnlyMaxTier(unsigned int t) { m_tpcOnlyMaxTier = t; }
+  // FromDecision, tracks without a usable decision (tier above setTpcOnlyMaxTier / no crossing): true = plain
+  // crossing-0 TPC-only seed, false (default) = not added
+  void setTpcOnlyFallbackZero(bool b) { m_tpcOnlyFallbackZero = b; }
   void setMinMvtx(unsigned int n) { m_minMvtx = n; }
   void setMinSi(unsigned int n) { m_minSi = n; }
 
@@ -111,6 +130,9 @@ class SiTpcTrackSeedFiller : public SubsysReco
   bool m_selectedOnly{true};
   bool m_useProjected{false};
   bool m_addUnmatchedTpc{false};
+  TpcOnlyCrossing m_tpcOnlyCrossing{TpcOnlyCrossing::FromDecision};
+  unsigned int m_tpcOnlyMaxTier{1};
+  bool m_tpcOnlyFallbackZero{false};
   unsigned int m_minMvtx{2};
   unsigned int m_minSi{2};
 };
