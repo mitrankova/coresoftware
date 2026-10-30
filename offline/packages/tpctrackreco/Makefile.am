@@ -31,6 +31,7 @@ pkginclude_HEADERS = \
   TpcCrossingDecisionContainer.h \
   TpcCrossingDecisionContainerv1.h \
   TpcCrossingFinder.h \
+  TpcGlobalAlignment.h \
   Tpc_PolyTrack.h \
   Tpc_PolyTrackv1.h \
   Tpc_PolyTrackContainer.h \
@@ -115,6 +116,7 @@ libtpctrackreco_la_SOURCES = \
   Tpc_ModuleTrackReco.cc \
   Tpc_AssembledTrackReco.cc \
   TpcCrossingFinder.cc \
+  TpcGlobalAlignment.cc \
   Tpc_PolyTrackVertexer.cc \
   Tpc_PolyClusterizer.cc \
   Tpc_PolyTrackReco.cc \
