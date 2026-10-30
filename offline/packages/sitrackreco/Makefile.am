@@ -22,7 +22,6 @@ pkginclude_HEADERS = \
   SiTpcBeamAlignment.h \
   SiTpcHelixFit.h \
   SiTpcFitRescue.h \
-  SiTpcOnlyCrossing.h \
   SiTpcTrackSeedFiller.h \
   SiTpcReference.h \
   SiTpc_Track.h \
@@ -57,7 +56,6 @@ libsitrackreco_la_SOURCES = \
   SiTpc_Trackv1.cc \
   SiTpc_TrackContainerv1.cc \
   SiTpcFitRescue.cc \
-  SiTpcOnlyCrossing.cc \
   SiTpcTrackSeedFiller.cc \
   SiHitSeedReco.cc \
   SiSeedingOrchestrator.cc \
@@ -82,7 +80,8 @@ libsitrackreco_la_LIBADD = \
   -lintt_io \
   -lg4detectors_io \
   -lglobalvertex_io \
-  -ltpctrackreco_io
+  -ltpctrackreco_io \
+  -ltpctrackreco
 
 %_Dict.cc: %.h %LinkDef.h
 	rootcint -f $@ @CINTDEFS@ $(DEFAULT_INCLUDES) $(AM_CPPFLAGS) $^

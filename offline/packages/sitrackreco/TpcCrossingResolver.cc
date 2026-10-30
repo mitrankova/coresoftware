@@ -927,6 +927,10 @@ int TpcCrossingResolver::process_event(PHCompositeNode* topNode)
       double bestChi2 = std::numeric_limits<double>::max(), bestZ = 0;
       for (const auto& [crossing, zT] : zByCrossing)
       {
+        if (!m_tpcOnlyMatch)
+        {
+          break;
+        }
         const auto im = main2.find(crossing);
         if (im == main2.end() || im->second.n < 2 || im->second.sumW < m_minSupportTpcOnly)
         {

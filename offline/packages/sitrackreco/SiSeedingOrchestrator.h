@@ -10,22 +10,26 @@
 #include <fun4all/SubsysReco.h>
 
 #include <array>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 class PHCompositeNode;
+class TpcCrossingFinder;
 
-// SiSeedingOrchestrator: ONE Fun4All module for the whole TPC-driven silicon seeding, iterative.
+// SiSeedingOrchestrator: ONE Fun4All module for the TPC-driven silicon seeding AND every crossing / vertex
+// decision of the event (nothing downstream changes a crossing).
 //
-// It owns the three workers and runs them itself (they are NOT registered with Fun4All):
-//   finder()   SiHitSeedReco        TPC-driven Si chaining (pass 1), rechain (pass 2), hit recovery (pass 3)
-//   resolver() TpcCrossingResolver  one crossing + one chain per assembled track (pass 1)
-//   fitter()   SiTrajectoryFitter   Si-only trajectories of the final selected chains (SI_TRAJECTORY)
+// It owns the workers and runs them itself (they are NOT registered with Fun4All):
+//   finder()        SiHitSeedReco        TPC-driven Si chaining (pass 1, beam-constrained fallback), rechain (pass 2),
+//                                        hit recovery (pass 3)
+//   resolver()      TpcCrossingResolver  one crossing + one chain per assembled track (pass 1)
+//   tpcOnlyFinder() TpcCrossingFinder    crossing of the tracks WITHOUT a Si chain against the final collisions
+//   fitter()        SiTrajectoryFitter   Si-only trajectories of the final selected chains (SI_TRAJECTORY, display only)
 // Configure them through these accessors with their usual setters; the shared frame setters below
-// set the finder and the fitter at once.  Output nodes as before: SI_HIT_SEED_EVENT,
-// TPC_CROSSING_DECISIONS, SI_TRAJECTORY, so everything downstream (Tpc_PolyClusterizer,
-// SiTpcTrackSeedFiller, SiTpc_EventDisplay) is unchanged.
+// set the finder and the fitter at once.  Output nodes: SI_HIT_SEED_EVENT, TPC_CROSSING_DECISIONS (final),
+// the collision vertex map (setCollisionVertexMapName), SI_TRAJECTORY (with setRunTrajectoryFit).
 //
 // process_event:
 //   PASS 1  finder.process_event + resolver.process_event (exactly the previous chain).
@@ -56,9 +60,23 @@ class PHCompositeNode;
 //           used by any selected chain, windows / cuts of pass3Config().  Default: only the INTT pairs
 //           (3, 4) / (5, 6) in which the chain has no hit, predicted with the vertex-assisted helix (TPC
 //           curvature, centre from the chain + beam, z from the MVTX + the chain's bootstrap vertex).
+//   COLLISIONS  (streaming) the final collisions: per crossing, 1-D clusters (setVertexClusterWindow, the same
+//           clustering as the bootstrap vertices) of the Si z at the beam of every Si-matched track (selected chain,
+//           decision tier <= setCollisionMaxTier, timed collision: finite silicon_vertex_z), >= setCollisionMinTracks.
+//           Written as SvtxVertexMap (setCollisionVertexMapName): beam crossing, z = mean TPC z0 of its tracks (the
+//           TPC z0 frame of the decisions and of TpcCrossingFinder; mean Si z - TPC z0 is printed at End), error
+//           setTpcZSigma^2 / n, the assembled track ids as tracks.
+//   TPC-ONLY (streaming, setTpcOnlyCrossing, default on) tracks without a selected Si chain: the resolver's own
+//           3-point TPC-only match is switched off (TpcCrossingResolver::setTpcOnlyMatch(false)); tpcOnlyFinder()
+//           (TpcCrossingFinder, unchanged: every INTT crossing, drift-time window, containment, TPC z0 from its
+//           Garfield points, closest collision of the crossing) decides them against the collision map.  Its
+//           decision replaces theirs in TPC_CROSSING_DECISIONS: finder tier 0 (|dz| <= its setMaxVertexDz) ->
+//           setTpcOnlyVertexTier (default 1: fitted as TPC-only by SiTpcTrackSeedFiller), a close rival with
+//           setTpcOnlyRejectAmbiguous -> 2, otherwise tier 2; no valid crossing: tier 2, crossing unchanged.
+//           setTpcOnlyAddMissing: also tracks without a crossing trajectory (no resolver decision).
 //   DIAGNOSTICS  Verbosity 2: INTT time buckets of every bootstrap vertex; Verbosity 1: vertices in
 //           neighbouring crossings with the time buckets of the smaller one (End: summary).
-//   FIT     fitter.process_event (setRunTrajectoryFit) on the final selection.
+//   FIT     fitter.process_event (setRunTrajectoryFit) on the final selection (only the event display uses it).
 class SiSeedingOrchestrator : public SubsysReco
 {
  public:
@@ -73,6 +91,7 @@ class SiSeedingOrchestrator : public SubsysReco
   SiHitSeedReco& finder() { return *m_finder; }
   TpcCrossingResolver& resolver() { return *m_resolver; }
   SiTrajectoryFitter& fitter() { return *m_fitter; }
+  TpcCrossingFinder& tpcOnlyFinder() { return *m_tpcOnlyFinder; }
 
   // ---- shared frame: finder + fitter
   void setUphiRotation(double rad)
@@ -154,6 +173,21 @@ class SiSeedingOrchestrator : public SubsysReco
   void setPass3(bool v) { m_pass3 = v; }
   SiHitSeedReco::RecoveryConfig& pass3Config() { return m_pass3Cfg; }
 
+  // ---- final collisions (streaming)
+  void setCollisionVertexMapName(const std::string& n) { m_collisionMapName = n; }
+  void setCollisionMaxTier(unsigned int t) { m_collisionMaxTier = t; }
+  void setCollisionMinTracks(unsigned int n) { m_collisionMinTracks = n; }
+  // TPC z0 resolution [cm], only for the error of the collision z
+  void setTpcZSigma(double cm) { m_tpcZSigma = cm; }
+
+  // ---- crossing of the tracks without Si chain (streaming)
+  void setTpcOnlyCrossing(bool v) { m_tpcOnly = v; }
+  void setTpcOnlyVertexTier(unsigned int t) { m_tpcOnlyVertexTier = t; }
+  void setTpcOnlyRejectAmbiguous(bool v) { m_tpcOnlyRejectAmbiguous = v; }
+  void setTpcOnlyAddMissing(bool v) { m_tpcOnlyAddMissing = v; }
+  void setTpcOnlyDecisionNodeName(const std::string& n) { m_tpcOnlyDecisionName = n; }
+  void setAssembledTrackNodeName(const std::string& n) { m_assembledNodeName = n; }
+
  private:
   struct BootVertex
   {
@@ -162,10 +196,24 @@ class SiSeedingOrchestrator : public SubsysReco
     unsigned int n = 0;
     std::vector<int> members;  // chain indices (good chains)
   };
+  // one entry of the per-crossing z clustering (bootstrap vertices, final collisions)
+  struct ZEntry
+  {
+    short crossing = 0;
+    double z = 0;   // clustered z (Si z at the beam)
+    int index = 0;  // caller's index (chain or track)
+  };
+  // per crossing: sorted 1-D clusters, a value joins while within setVertexClusterWindow of the running mean;
+  // clusters with >= minTracks entries, as lists of entries
+  std::vector<std::vector<ZEntry>> clusterZ(std::vector<ZEntry> entries, unsigned int minTracks) const;
+  // COLLISIONS + TPC-ONLY stages
+  void makeCollisions(PHCompositeNode* topNode, const std::map<unsigned int, int>& selectedOf);
+  void decideTpcOnly(PHCompositeNode* topNode, const std::map<unsigned int, int>& selectedOf);
 
   std::unique_ptr<SiHitSeedReco> m_finder;
   std::unique_ptr<TpcCrossingResolver> m_resolver;
   std::unique_ptr<SiTrajectoryFitter> m_fitter;
+  std::unique_ptr<TpcCrossingFinder> m_tpcOnlyFinder;
 
   bool m_triggeredMode = true;  // as TpcCrossingResolver
   bool m_runResolver = true;
@@ -197,6 +245,18 @@ class SiSeedingOrchestrator : public SubsysReco
   bool m_pass3 = true;
   SiHitSeedReco::RecoveryConfig m_pass3Cfg;
 
+  std::string m_collisionMapName = "SiSeedCollisionVertexMap";
+  unsigned int m_collisionMaxTier = 1;
+  unsigned int m_collisionMinTracks = 2;
+  double m_tpcZSigma = 0.5;
+  bool m_tpcOnly = true;
+  unsigned int m_tpcOnlyVertexTier = 1;
+  bool m_tpcOnlyRejectAmbiguous = false;
+  bool m_tpcOnlyAddMissing = false;
+  std::string m_tpcOnlyDecisionName = "TPC_CROSSING_DECISIONS_TPCONLY";
+  std::string m_assembledNodeName = "TPC_ASSEMBLEDTRACKS";
+  bool m_tpcOnlyActive = false;  // InitRun: streaming, resolver and setTpcOnlyCrossing
+
   // run counters
   unsigned long m_nEvents = 0;
   unsigned long m_nGood = 0;
@@ -224,6 +284,15 @@ class SiSeedingOrchestrator : public SubsysReco
   unsigned long m_adjSmallOther = 0;      // ... elsewhere
   std::vector<double> m_adjDz;            // z(small) - z(big)
   std::array<unsigned long, 7> m_pass3Added{};
+  // final collisions, TPC-only crossings
+  unsigned long m_nCollisions = 0;
+  unsigned long m_nCollisionTracks = 0;
+  double m_sumSiMinusTpc = 0;
+  unsigned long m_nTpcOnlyTracks = 0;     // tracks without a Si chain decided by tpcOnlyFinder()
+  unsigned long m_nTpcOnlyNoDecision = 0; // ... without a finder decision
+  unsigned long m_nTpcOnlyAdded = 0;      // ... without a resolver decision, added
+  unsigned long m_nTpcOnlyMoved = 0;      // ... crossing changed
+  std::map<std::pair<int, int>, unsigned long> m_tpcOnlyTiers;  // (old tier, new tier), -1 = no decision before
 };
 
 #endif

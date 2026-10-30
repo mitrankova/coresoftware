@@ -5,22 +5,35 @@
 #include <tpctrackreco/TpcCrossingDecision.h>
 #include <tpctrackreco/TpcCrossingDecisionContainer.h>
 #include <tpctrackreco/TpcCrossingDecisionv1.h>
+#include <tpctrackreco/IdealPadMap.h>  // complete type for TpcCrossingFinder's unique_ptr<IdealPadMap> (destructor)
+#include <tpctrackreco/TpcCrossingFinder.h>
+#include <tpctrackreco/Tpc_AssembledTrack.h>
+#include <tpctrackreco/Tpc_AssembledTrackContainer.h>
 #include <tpctrackreco/Tpc_CrossingTrajectory.h>
 #include <tpctrackreco/Tpc_CrossingTrajectoryContainer.h>
+
+#include <globalvertex/SvtxVertexMap.h>
+#include <globalvertex/SvtxVertexMap_v1.h>
+#include <globalvertex/SvtxVertex_v3.h>
 
 #include <trackbase/InttDefs.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
 
 #include <phool/PHCompositeNode.h>
+#include <phool/PHIODataNode.h>
+#include <phool/PHNodeIterator.h>
+#include <phool/PHObject.h>
 #include <phool/getClass.h>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -41,6 +54,14 @@ namespace
     double pull = 0;      // (z - vertexZ) / sigma
     double score = 0;
   };
+
+  bool isSelectedStatus(unsigned char s)
+  {
+    using S = TpcCrossingStatus;
+    return s == static_cast<unsigned char>(S::SelectedByVertex) || s == static_cast<unsigned char>(S::SelectedByVertexAmbiguous) ||
+           s == static_cast<unsigned char>(S::SelectedByVertexLoose) || s == static_cast<unsigned char>(S::SelectedByContainment) ||
+           s == static_cast<unsigned char>(S::SelectedByContainmentAmbiguous);
+  }
 }  // namespace
 
 SiSeedingOrchestrator::SiSeedingOrchestrator(const std::string& name)
@@ -48,6 +69,7 @@ SiSeedingOrchestrator::SiSeedingOrchestrator(const std::string& name)
   , m_finder(std::make_unique<SiHitSeedReco>("SiHitSeedReco"))
   , m_resolver(std::make_unique<TpcCrossingResolver>("TpcCrossingResolver"))
   , m_fitter(std::make_unique<SiTrajectoryFitter>("SiTrajectoryFitter"))
+  , m_tpcOnlyFinder(std::make_unique<TpcCrossingFinder>("TpcCrossingFinderTpcOnly"))
 {
   // pass-2 defaults: two MVTX layers are a chain (the vertex constraint replaces the third point)
   m_pass2Cfg.minLayers = 2;
@@ -65,6 +87,9 @@ int SiSeedingOrchestrator::InitRun(PHCompositeNode* topNode)
     m_resolver->setTrajectoryNodeName(m_finder->trajectoryNodeName());
   }
   m_fitter->setInputNodeName(m_finder->outputNodeName());
+  // crossings of the tracks without Si chain: here (tpcOnlyFinder) instead of the resolver's 3-point match
+  m_tpcOnlyActive = m_tpcOnly && !m_triggeredMode && m_runResolver;
+  m_resolver->setTpcOnlyMatch(!m_tpcOnlyActive);
 
   int ret = m_finder->InitRun(topNode);
   if (ret != Fun4AllReturnCodes::EVENT_OK)
@@ -87,10 +112,45 @@ int SiSeedingOrchestrator::InitRun(PHCompositeNode* topNode)
       return ret;
     }
   }
+  if (!m_triggeredMode)
+  {
+    // collision vertex map (created before tpcOnlyFinder's InitRun, which looks for it)
+    PHNodeIterator iter(topNode);
+    auto* dstNode = dynamic_cast<PHCompositeNode*>(iter.findFirst("PHCompositeNode", "DST"));
+    if (!dstNode)
+    {
+      dstNode = new PHCompositeNode("DST");
+      topNode->addNode(dstNode);
+    }
+    PHNodeIterator dstIter(dstNode);
+    auto* svtxNode = dynamic_cast<PHCompositeNode*>(dstIter.findFirst("PHCompositeNode", "SVTX"));
+    if (!svtxNode)
+    {
+      svtxNode = new PHCompositeNode("SVTX");
+      dstNode->addNode(svtxNode);
+    }
+    if (!findNode::getClass<SvtxVertexMap>(topNode, m_collisionMapName))
+    {
+      svtxNode->addNode(new PHIODataNode<PHObject>(new SvtxVertexMap_v1, m_collisionMapName, "PHObject"));
+    }
+  }
+  if (m_tpcOnlyActive)
+  {
+    m_tpcOnlyFinder->setTriggeredMode(false);
+    m_tpcOnlyFinder->setInputNodeName(m_assembledNodeName);
+    m_tpcOnlyFinder->setOutputNodeName(m_tpcOnlyDecisionName);
+    m_tpcOnlyFinder->setVertexMapNodeName(m_collisionMapName);
+    ret = m_tpcOnlyFinder->InitRun(topNode);
+    if (ret != Fun4AllReturnCodes::EVENT_OK)
+    {
+      return ret;
+    }
+  }
 
   auto opt = [](const auto& o) { return o ? std::to_string(*o) : std::string("as pass 1"); };
   std::cout << Name() << "::InitRun - " << (m_triggeredMode ? "triggered" : "streaming") << " mode; workers: SiHitSeedReco"
-            << (m_runResolver ? " + TpcCrossingResolver" : "") << (m_runFit ? " + SiTrajectoryFitter" : "") << std::endl
+            << (m_runResolver ? " + TpcCrossingResolver" : "") << (m_tpcOnlyActive ? " + TpcCrossingFinder (tracks without Si chain)" : "")
+            << (m_runFit ? " + SiTrajectoryFitter" : "") << std::endl
             << Name() << ":   good pass-1 chain: >= " << m_goodMinLayers << " layers, >= " << m_goodMinMvtx << " MVTX"
             << (m_goodRequireIntt ? ", INTT hit" : "") << ", chi2/ndf <= " << m_goodMaxChi2 << ", tier <= " << m_goodMaxTier << std::endl
             << Name() << ":   bootstrap vertices: good chains, window " << m_vertexWindow << " cm, >= " << m_vertexMinTracks
@@ -103,6 +163,17 @@ int SiSeedingOrchestrator::InitRun(PHCompositeNode* topNode)
               << " cm, MVTX propagation z " << opt(m_pass2Cfg.propZHalfBins) << " bins, agreement " << opt(m_pass2Cfg.agreementMaxChi2)
               << "; selection chi2/ndf <= " << m_pass2MaxChi2 << ", vertex within " << m_pass2VertexNSigma << " sigma, ambiguity ratio "
               << m_pass2AmbiguityRatio << ", tier " << static_cast<int>(m_pass2Tier) << std::endl;
+  }
+  if (!m_triggeredMode)
+  {
+    std::cout << Name() << ":   collisions: Si-matched tracks of tier <= " << m_collisionMaxTier << ", >= " << m_collisionMinTracks
+              << " per cluster -> " << m_collisionMapName << " (z = mean TPC z0)" << std::endl;
+  }
+  if (m_tpcOnlyActive)
+  {
+    std::cout << Name() << ":   tracks without Si chain: TpcCrossingFinder against the collisions -> " << m_tpcOnlyDecisionName
+              << "; vertex-matched -> tier " << m_tpcOnlyVertexTier << (m_tpcOnlyRejectAmbiguous ? " (ambiguous -> 2)" : "")
+              << ", else tier 2" << (m_tpcOnlyAddMissing ? "; tracks without resolver decision added" : "") << std::endl;
   }
   if (m_pass3)
   {
@@ -230,7 +301,7 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
   m_nNone += noneIds.size();
 
   // ================================ BOOTSTRAP VERTICES ================================
-  std::map<short, std::vector<std::pair<double, int>>> zByCrossing;  // crossing -> (Si z, chain index)
+  std::vector<ZEntry> goodZ;
   for (std::size_t c = 0; c < ev->chains.size(); ++c)
   {
     if (good[c])
@@ -238,35 +309,23 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
       const double z = siZ(ev->chains[c]);
       if (std::isfinite(z))
       {
-        zByCrossing[ev->chains[c].tpc_crossing].emplace_back(z, static_cast<int>(c));
+        goodZ.push_back({ev->chains[c].tpc_crossing, z, static_cast<int>(c)});
       }
     }
   }
   std::vector<BootVertex> vertices;
-  for (auto& [crossing, zs] : zByCrossing)
+  for (const auto& cl : clusterZ(std::move(goodZ), m_vertexMinTracks))
   {
-    std::sort(zs.begin(), zs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    double sum = 0;
-    std::vector<int> members;
-    auto flush = [&]()
+    BootVertex v;
+    v.crossing = cl.front().crossing;
+    for (const auto& e : cl)
     {
-      if (members.size() >= m_vertexMinTracks)
-      {
-        vertices.push_back({crossing, sum / members.size(), static_cast<unsigned int>(members.size()), members});
-      }
-      sum = 0;
-      members.clear();
-    };
-    for (const auto& [z, c] : zs)
-    {
-      if (!members.empty() && std::fabs(z - sum / members.size()) > m_vertexWindow)
-      {
-        flush();
-      }
-      sum += z;
-      members.push_back(c);
+      v.z += e.z;
+      v.members.push_back(e.index);
     }
-    flush();
+    v.n = static_cast<unsigned int>(cl.size());
+    v.z /= v.n;
+    vertices.push_back(std::move(v));
   }
   m_nVertices += vertices.size();
   for (const auto& v : vertices)
@@ -642,6 +701,21 @@ int SiSeedingOrchestrator::process_event(PHCompositeNode* topNode)
     }
   }
 
+  // ================================ COLLISIONS + TPC-ONLY ================================
+  if (!m_triggeredMode && decisions)
+  {
+    makeCollisions(topNode, selectedOf);
+    if (m_tpcOnlyActive)
+    {
+      ret = m_tpcOnlyFinder->process_event(topNode);
+      if (ret != Fun4AllReturnCodes::EVENT_OK)
+      {
+        return ret;
+      }
+      decideTpcOnly(topNode, selectedOf);
+    }
+  }
+
   if (Verbosity() > 0)
   {
     unsigned int nAdded = 0;
@@ -724,6 +798,22 @@ int SiSeedingOrchestrator::End(PHCompositeNode* topNode)
     }
     std::cout << ")" << std::endl;
   }
+  if (!m_triggeredMode)
+  {
+    std::cout << Name() << ":   collisions " << m_nCollisions << " (" << m_nCollisions / ne << " per event, "
+              << (m_nCollisions > 0 ? static_cast<double>(m_nCollisionTracks) / m_nCollisions : 0.0) << " Si-matched tracks per collision), mean Si z - TPC z0 "
+              << (m_nCollisionTracks > 0 ? m_sumSiMinusTpc / m_nCollisionTracks : kNaN) << " cm" << std::endl;
+  }
+  if (m_tpcOnlyActive)
+  {
+    std::cout << Name() << ":   tracks without Si chain: " << m_nTpcOnlyTracks << " decided by TpcCrossingFinder (no finder decision "
+              << m_nTpcOnlyNoDecision << ", added " << m_nTpcOnlyAdded << ", crossing changed " << m_nTpcOnlyMoved << "); tier old -> new:";
+    for (const auto& [k, n] : m_tpcOnlyTiers)
+    {
+      std::cout << " " << k.first << "->" << k.second << " " << n;
+    }
+    std::cout << std::endl;
+  }
   {
     const unsigned long nb = m_adjSmallOwn + m_adjSmallNeighbour + m_adjSmallOther;
     std::sort(m_adjDz.begin(), m_adjDz.end());
@@ -741,4 +831,193 @@ int SiSeedingOrchestrator::End(PHCompositeNode* topNode)
     std::cout << std::endl;
   }
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+
+//____________________________________________________________________________________________________
+std::vector<std::vector<SiSeedingOrchestrator::ZEntry>> SiSeedingOrchestrator::clusterZ(std::vector<ZEntry> entries, unsigned int minTracks) const
+{
+  std::sort(entries.begin(), entries.end(), [](const ZEntry& a, const ZEntry& b)
+            { return a.crossing != b.crossing ? a.crossing < b.crossing : a.z < b.z; });
+  std::vector<std::vector<ZEntry>> out;
+  std::vector<ZEntry> cur;
+  double sum = 0;
+  auto flush = [&]()
+  {
+    if (cur.size() >= minTracks && !cur.empty())
+    {
+      out.push_back(cur);
+    }
+    cur.clear();
+    sum = 0;
+  };
+  for (const auto& e : entries)
+  {
+    if (!cur.empty() && (e.crossing != cur.front().crossing || std::fabs(e.z - sum / cur.size()) > m_vertexWindow))
+    {
+      flush();
+    }
+    cur.push_back(e);
+    sum += e.z;
+  }
+  flush();
+  return out;
+}
+
+//____________________________________________________________________________________________________
+// final collisions of the event -> collision vertex map (z in the TPC z0 frame, see the class comment)
+void SiSeedingOrchestrator::makeCollisions(PHCompositeNode* topNode, const std::map<unsigned int, int>& selectedOf)
+{
+  auto* map = findNode::getClass<SvtxVertexMap>(topNode, m_collisionMapName);
+  const auto* decisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_decisionNodeName);
+  if (!map || !decisions)
+  {
+    return;
+  }
+  map->clear();
+  std::vector<ZEntry> entries;
+  std::vector<std::pair<double, unsigned int>> tpcZ;  // per entry: TPC z0, assembled id
+  for (const auto& [id, chain] : selectedOf)
+  {
+    (void) chain;
+    const TpcCrossingDecision* d = decisions->get_decision(id);
+    if (!d || d->get_selected_crossing() == SHRT_MAX || static_cast<unsigned int>(d->get_selected_tier()) > m_collisionMaxTier)
+    {
+      continue;
+    }
+    const double z0 = d->get_tpc_z0(), dz = d->get_delta_z();
+    if (!std::isfinite(z0) || !std::isfinite(dz) || !std::isfinite(d->get_silicon_vertex_z()))  // untimed lone: no collision
+    {
+      continue;
+    }
+    entries.push_back({d->get_selected_crossing(), z0 + dz, static_cast<int>(tpcZ.size())});
+    tpcZ.emplace_back(z0, id);
+  }
+  for (const auto& cl : clusterZ(std::move(entries), m_collisionMinTracks))
+  {
+    double zSi = 0, zTpc = 0;
+    auto v = std::make_unique<SvtxVertex_v3>();
+    for (const auto& e : cl)
+    {
+      zSi += e.z;
+      zTpc += tpcZ[e.index].first;
+      v->insert_track(tpcZ[e.index].second);
+    }
+    const double n = static_cast<double>(cl.size());
+    zSi /= n;
+    zTpc /= n;
+    v->set_x(0);
+    v->set_y(0);
+    v->set_z(static_cast<float>(zTpc));
+    v->set_t(0);
+    v->set_chisq(0);
+    v->set_ndof(0);
+    v->set_beam_crossing(cl.front().crossing);
+    for (unsigned int a = 0; a < 3; ++a)
+    {
+      for (unsigned int b = 0; b < 3; ++b)
+      {
+        v->set_error(a, b, 0);
+      }
+    }
+    v->set_error(2, 2, static_cast<float>(m_tpcZSigma * m_tpcZSigma / n));
+    map->insert(v.release());
+    ++m_nCollisions;
+    m_nCollisionTracks += cl.size();
+    m_sumSiMinusTpc += (zSi - zTpc) * n;
+    if (Verbosity() > 1)
+    {
+      std::cout << Name() << ":   collision crossing " << cl.front().crossing << ": " << cl.size() << " Si-matched tracks, Si z " << zSi
+                << " cm, TPC z0 " << zTpc << " cm" << std::endl;
+    }
+  }
+}
+
+//____________________________________________________________________________________________________
+// tracks without a selected Si chain take the TpcCrossingFinder decision (see the class comment)
+void SiSeedingOrchestrator::decideTpcOnly(PHCompositeNode* topNode, const std::map<unsigned int, int>& selectedOf)
+{
+  auto* decisions = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_decisionNodeName);
+  const auto* finder = findNode::getClass<TpcCrossingDecisionContainer>(topNode, m_tpcOnlyDecisionName);
+  const auto* assembled = findNode::getClass<Tpc_AssembledTrackContainer>(topNode, m_assembledNodeName);
+  if (!decisions || !finder || !assembled)
+  {
+    return;
+  }
+  for (unsigned int i = 0; i < assembled->size(); ++i)
+  {
+    const Tpc_AssembledTrack* t = assembled->get_track(i);
+    if (!t)
+    {
+      continue;
+    }
+    const unsigned int id = t->get_track_id();
+    if (selectedOf.count(id) != 0)
+    {
+      continue;  // Si-matched: resolver / pass-2 decision stays
+    }
+    TpcCrossingDecision* d = decisions->get_decision(id);
+    if (!d && !m_tpcOnlyAddMissing)
+    {
+      continue;
+    }
+    ++m_nTpcOnlyTracks;
+    const TpcCrossingDecision* f = finder->get_decision(id);
+    if (!f)
+    {
+      ++m_nTpcOnlyNoDecision;
+      continue;
+    }
+    const int oldTier = d ? static_cast<int>(d->get_selected_tier()) : -1;
+    const short oldCrossing = d ? d->get_selected_crossing() : static_cast<short>(SHRT_MAX);
+    const bool valid = isSelectedStatus(f->get_status()) && f->get_selected_crossing() != SHRT_MAX;
+    const bool ambiguous = f->get_status() == static_cast<unsigned char>(TpcCrossingStatus::SelectedByVertexAmbiguous);
+    const unsigned char tier = (valid && f->get_selected_tier() == 0 && !(m_tpcOnlyRejectAmbiguous && ambiguous))
+                                   ? static_cast<unsigned char>(m_tpcOnlyVertexTier)
+                                   : static_cast<unsigned char>(2);
+    if (!d)
+    {
+      if (!valid)
+      {
+        continue;
+      }
+      auto* nd = new TpcCrossingDecisionv1();
+      nd->set_assembled_track_id(id);
+      decisions->add_decision(nd);
+      d = decisions->get_decision(id);
+      if (!d)
+      {
+        continue;
+      }
+      ++m_nTpcOnlyAdded;
+    }
+    if (valid)
+    {
+      d->set_selected_crossing(f->get_selected_crossing());
+      d->set_tpc_z0(f->get_tpc_z0());
+      d->set_silicon_vertex_id(f->get_silicon_vertex_id());
+      d->set_silicon_vertex_z(f->get_selected_tier() <= 1 ? f->get_silicon_vertex_z() : std::numeric_limits<float>::quiet_NaN());
+      d->set_delta_z(f->get_delta_z());
+      d->set_best_abs_delta_z(f->get_best_abs_delta_z());
+      d->set_second_best_abs_delta_z(f->get_second_best_abs_delta_z());
+      d->set_selected_score(f->get_selected_score());
+      d->set_number_of_available_crossings(f->get_number_of_available_crossings());
+      d->set_number_of_allowed_crossings(f->get_number_of_allowed_crossings());
+      d->set_number_of_tested_crossings(f->get_number_of_tested_crossings());
+      d->set_number_of_tpc_valid_crossings(f->get_number_of_tpc_valid_crossings());
+      d->set_number_of_vertex_compatible_crossings(f->get_number_of_vertex_compatible_crossings());
+      d->set_status(f->get_status());
+      m_nTpcOnlyMoved += oldCrossing != SHRT_MAX && oldCrossing != f->get_selected_crossing();
+    }
+    d->set_selected_tier(tier);
+    ++m_tpcOnlyTiers[{oldTier, static_cast<int>(tier)}];
+    if (Verbosity() > 1)
+    {
+      std::cout << Name() << ":   assembled " << id << " (no Si chain): crossing " << oldCrossing << " tier " << oldTier << " -> "
+                << (valid ? "crossing " + std::to_string(f->get_selected_crossing()) : std::string("no valid crossing")) << " tier "
+                << static_cast<int>(tier) << " (finder tier " << static_cast<int>(f->get_selected_tier()) << ", TPC z0 " << f->get_tpc_z0()
+                << ", collision z " << f->get_silicon_vertex_z() << ", dz " << f->get_delta_z() << ", 2nd best |dz| "
+                << f->get_second_best_abs_delta_z() << ")" << std::endl;
+    }
+  }
 }
