@@ -159,6 +159,14 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
                                                     : std::string("the analytic stave / ladder model"))
               << std::endl;
   }
+  if (m_beamFallback)
+  {
+    std::cout << Name() << ": beam-constrained fallback ON: TPC inputs whose normal chaining fails (fit failed, no prediction, no anchor"
+              << (m_beamFallbackOnNoChain ? ", no chain" : "") << ") with TPC span < " << m_beamFallbackMaxSpan
+              << " cm are refitted with the beam (" << m_beamAlign.referenceBeamX() << ", " << m_beamAlign.referenceBeamY()
+              << ") cm, weight " << m_beamFallbackWeight << ", anchor window " << m_beamFallbackAnchorRphi.value_or(m_anchorRphi) << " / "
+              << m_beamFallbackAnchorZ.value_or(m_anchorZ) << " cm" << std::endl;
+  }
   if (m_inttPhysOffset[0] != 0.0 || m_inttPhysOffset[1] != 0.0)
   {
     std::cout << Name() << ": INTT physics points shifted by (" << 10 * m_inttPhysOffset[0] << ", " << 10 * m_inttPhysOffset[1] << ") mm" << std::endl;
@@ -432,7 +440,7 @@ int SiHitSeedReco::process_event(PHCompositeNode* topNode)
   {
     m_tpcInputPos[m_tpcInputs[i].index] = i;
   }
-  for (const auto& t : m_tpcInputs)
+  for (auto& t : m_tpcInputs)
   {
     processTpcTrack(t);
   }
@@ -521,6 +529,23 @@ int SiHitSeedReco::End(PHCompositeNode*)
   {
     std::cout << Name() << ": rechain (pass 2 on free blobs): " << m_rechainCalls << " calls, " << m_rechainInputs
               << " TPC inputs chained again, " << m_rechainChains << " new candidate chains (not in the pass-1 counts below)" << std::endl;
+  }
+  if (m_beamFallback)
+  {
+    unsigned long nTried = 0, nRec = 0;
+    for (int st = 0; st < 7; ++st)
+    {
+      nTried += m_beamFallbackTried[st];
+      nRec += m_beamFallbackRecovered[st];
+    }
+    std::cout << Name() << ": beam-constrained fallback (all passes; TPC span < " << m_beamFallbackMaxSpan << " cm, beam weight "
+              << m_beamFallbackWeight << "): " << nTried << " failed TPC inputs refitted, " << nRec << " got chains"
+              << " [fit failed " << m_beamFallbackTried[SiTpcSeedInfo::FitFailed] << " -> " << m_beamFallbackRecovered[SiTpcSeedInfo::FitFailed]
+              << ", no prediction " << m_beamFallbackTried[SiTpcSeedInfo::NoPrediction] << " -> " << m_beamFallbackRecovered[SiTpcSeedInfo::NoPrediction]
+              << ", no anchor " << m_beamFallbackTried[SiTpcSeedInfo::NoAnchor] << " -> " << m_beamFallbackRecovered[SiTpcSeedInfo::NoAnchor]
+              << ", no chain " << m_beamFallbackTried[SiTpcSeedInfo::NoChain] << " -> " << m_beamFallbackRecovered[SiTpcSeedInfo::NoChain]
+              << "]; beam fit / reference failed " << m_beamFallbackFitFailed << ", not tried (span too long) " << m_beamFallbackSpanSkipped
+              << std::endl;
   }
   if (m_recoveryTried > 0)
   {
@@ -1481,10 +1506,7 @@ std::vector<SiHitSeedReco::TpcTrackInput> SiHitSeedReco::collectTpcTracks(PHComp
       }
       return out;
     }
-    SiTpcHelixFit::Config cfg;
-    cfg.beamX = m_beamAlign.referenceBeamX();
-    cfg.beamY = m_beamAlign.referenceBeamY();
-    cfg.bz = m_bz;
+    const SiTpcHelixFit::Config cfg = tpcFitConfig();
     for (unsigned int i = 0; i < trajectories->size(); ++i)
     {
       const Tpc_CrossingTrajectory* t = trajectories->get_trajectory(i);
@@ -1520,6 +1542,8 @@ std::vector<SiHitSeedReco::TpcTrackInput> SiHitSeedReco::collectTpcTracks(PHComp
         std::sort(pts.begin(), pts.end(), [](const auto& a, const auto& b)
                   { return a.x * a.x + a.y * a.y < b.x * b.x + b.y * b.y; });
         in.fit = SiTpcHelixFit::fit(pts, cfg);
+        in.spanCm = std::hypot(pts.back().x, pts.back().y) - std::hypot(pts.front().x, pts.front().y);
+        in.points = std::move(pts);
       }
       out.push_back(std::move(in));
     }
@@ -1553,10 +1577,7 @@ std::vector<SiHitSeedReco::TpcTrackInput> SiHitSeedReco::collectTpcTracks(PHComp
     }
     byTrack[c->get_source_assembled_track_id()].push_back({p.x, p.y, p.z + m_tpcZOffset, 1.0, 1.0, 1});
   }
-  SiTpcHelixFit::Config cfg;
-  cfg.beamX = m_beamAlign.referenceBeamX();
-  cfg.beamY = m_beamAlign.referenceBeamY();
-  cfg.bz = m_bz;
+  const SiTpcHelixFit::Config cfg = tpcFitConfig();
   for (unsigned int i = 0; i < tracks->size(); ++i)
   {
     const Tpc_PolyTrack* t = tracks->get_track(i);
@@ -1586,11 +1607,23 @@ std::vector<SiHitSeedReco::TpcTrackInput> SiHitSeedReco::collectTpcTracks(PHComp
         std::sort(pts.begin(), pts.end(), [](const auto& a, const auto& b)
                   { return a.x * a.x + a.y * a.y < b.x * b.x + b.y * b.y; });
         in.fit = SiTpcHelixFit::fit(pts, cfg);
+        in.spanCm = std::hypot(pts.back().x, pts.back().y) - std::hypot(pts.front().x, pts.front().y);
+        in.points = pts;
       }
     }
     out.push_back(std::move(in));
   }
   return out;
+}
+
+// TPC helix fit settings (TPC frame beam position, field); the beam fallback adds Config::beamWeight
+SiTpcHelixFit::Config SiHitSeedReco::tpcFitConfig() const
+{
+  SiTpcHelixFit::Config cfg;
+  cfg.beamX = m_beamAlign.referenceBeamX();
+  cfg.beamY = m_beamAlign.referenceBeamY();
+  cfg.bz = m_bz;
+  return cfg;
 }
 
 // Blobs of `layer` with at least one hit in the anchor window around the TPC prediction
@@ -2291,7 +2324,7 @@ void SiHitSeedReco::toPhysics(const SiTpcHelixFit::Result& tpcFit, SiHitChain& c
   }
 }
 
-void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
+void SiHitSeedReco::processTpcTrack(TpcTrackInput& in)
 {
   m_curCrossing = in.crossing;
   SiTpcSeedInfo info;
@@ -2338,113 +2371,183 @@ void SiHitSeedReco::processTpcTrack(const TpcTrackInput& in)
     finish(SiTpcSeedInfo::TooFewClusters);
     return;
   }
-  if (in.fit.fitted())
-  {
-    info.pt = in.fit.pt;
-    info.phi = in.fit.phi;
-    info.tanl = in.fit.tanl;
-    info.z0 = in.fit.z0;
-    info.charge = in.fit.charge;
-  }
-  SiTpcReference::TpcReference ref;
-  const bool refOk = SiTpcReference::buildTpcReference(in.fit, m_map, ref, m_boundaryMargin);
-  if (dbg)
-  {
-    debugTrackHeader(in, refOk ? &ref : nullptr);
-  }
-  if (!refOk)
-  {
-    finish(SiTpcSeedInfo::FitFailed);
-    return;
-  }
-
-  // ---- chains of this TPC track (hits may be shared, identical chains once)
+  // ---- one chaining attempt with the TPC helix `fit`: chains of this TPC track (hits may be shared,
+  // identical chains once).  Returns Chained if chains were built, else the failure status.
   std::vector<SiHitChain> chains;
-  std::set<std::vector<int>> signatures;
-  bool anyPrediction = false;
-  std::vector<std::pair<int, int>> pairs{{2, 1}};
-  if (m_useInnerPair)
+  auto attempt = [&](const SiTpcHelixFit::Result& fit, bool printHeader) -> int
   {
-    pairs.emplace_back(1, 0);
-  }
-  for (const auto& [outer, inner] : pairs)
-  {
-    if (chains.size() >= m_maxChainsPerTrack)
+    chains.clear();
+    info.n_anchors = 0;
+    info.n_chains = 0;
+    SiTpcReference::TpcReference ref;
+    const bool refOk = SiTpcReference::buildTpcReference(fit, m_map, ref, m_boundaryMargin);
+    if (dbg && printHeader)
     {
-      break;
+      debugTrackHeader(in, refOk ? &ref : nullptr);
     }
-    if (!ref.layers[outer].valid)
+    if (!refOk)
     {
-      continue;
+      return SiTpcSeedInfo::FitFailed;
     }
-    anyPrediction = true;
-    const auto anchors = anchorBlobs(ref, outer);
-    info.n_anchors += static_cast<int>(anchors.size());
-    if (dbg)
+    std::set<std::vector<int>> signatures;
+    bool anyPrediction = false;
+    std::vector<std::pair<int, int>> pairs{{2, 1}};
+    if (m_useInnerPair)
     {
-      std::cout << "[SiSeedDebug] --- seed pair " << outer << "->" << inner << std::endl;
-      debugAnchors(ref, outer, anchors);
+      pairs.emplace_back(1, 0);
     }
-    for (int a : anchors)
+    for (const auto& [outer, inner] : pairs)
     {
       if (chains.size() >= m_maxChainsPerTrack)
       {
-        if (dbg)
-        {
-          std::cout << "[SiSeedDebug]   chain cap " << m_maxChainsPerTrack << " reached, remaining anchors skipped" << std::endl;
-        }
         break;
       }
-      const auto& seed = m_eventData->blobs[a];
-      const auto cands = seedCandidates(seed, inner, ref);
+      if (!ref.layers[outer].valid)
+      {
+        continue;
+      }
+      anyPrediction = true;
+      const auto anchors = anchorBlobs(ref, outer);
+      info.n_anchors += static_cast<int>(anchors.size());
       if (dbg)
       {
-        debugSeed(seed, inner, ref, cands);
+        std::cout << "[SiSeedDebug] --- seed pair " << outer << "->" << inner << std::endl;
+        debugAnchors(ref, outer, anchors);
       }
-      const size_t ncand = std::min<size_t>(cands.size(), m_maxSeedCand);
-      for (size_t k = 0; k < ncand && chains.size() < m_maxChainsPerTrack; ++k)
+      for (int a : anchors)
       {
-        SiHitChain ch;
-        const bool built = buildChain(seed, cands[k], ch, &ref);
-        if (dbg)
-        {
-          std::cout << "[SiSeedDebug]     build anchor " << a << " + cand blob " << cands[k].blob << ": ";
-          debugChain(ch, built ? "OK" : "FAILED requirements");
-        }
-        if (!built)
-        {
-          continue;
-        }
-        std::vector<int> sig = ch.blob_ids;
-        std::sort(sig.begin(), sig.end());
-        if (!signatures.insert(sig).second)
+        if (chains.size() >= m_maxChainsPerTrack)
         {
           if (dbg)
           {
-            std::cout << "[SiSeedDebug]       (duplicate of an earlier chain, dropped)" << std::endl;
+            std::cout << "[SiSeedDebug]   chain cap " << m_maxChainsPerTrack << " reached, remaining anchors skipped" << std::endl;
           }
-          continue;
+          break;
         }
-        ch.seed_outer_layer = outer;
-        ch.anchor_blob = a;
-        chains.push_back(std::move(ch));
+        const auto& seed = m_eventData->blobs[a];
+        const auto cands = seedCandidates(seed, inner, ref);
+        if (dbg)
+        {
+          debugSeed(seed, inner, ref, cands);
+        }
+        const size_t ncand = std::min<size_t>(cands.size(), m_maxSeedCand);
+        for (size_t k = 0; k < ncand && chains.size() < m_maxChainsPerTrack; ++k)
+        {
+          SiHitChain ch;
+          const bool built = buildChain(seed, cands[k], ch, &ref);
+          if (dbg)
+          {
+            std::cout << "[SiSeedDebug]     build anchor " << a << " + cand blob " << cands[k].blob << ": ";
+            debugChain(ch, built ? "OK" : "FAILED requirements");
+          }
+          if (!built)
+          {
+            continue;
+          }
+          std::vector<int> sig = ch.blob_ids;
+          std::sort(sig.begin(), sig.end());
+          if (!signatures.insert(sig).second)
+          {
+            if (dbg)
+            {
+              std::cout << "[SiSeedDebug]       (duplicate of an earlier chain, dropped)" << std::endl;
+            }
+            continue;
+          }
+          ch.seed_outer_layer = outer;
+          ch.anchor_blob = a;
+          chains.push_back(std::move(ch));
+        }
+      }
+    }
+    info.n_chains = static_cast<int>(chains.size());
+    if (!anyPrediction)
+    {
+      return SiTpcSeedInfo::NoPrediction;
+    }
+    if (info.n_anchors == 0)
+    {
+      return SiTpcSeedInfo::NoAnchor;
+    }
+    if (chains.empty())
+    {
+      return SiTpcSeedInfo::NoChain;
+    }
+    return SiTpcSeedInfo::Chained;
+  };
+  auto setFitInfo = [&](const SiTpcHelixFit::Result& fit)
+  {
+    if (fit.fitted())
+    {
+      info.pt = fit.pt;
+      info.phi = fit.phi;
+      info.tanl = fit.tanl;
+      info.z0 = fit.z0;
+      info.charge = fit.charge;
+    }
+  };
+
+  setFitInfo(in.fit);
+  int status = attempt(in.fit, true);
+
+  // ---- beam-constrained fallback: only if the normal attempt failed (see setBeamConstraintFallback)
+  const bool fallbackStatus = status == SiTpcSeedInfo::FitFailed || status == SiTpcSeedInfo::NoPrediction ||
+                              status == SiTpcSeedInfo::NoAnchor || (m_beamFallbackOnNoChain && status == SiTpcSeedInfo::NoChain);
+  if (m_beamFallback && status != SiTpcSeedInfo::Chained && fallbackStatus && !in.beamConstrained && in.points.size() >= 3)
+  {
+    if (m_beamFallbackMaxSpan > 0 && !(in.spanCm < m_beamFallbackMaxSpan))
+    {
+      ++m_beamFallbackSpanSkipped;
+    }
+    else
+    {
+      ++m_beamFallbackTried[status];
+      SiTpcHelixFit::Config cfg = tpcFitConfig();
+      cfg.beamWeight = m_beamFallbackWeight;
+      const SiTpcHelixFit::Result beamFit = SiTpcHelixFit::fit(in.points, cfg);
+      if (dbg)
+      {
+        std::printf("[SiSeedDebug] beam-constrained fallback (normal attempt: %s, TPC span %.1f cm): %s pt %.3f phi %+.4f z0 %+7.2f dca %+.4f (free: pt %.3f phi %+.4f)\n",
+                    statusName(status), in.spanCm, beamFit.status == SiTpcHelixFit::Ok ? "fit" : "FIT FAILED", beamFit.pt, beamFit.phi,
+                    beamFit.z0, beamFit.dca, in.fit.pt, in.fit.phi);
+      }
+      if (beamFit.status != SiTpcHelixFit::Ok)
+      {
+        ++m_beamFallbackFitFailed;
+      }
+      else
+      {
+        const int nAnchors0 = info.n_anchors;
+        const double anchorRphi = m_anchorRphi, anchorZ = m_anchorZ;
+        m_anchorRphi = m_beamFallbackAnchorRphi.value_or(m_anchorRphi);
+        m_anchorZ = m_beamFallbackAnchorZ.value_or(m_anchorZ);
+        const int beamStatus = attempt(beamFit, true);
+        m_anchorRphi = anchorRphi;
+        m_anchorZ = anchorZ;
+        if (beamStatus == SiTpcSeedInfo::Chained)
+        {
+          ++m_beamFallbackRecovered[status];
+          in.fit = beamFit;
+          in.beamConstrained = true;
+          setFitInfo(in.fit);
+          status = SiTpcSeedInfo::Chained;
+        }
+        else
+        {
+          if (beamStatus == SiTpcSeedInfo::FitFailed)
+          {
+            ++m_beamFallbackFitFailed;
+          }
+          chains.clear();
+          info.n_anchors = nAnchors0;  // keep the result of the normal attempt
+          info.n_chains = 0;
+        }
       }
     }
   }
-  info.n_chains = static_cast<int>(chains.size());
-  if (!anyPrediction)
+  if (status != SiTpcSeedInfo::Chained)
   {
-    finish(SiTpcSeedInfo::NoPrediction);
-    return;
-  }
-  if (info.n_anchors == 0)
-  {
-    finish(SiTpcSeedInfo::NoAnchor);
-    return;
-  }
-  if (chains.empty())
-  {
-    finish(SiTpcSeedInfo::NoChain);
+    finish(status);
     return;
   }
 
@@ -2664,7 +2767,7 @@ std::vector<int> SiHitSeedReco::rechainInputs(const std::set<int>& tpcInputIndic
   const std::size_t nChains0 = m_eventData->chains.size();
   const std::size_t nSeeds0 = m_eventData->tpc_seeds.size();
   unsigned int nInputs = 0;
-  for (const auto& in : m_tpcInputs)
+  for (auto& in : m_tpcInputs)
   {
     if (tpcInputIndices.count(in.index) != 0)
     {
