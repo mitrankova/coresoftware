@@ -31,6 +31,7 @@
 #include <TVector3.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -158,6 +159,35 @@ int SiHitSeedReco::InitRun(PHCompositeNode* topNode)
               << (m_useActsGeometry && m_hwFromActs ? std::string("the official positions (Uphi about the MVTX / INTT centre)")
                                                     : std::string("the analytic stave / ladder model"))
               << std::endl;
+  }
+  // TPC in the WORLD frame of the ACTS fit: copy the TPC envelope -> world transform of ActsGeometry
+  // (TPC survey placement + TpcGlobalAlignment) so that the seeder sees the TPC exactly where ACTS does
+  if (m_beamAlign.enabled() && m_beamAlign.tpcFrame() == SiTpcBeamAlignment::TpcFrame::World)
+  {
+    const ActsGeometry* geom = m_tGeometry ? m_tGeometry : findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
+    if (!geom)
+    {
+      std::cerr << Name() << ": SiTpcBeamAlignment::TpcFrame::World needs ActsGeometry (TrackingInit before this module)" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
+    }
+    const Acts::Vector3 o = geom->transformTpcEnvelopeToWorld(Acts::Vector3(0, 0, 0));
+    std::array<double, 9> r{};
+    for (int c = 0; c < 3; ++c)
+    {
+      Acts::Vector3 e = Acts::Vector3::Zero();
+      e(c) = 1.0;
+      const Acts::Vector3 col = geom->transformTpcEnvelopeToWorld(e) - o;
+      for (int row = 0; row < 3; ++row)
+      {
+        r[3 * row + c] = col(row);
+      }
+    }
+    const double zShift = m_useActsGeometry ? m_actsZShift : 0.0;
+    m_beamAlign.setTpcToWorld(r, {o.x(), o.y(), o.z()}, zShift);
+    std::cout << Name() << ": TPC points in the ACTS world frame (envelope -> world from ActsGeometry), minus the Si beam ("
+              << 10 * m_beamAlign.beamLine(SiTpcBeamAlignment::SiFull).x0 << ", " << 10 * m_beamAlign.beamLine(SiTpcBeamAlignment::SiFull).y0
+              << ") mm, z shift " << 10 * zShift << " mm; the TPC beam line constants are not used" << std::endl;
+    m_beamAlign.print();
   }
   if (m_beamFallback)
   {

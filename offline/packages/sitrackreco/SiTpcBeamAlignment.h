@@ -42,7 +42,7 @@
 // (SiHitSeedReco, SiTrajectoryFitter, SiTpcTrackMatcher, SiTpc_EventDisplay).  After changing
 // this header rebuild ALL libraries that include it.
 //
-// ---- 3. The transformation (x, y only; tilts deliberately ignored for now)
+// ---- 3. The transformation (BeamLine mode: x, y only, tilts ignored; World mode: see 5.)
 // centerBeam = true  (default):  every part is moved so that its own beam is at (0, 0)
 //     TPC : x' = x - x0_tpc            y' = y - y0_tpc
 //     Si  : x' = x - x0_si             y' = y - y0_si       (x0_si = half A/B or SiFull)
@@ -56,6 +56,17 @@
 // perHalf = false           : both halves get the SiFull offset; use this to test whether the
 //                             per-sensor alignment file alone makes the halves consistent.
 //
+// ---- 5. TPC frame: beam line (legacy) or world (setTpcFrame)
+// TpcFrame::BeamLine (default): TPC output = raw poly position (TPC envelope coordinates) - TPC beam line.
+//     The seeder TPC frame then differs from the ACTS TPC frame by the envelope -> world transform E
+//     (TPC survey placement / tilt from Tracking_Geometry), and the TPC is aligned to the Si only at z = 0.
+// TpcFrame::World: TPC output = E'(raw) - Si beam (SiFull x0, y0), z + tpcZShift, where E' is the
+//     envelope -> world transform of ActsGeometry, i.e. EXACTLY what the ACTS fit sees (including the
+//     TpcGlobalAlignment correction).  The TPC and the Si are then in one frame, the same one in the
+//     seeder and in ACTS; the TPC beam line is not used.  E' is copied from ActsGeometry by
+//     SiHitSeedReco::InitRun (setTpcToWorld); until then the BeamLine mode is used.
+//     tpcZShift = the Si z shift of the seeder (SiHitSeedReco::setActsZShiftCm) so that TPC and Si z agree.
+//
 // All lengths in cm internally.  Header only.
 class SiTpcBeamAlignment
 {
@@ -67,6 +78,12 @@ class SiTpcBeamAlignment
     SiHalfB = 2,
     SiFull = 3,
     NParts = 4
+  };
+
+  enum class TpcFrame
+  {
+    BeamLine = 0,
+    World = 1
   };
 
   struct BeamLine
@@ -144,6 +161,20 @@ class SiTpcBeamAlignment
   void setCenterBeam(bool on) { m_centerBeam = on; }
   bool centerBeam() const { return m_centerBeam; }
 
+  void setTpcFrame(TpcFrame f) { m_tpcFrame = f; }
+  TpcFrame tpcFrame() const { return m_tpcFrame; }
+
+  // envelope -> world of the TPC: p' = R p + t (R row-major), plus z shift [cm]
+  void setTpcToWorld(const std::array<double, 9>& r, const std::array<double, 3>& t, double zShift)
+  {
+    m_tpcR = r;
+    m_tpcT = t;
+    m_tpcZShift = zShift;
+    m_tpcToWorldSet = true;
+  }
+  bool tpcToWorldSet() const { return m_tpcToWorldSet; }
+  bool tpcWorldActive() const { return m_tpcFrame == TpcFrame::World && m_tpcToWorldSet; }
+
   void setSiPerHalf(bool on) { m_perHalf = on; }
   bool siPerHalf() const { return m_perHalf; }
 
@@ -152,8 +183,9 @@ class SiTpcBeamAlignment
 
   // Beam position in the OUTPUT frame (used as the helix-fit beam constraint).
   // Disabled or legacy mode: the TPC frame is the output, so the beam sits at the TPC beam.
-  double referenceBeamX(double /*z*/ = 0.) const { return (m_enabled && m_centerBeam) ? 0. : m_axis[Tpc].x0; }
-  double referenceBeamY(double /*z*/ = 0.) const { return (m_enabled && m_centerBeam) ? 0. : m_axis[Tpc].y0; }
+  // World mode is always beam-centred.
+  double referenceBeamX(double /*z*/ = 0.) const { return (m_enabled && centred()) ? 0. : m_axis[Tpc].x0; }
+  double referenceBeamY(double /*z*/ = 0.) const { return (m_enabled && centred()) ? 0. : m_axis[Tpc].y0; }
 
   // =========================================================================================
   // halves
@@ -204,10 +236,19 @@ class SiTpcBeamAlignment
     return {p.x + siX0(half) - refX(), p.y + siY0(half) - refY(), p.z};
   }
 
-  // TPC point (pre-ACTS TPC frame) -> output frame
+  // TPC point (raw poly position, TPC envelope coordinates) -> output frame
   Point tpcToTpcFrame(const Point& p) const
   {
-    if (!m_enabled || !m_centerBeam)
+    if (!m_enabled)
+    {
+      return p;
+    }
+    if (tpcWorldActive())
+    {
+      const Point w = tpcEnvelopeToWorld(p);
+      return {w.x - m_axis[SiFull].x0, w.y - m_axis[SiFull].y0, w.z + m_tpcZShift};
+    }
+    if (!centred())
     {
       return p;
     }
@@ -216,11 +257,35 @@ class SiTpcBeamAlignment
   Point tpcToTpcFrame(double x, double y, double z) const { return tpcToTpcFrame(Point{x, y, z}); }
   Point tpcFromTpcFrame(const Point& p) const
   {
-    if (!m_enabled || !m_centerBeam)
+    if (!m_enabled)
+    {
+      return p;
+    }
+    if (tpcWorldActive())
+    {
+      return tpcWorldToEnvelope({p.x + m_axis[SiFull].x0, p.y + m_axis[SiFull].y0, p.z - m_tpcZShift});
+    }
+    if (!centred())
     {
       return p;
     }
     return {p.x + m_axis[Tpc].x0, p.y + m_axis[Tpc].y0, p.z};
+  }
+
+  // the copied ActsGeometry transform (identity until setTpcToWorld)
+  Point tpcEnvelopeToWorld(const Point& p) const
+  {
+    const auto& r = m_tpcR;
+    return {r[0] * p.x + r[1] * p.y + r[2] * p.z + m_tpcT[0],
+            r[3] * p.x + r[4] * p.y + r[5] * p.z + m_tpcT[1],
+            r[6] * p.x + r[7] * p.y + r[8] * p.z + m_tpcT[2]};
+  }
+  Point tpcWorldToEnvelope(const Point& w) const
+  {
+    // R is a rotation: inverse = transpose
+    const auto& r = m_tpcR;
+    const double x = w.x - m_tpcT[0], y = w.y - m_tpcT[1], z = w.z - m_tpcT[2];
+    return {r[0] * x + r[3] * y + r[6] * z, r[1] * x + r[4] * y + r[7] * z, r[2] * x + r[5] * y + r[8] * z};
   }
 
   // Full Si chain without per-sensor alignment (intrinsic -> detector -> global -> output).
@@ -259,7 +324,10 @@ class SiTpcBeamAlignment
   {
     static const char* names[NParts] = {"TPC", "Si half A", "Si half B", "Si full"};
     os << "SiTpcBeamAlignment: " << (m_enabled ? "ON" : "OFF")
-       << ", " << (m_centerBeam ? "beam-centred frame" : "TPC frame (legacy)")
+       << ", " << (centred() ? "beam-centred frame" : "TPC frame (legacy)")
+       << ", TPC " << (m_tpcFrame == TpcFrame::World ? (m_tpcToWorldSet ? "WORLD (ActsGeometry envelope -> world, minus Si beam)"
+                                                                          : "WORLD requested, transform not loaded yet (beam-line mode until SiHitSeedReco::InitRun)")
+                                                      : "beam line")
        << ", Si offsets " << (m_perHalf ? "per half" : "common (SiFull)")
        << ", clamshell boundary " << m_boundary << " rad" << std::endl;
     for (int p = 0; p < NParts; ++p)
@@ -273,8 +341,18 @@ class SiTpcBeamAlignment
       os << "  applied shift " << names[h] << ": (" << -10. * (siX0(h) - refX()) << ", " << -10. * (siY0(h) - refY())
          << ") mm" << std::endl;
     }
-    os << "  applied shift TPC: (" << (m_centerBeam ? -10. * m_axis[Tpc].x0 : 0.) << ", "
-       << (m_centerBeam ? -10. * m_axis[Tpc].y0 : 0.) << ") mm" << std::endl;
+    if (tpcWorldActive())
+    {
+      const Point o = tpcToTpcFrame(Point{0., 0., 0.});
+      const Point n = tpcToTpcFrame(Point{0., 0., 100.});
+      os << "  TPC: envelope (0,0,0) -> (" << 10. * o.x << ", " << 10. * o.y << ", " << 10. * o.z << ") mm, (0,0,1000 mm) -> ("
+         << 10. * n.x << ", " << 10. * n.y << ", " << 10. * n.z << ") mm, z shift " << 10. * m_tpcZShift << " mm" << std::endl;
+    }
+    else
+    {
+      os << "  applied shift TPC: (" << (centred() ? -10. * m_axis[Tpc].x0 : 0.) << ", "
+         << (centred() ? -10. * m_axis[Tpc].y0 : 0.) << ") mm" << std::endl;
+    }
   }
 
  private:
@@ -282,14 +360,21 @@ class SiTpcBeamAlignment
   static bool validHalf(int h) { return h == SiHalfA || h == SiHalfB; }
   static bool validSi(int h) { return validHalf(h) || h == SiFull; }
   int siPart(int half) const { return (m_perHalf && validHalf(half)) ? half : SiFull; }
-  double refX() const { return m_centerBeam ? 0. : m_axis[Tpc].x0; }
-  double refY() const { return m_centerBeam ? 0. : m_axis[Tpc].y0; }
+  bool centred() const { return m_centerBeam || m_tpcFrame == TpcFrame::World; }
+  double refX() const { return centred() ? 0. : m_axis[Tpc].x0; }
+  double refY() const { return centred() ? 0. : m_axis[Tpc].y0; }
 
   bool m_enabled = true;
   bool m_centerBeam = true;
   bool m_perHalf = true;
   double m_boundary = 0.0;
   std::array<BeamLine, NParts> m_axis{};
+
+  TpcFrame m_tpcFrame = TpcFrame::BeamLine;
+  bool m_tpcToWorldSet = false;
+  std::array<double, 9> m_tpcR{1., 0., 0., 0., 1., 0., 0., 0., 1.};
+  std::array<double, 3> m_tpcT{0., 0., 0.};
+  double m_tpcZShift = 0.;
 };
 
 #endif
