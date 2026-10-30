@@ -199,6 +199,34 @@ class SiHitSeedReco : public SubsysReco
   void setUseInnerSeedPair(bool v) { m_useInnerPair = v; }
 
   // ---------------------------------------------------------------------------
+  // Beam-constrained fallback for short TPC tracks (default off).
+  // A TPC trajectory whose points span a short radial distance has a poorly measured curvature, so the
+  // extrapolation of the free 3-point circle to the MVTX misses (no prediction on the seed layers, or no
+  // blob in the anchor window).  ONLY when the normal attempt fails (status FitFailed, NoPrediction,
+  // NoAnchor and, with onNoChain, NoChain) and the radial span of the TPC points is below maxSpanCm
+  // (<= 0: any span), the TPC circle is refitted with the beam position (TPC frame) as an extra point of
+  // weight beamWeight (point weight 1) and the whole chaining is repeated with that prediction.  If it
+  // gives at least one chain, the beam-constrained fit replaces the free fit of this TPC input for every
+  // later step (agreement with the TPC, pass 2 / pass 3 predictions).  Tracks that chain normally are
+  // never touched, so no blob is taken from them in pass 1 (the exclusive-chain arbitration still applies).
+  // Secondary tracks (large DCA) can be pulled to the beam: they only get here when the free fit failed.
+  // ---------------------------------------------------------------------------
+  void setBeamConstraintFallback(bool on, double maxSpanCm = 25.0, double beamWeight = 10.0, bool onNoChain = true)
+  {
+    m_beamFallback = on;
+    m_beamFallbackMaxSpan = maxSpanCm;
+    m_beamFallbackWeight = beamWeight;
+    m_beamFallbackOnNoChain = onNoChain;
+  }
+  // anchor window [cm] of the fallback attempt (default: the normal setAnchorWindow); zCm <= 0: no z cut.
+  // The z of a short track is extrapolated from a short lever arm as well, a larger z window can help.
+  void setBeamConstraintFallbackAnchorWindow(double rphiCm, double zCm)
+  {
+    m_beamFallbackAnchorRphi = rphiCm;
+    m_beamFallbackAnchorZ = zCm;
+  }
+
+  // ---------------------------------------------------------------------------
   // Seed window outer hit -> inner layer: dz = tanl_TPC * ds_TPC (TPC slope only; independent
   // of the TPC pca z / t0), dUphi from the TPC curvature (see class comment)
   // ---------------------------------------------------------------------------
@@ -515,6 +543,11 @@ class SiHitSeedReco : public SubsysReco
     short crossing = 0;
     unsigned int nClusters = 0;
     SiTpcHelixFit::Result fit;
+    // TPC points of the fit (TPC frame, ordered outward) and their radial span [cm] (beam fallback)
+    std::vector<SiTpcHelixFit::Point> points;
+    double spanCm = 0;
+    // fit replaced by the beam-constrained fit (setBeamConstraintFallback)
+    bool beamConstrained = false;
     // Tpc_PolyTrack's own parameters (for the debug dump)
     double polyX = 0, polyY = 0, polyZ = 0, polyPx = 0, polyPy = 0, polyPz = 0, polyCharge = 0;
     int polyFitStatus = 0;
@@ -542,7 +575,9 @@ class SiHitSeedReco : public SubsysReco
   bool predictWithVertex(const SiHitChain& chain, const SiTpcHelixFit::Result& tpcFit, int layer, double vertexZ,
                          const RecoveryConfig& cfg, const std::array<double, 7>& layerRadius, double& z, double& phi) const;
   std::vector<TpcTrackInput> collectTpcTracks(PHCompositeNode*) const;
-  void processTpcTrack(const TpcTrackInput&);
+  SiTpcHelixFit::Config tpcFitConfig() const;
+  // non-const: the beam-constrained fallback replaces in.fit when it recovers the track
+  void processTpcTrack(TpcTrackInput&);
   void resolveSharedChains();
   bool debugThisTrack(const TpcTrackInput&) const;
   void debugTrackHeader(const TpcTrackInput&, const SiTpcReference::TpcReference*) const;
@@ -639,6 +674,18 @@ class SiHitSeedReco : public SubsysReco
   unsigned int m_minTpcClusters = 10;
   double m_tpcZOffset = 0.0;
   double m_boundaryMargin = 0.3;
+
+  // beam-constrained fallback for short TPC tracks
+  bool m_beamFallback = false;
+  double m_beamFallbackMaxSpan = 25.0;   // [cm], <= 0: any span
+  double m_beamFallbackWeight = 10.0;
+  bool m_beamFallbackOnNoChain = true;
+  std::optional<double> m_beamFallbackAnchorRphi;
+  std::optional<double> m_beamFallbackAnchorZ;
+  std::array<unsigned long, 7> m_beamFallbackTried{};      // by status of the normal attempt (all passes)
+  std::array<unsigned long, 7> m_beamFallbackRecovered{};  // ... that gave chains with the beam constraint
+  unsigned long m_beamFallbackSpanSkipped = 0;              // failed, but span >= maxSpan
+  unsigned long m_beamFallbackFitFailed = 0;                // beam-constrained fit / reference failed
 
   // anchor
   double m_anchorRphi = 1.0;  // [cm]
