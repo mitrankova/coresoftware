@@ -20,6 +20,7 @@ pkginclude_HEADERS = \
   Tpc_PolyClusterResiduals.h \
   TpcV0CandidateTree.h \
   BeamCrossingAnalysis.h \
+  Tpc_PolyTrackHits.h \
   helixResiduals.h \
   KshortReconstruction.h \
   TrackContainerCombiner.h \
@@ -40,6 +41,7 @@ libTrackingDiagnostics_la_SOURCES = \
   Tpc_PolyClusterResiduals.cc \
   TpcV0CandidateTree.cc \
   BeamCrossingAnalysis.cc \
+  Tpc_PolyTrackHits.cc \
   helixResiduals.cc \
   KshortReconstruction.cc \
   TrackContainerCombiner.cc \
