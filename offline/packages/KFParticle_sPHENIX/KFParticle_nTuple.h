@@ -2,6 +2,7 @@
 #define KFPARTICLESPHENIX_KFPARTICLENTUPLE_H
 
 #include "KFParticle_triggerInfo.h"
+#include "KFParticle_centralityInfo.h"
 #include "KFParticle_truthAndDetTools.h"
 
 #include <KFParticle.h>
@@ -13,9 +14,8 @@
 
 class PHCompositeNode;
 class TTree;
-class CentralityInfo;
 
-class KFParticle_nTuple : public KFParticle_truthAndDetTools, public KFParticle_triggerInfo
+class KFParticle_nTuple : public KFParticle_truthAndDetTools, public KFParticle_triggerInfo, public KFParticle_centralityInfo
 {
  public:
   /// Constructor
@@ -90,6 +90,7 @@ class KFParticle_nTuple : public KFParticle_truthAndDetTools, public KFParticle_
   std::vector<int> m_num_tracks_from_intermediate_nTuple;
   bool m_truth_matching{false};
   bool m_get_trigger_info{false};
+  bool m_get_centrality_info{false};
   bool m_detector_info{false};
   bool m_calo_info{false};
   bool m_get_dEdx{false};
@@ -100,23 +101,9 @@ class KFParticle_nTuple : public KFParticle_truthAndDetTools, public KFParticle_
   bool m_use_intermediate_name{false};
   bool m_get_charge_conjugate_nTuple{false};
   bool m_use_fake_pv_nTuple{false};
-  bool m_minimal_output{false};
-  bool m_minimal_output_to_qa{false};
-  std::string m_qa_tree_path{"DecayTree"};  // name (optionally dir/name) of the tree in the QA histogram manager
-  bool m_momentum_calibration_output{false};
-  bool m_use_centrality_nTuple{false};
   std::vector<std::string> m_intermediate_name_ntuple;
-  int m_verbosity_nTuple{0};
 
  private:
-  // This fills a reduced output meant for the ML momentum calibration
-  // It contains mother mass/pT/eta/phi/PID, daughter pT/pTErr/eta/phi/charge/PID/covariance and runNumber only
-  void initializeMomentumCalibrationBranches(const std::string &mother_name);
-  void fillMomentumCalibrationBranch(PHCompositeNode *topNode,
-                                     KFParticle &motherParticle,
-                                     KFParticle *daughterArray);
-
-
   TTree *m_tree{nullptr};
 
   float m_calculated_mother_mass{-1};
@@ -229,7 +216,8 @@ class KFParticle_nTuple : public KFParticle_truthAndDetTools, public KFParticle_
   float m_calculated_daughter_dedx[max_tracks]{0};
   // float m_calculated_daughter_expected_dedx_pion[max_tracks] {0};
   // float m_calculated_daughter_expected_dedx_kaon[max_tracks] {0};
-  // float m_calculated_daughter_expected_dedx_proton[max_tracks] {0}; 
+  // float m_calculated_daughter_expected_dedx_proton[max_tracks] {0};
+
   float m_daughter_dca[99]{0};
   float m_daughter_dca_xy[99]{0};
   float m_daughter_dca_sig[99]{0};
@@ -244,8 +232,6 @@ class KFParticle_nTuple : public KFParticle_truthAndDetTools, public KFParticle_
   int m_calculated_vertex_ID{-1};
   // float *m_calculated_vertex_cov;
   float m_calculated_vertex_cov[6]{0};
-  float m_centrality_mbd{-1};
-  CentralityInfo *m_CentInfo{nullptr};
 
   float m_sv_mass{-1};
 
@@ -261,6 +247,7 @@ class KFParticle_nTuple : public KFParticle_truthAndDetTools, public KFParticle_
   uint64_t m_last_event_bco{0}; //only keeping this, BCO for the last event
 
   bool m_trigger_info_available{false};
+  bool m_centrality_info_available{false};
 };
 
 #endif
