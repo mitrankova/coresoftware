@@ -3,6 +3,8 @@
 
 #include <fun4all/SubsysReco.h>
 
+#include <cstdint>
+#include <limits>
 #include <string>
 
 class IdealPadMap;
@@ -10,8 +12,10 @@ class PHCompositeNode;
 class TFile;
 class TTree;
 class TpcCrossingDecisionContainer;
+class Tpc_PolyCluster;
 class Tpc_PolyClusterContainer;
 class Tpc_PolyTrackContainer;
+class TrkrHit;
 class TrkrHitSetContainer;
 
 class Tpc_PolyTrackHits : public SubsysReco
@@ -31,12 +35,33 @@ class Tpc_PolyTrackHits : public SubsysReco
   void setTpc_PolyTrackNodeName(const std::string& n) { m_finalTrackNodeName = n; }
   void setHitSetNodeName(const std::string& n) { m_hitSetNodeName = n; }
   void setOutputFileName(const std::string& n) { m_outfilename = n; }
+
+  // Optional track selection. Defaults keep ALL found tracks.
+  // Hits of tracks rejected by these cuts are not written at all
+  // (they are NOT relabelled as "no track" hits).
   void setMinPt(double v) { m_minPt = v; }
   void setMinTpcClusters(unsigned int v) { m_minTpcClusters = v; }
+
+  // Write TPC hits that are not on any track (track fields = short max). Default: on.
+  void setSaveUnassignedHits(bool v) { m_saveUnassignedHits = v; }
+
+  // Sentinel used for every quantity that is undefined for a given hit
+  static constexpr short kUndefShort = std::numeric_limits<short>::max();
+  static constexpr unsigned int kUndefUInt = static_cast<unsigned int>(std::numeric_limits<short>::max());
+  static constexpr double kUndefDouble = static_cast<double>(std::numeric_limits<short>::max());
 
  private:
   bool get_nodes(PHCompositeNode* topNode);
   void reset_tree_values();
+  // Fills hit-level fields (geometry + adc). Returns false if the hit has no valid pad geometry.
+  bool fill_hit_fields(uint32_t hitsetkey, uint32_t hitkey, const TrkrHit* hit);
+  // Fills cluster-level fields and the hit position stored in the cluster
+  void fill_cluster_fields(const Tpc_PolyCluster* cluster, unsigned int ihit);
+
+  static uint64_t make_hit_id(uint32_t hitsetkey, uint32_t hitkey)
+  {
+    return (static_cast<uint64_t>(hitsetkey) << 32U) | static_cast<uint64_t>(hitkey);
+  }
 
   std::string m_outfilename;
   std::string m_clusterNodeName;
@@ -44,8 +69,9 @@ class Tpc_PolyTrackHits : public SubsysReco
   std::string m_finalTrackNodeName;
   std::string m_hitSetNodeName;
 
-  double m_minPt{0.1};
-  unsigned int m_minTpcClusters{10};
+  double m_minPt{-1.0};
+  unsigned int m_minTpcClusters{0};
+  bool m_saveUnassignedHits{true};
 
   unsigned int m_evt{0};
   TFile* m_outfile{nullptr};

@@ -24,6 +24,9 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 Tpc_PolyTrackHits::Tpc_PolyTrackHits(const std::string& name,
@@ -58,7 +61,7 @@ int Tpc_PolyTrackHits::Init(PHCompositeNode* /*unused*/)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
-  m_tree = new TTree("hits", "TPC hits on selected polytracks");
+  m_tree = new TTree("hits", "TPC hits: on polytracks and unassigned (track fields = 32767)");
   m_tree->Branch("event", &m_event, "event/i");
   m_tree->Branch("poly_track_id", &m_polyTrackId, "poly_track_id/i");
   m_tree->Branch("source_assembled_track_id", &m_sourceAssembledTrackId, "source_assembled_track_id/i");
@@ -137,32 +140,74 @@ bool Tpc_PolyTrackHits::get_nodes(PHCompositeNode* topNode)
 
 void Tpc_PolyTrackHits::reset_tree_values()
 {
+  // Everything that may be undefined for a hit is set to short max (32767)
   m_event = m_evt;
-  m_polyTrackId = 0;
-  m_sourceAssembledTrackId = 0;
-  m_crossing = 0;
-  m_polyClusterId = 0;
-  m_ntpcClusters = 0;
-  m_pt = std::numeric_limits<double>::quiet_NaN();
-  m_pad = 0;
-  m_timebin = 0;
-  m_layer = 0;
-  m_sector = 0;
-  m_side = 0;
-  m_phi = std::numeric_limits<double>::quiet_NaN();
-  m_radius = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterX = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterY = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterZ = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterRmsX = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterRmsY = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterRmsZ = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterRPhiError = std::numeric_limits<double>::quiet_NaN();
-  m_polyClusterZError = std::numeric_limits<double>::quiet_NaN();
-  m_x = std::numeric_limits<double>::quiet_NaN();
-  m_y = std::numeric_limits<double>::quiet_NaN();
-  m_z = std::numeric_limits<double>::quiet_NaN();
-  m_adc = std::numeric_limits<double>::quiet_NaN();
+  m_polyTrackId = kUndefUInt;
+  m_sourceAssembledTrackId = kUndefUInt;
+  m_crossing = kUndefShort;
+  m_polyClusterId = kUndefUInt;
+  m_ntpcClusters = kUndefUInt;
+  m_pt = kUndefDouble;
+  m_pad = kUndefUInt;
+  m_timebin = kUndefUInt;
+  m_layer = kUndefUInt;
+  m_sector = kUndefUInt;
+  m_side = kUndefUInt;
+  m_phi = kUndefDouble;
+  m_radius = kUndefDouble;
+  m_polyClusterX = kUndefDouble;
+  m_polyClusterY = kUndefDouble;
+  m_polyClusterZ = kUndefDouble;
+  m_polyClusterRmsX = kUndefDouble;
+  m_polyClusterRmsY = kUndefDouble;
+  m_polyClusterRmsZ = kUndefDouble;
+  m_polyClusterRPhiError = kUndefDouble;
+  m_polyClusterZError = kUndefDouble;
+  m_x = kUndefDouble;
+  m_y = kUndefDouble;
+  m_z = kUndefDouble;
+  m_adc = kUndefDouble;
+}
+
+bool Tpc_PolyTrackHits::fill_hit_fields(uint32_t hitsetkey, uint32_t hitkey, const TrkrHit* hit)
+{
+  const unsigned int layer = TrkrDefs::getLayer(hitsetkey);
+  const unsigned int side = TpcDefs::getSide(hitsetkey);
+  const unsigned int sector = TpcDefs::getSectorId(hitsetkey);
+  const unsigned int pad = TpcDefs::getPad(hitkey);
+  const unsigned int timebin = TpcDefs::getTBin(hitkey);
+  const double phi = m_idealPadMap->get_phi(side, layer, pad);
+  const double radius = m_idealPadMap->get_radius(layer);
+  if (!std::isfinite(phi) || !std::isfinite(radius))
+  {
+    return false;
+  }
+
+  m_pad = pad;
+  m_timebin = timebin;
+  m_layer = layer;
+  m_sector = sector;
+  m_side = side;
+  m_phi = phi;
+  m_radius = radius;
+  m_adc = hit->getAdc();
+  return true;
+}
+
+void Tpc_PolyTrackHits::fill_cluster_fields(const Tpc_PolyCluster* cluster, unsigned int ihit)
+{
+  m_polyClusterId = cluster->get_cluster_id();
+  m_polyClusterX = cluster->get_centroid_x();
+  m_polyClusterY = cluster->get_centroid_y();
+  m_polyClusterZ = cluster->get_centroid_z();
+  m_polyClusterRmsX = cluster->get_rms_x();
+  m_polyClusterRmsY = cluster->get_rms_y();
+  m_polyClusterRmsZ = cluster->get_rms_z();
+  m_polyClusterRPhiError = std::hypot(cluster->get_rms_x(), cluster->get_rms_y());
+  m_polyClusterZError = std::fabs(cluster->get_rms_z());
+  m_x = cluster->get_hit_x(ihit);
+  m_y = cluster->get_hit_y(ihit);
+  m_z = cluster->get_hit_z(ihit);
 }
 
 int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
@@ -173,7 +218,9 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
+  // clusters grouped by assembled track, and hit -> (first) cluster lookup for all valid clusters
   std::map<unsigned int, std::vector<const Tpc_PolyCluster*> > clusters_by_source_assembled_track_id;
+  std::unordered_map<uint64_t, std::pair<const Tpc_PolyCluster*, unsigned int> > cluster_by_hit;
   for (unsigned int icluster = 0; icluster < m_clusters->size(); ++icluster)
   {
     const Tpc_PolyCluster* cluster = m_clusters->get_cluster(icluster);
@@ -182,6 +229,12 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
       continue;
     }
     clusters_by_source_assembled_track_id[cluster->get_source_assembled_track_id()].push_back(cluster);
+
+    for (unsigned int ihit = 0; ihit < cluster->size_hits(); ++ihit)
+    {
+      const Tpc_PolyCluster::HitIndex hit_index = cluster->get_hit_index(ihit);
+      cluster_by_hit.emplace(make_hit_id(hit_index.first, hit_index.second), std::make_pair(cluster, ihit));
+    }
   }
 
   std::map<unsigned int, const TpcCrossingDecision*> crossing_by_source_assembled_track_id;
@@ -195,8 +248,15 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
     crossing_by_source_assembled_track_id[decision->get_assembled_track_id()] = decision;
   }
 
-  unsigned int nfilled = 0;
+  // hits that belong to a found track (written on-track, or skipped by an optional track cut)
+  std::unordered_set<uint64_t> track_hits;
+
+  unsigned int nfilled_track = 0;
+  unsigned int nfilled_free = 0;
+  unsigned int ntracks_written = 0;
   const unsigned int npoly_tracks = m_finalTracks->size();
+
+  // ---------------- pass 1: all found tracks ----------------
   for (unsigned int itrack = 0; itrack < npoly_tracks; ++itrack)
   {
     const Tpc_PolyTrack* poly_track = m_finalTracks->get_track(itrack);
@@ -205,98 +265,115 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
       continue;
     }
 
-    const double px = poly_track->get_px();
-    const double py = poly_track->get_py();
-    const double pt = std::hypot(px, py);
-    if (!std::isfinite(pt) || pt <= m_minPt)
-    {
-      continue;
-    }
-
-    const auto cluster_iter = clusters_by_source_assembled_track_id.find(poly_track->get_source_assembled_track_id());
+    const unsigned int source_assembled_track_id = poly_track->get_source_assembled_track_id();
+    const auto cluster_iter = clusters_by_source_assembled_track_id.find(source_assembled_track_id);
     if (cluster_iter == clusters_by_source_assembled_track_id.end())
     {
-      continue;
+      continue;  // no clusters -> nothing to write
     }
-
-    const unsigned int source_assembled_track_id = poly_track->get_source_assembled_track_id();
-    const auto crossing_iter = crossing_by_source_assembled_track_id.find(source_assembled_track_id);
-    if (crossing_iter == crossing_by_source_assembled_track_id.end())
-    {
-      continue;
-    }
-    const short crossing = crossing_iter->second->get_selected_crossing();
-
     const std::vector<const Tpc_PolyCluster*>& track_clusters = cluster_iter->second;
     const unsigned int ntpc_clusters = track_clusters.size();
-    if (ntpc_clusters <= m_minTpcClusters)
-    {
-      continue;
-    }
 
+    const double pt = std::hypot(poly_track->get_px(), poly_track->get_py());
+
+    const auto crossing_iter = crossing_by_source_assembled_track_id.find(source_assembled_track_id);
+    const short crossing = (crossing_iter != crossing_by_source_assembled_track_id.end())
+                               ? crossing_iter->second->get_selected_crossing()
+                               : kUndefShort;
+
+    // optional cuts (disabled by default). Rejected tracks still claim their hits.
+    const bool pass_pt = (m_minPt < 0) || (std::isfinite(pt) && pt >= m_minPt);
+    const bool pass_cuts = pass_pt && ntpc_clusters >= m_minTpcClusters;
+
+    bool wrote_any = false;
     for (const Tpc_PolyCluster* cluster : track_clusters)
     {
-      if (!cluster || !cluster->isValid())
-      {
-        continue;
-      }
-
       for (unsigned int ihit = 0; ihit < cluster->size_hits(); ++ihit)
       {
         const Tpc_PolyCluster::HitIndex hit_index = cluster->get_hit_index(ihit);
+        track_hits.insert(make_hit_id(hit_index.first, hit_index.second));
+        if (!pass_cuts)
+        {
+          continue;
+        }
+
         TrkrHitSet* hitset = m_hits->findHitSet(hit_index.first);
         if (!hitset)
         {
           continue;
         }
-
         TrkrHit* hit = hitset->getHit(hit_index.second);
         if (!hit)
         {
           continue;
         }
 
-        const unsigned int layer = TrkrDefs::getLayer(hit_index.first);
-        const unsigned int side = TpcDefs::getSide(hit_index.first);
-        const unsigned int sector = TpcDefs::getSectorId(hit_index.first);
-        const unsigned int pad = TpcDefs::getPad(hit_index.second);
-        const unsigned int timebin = TpcDefs::getTBin(hit_index.second);
-        const double phi = m_idealPadMap->get_phi(side, layer, pad);
-        const double radius = m_idealPadMap->get_radius(layer);
-        if (!std::isfinite(phi) || !std::isfinite(radius))
+        reset_tree_values();
+        if (!fill_hit_fields(hit_index.first, hit_index.second, hit))
+        {
+          continue;
+        }
+        m_polyTrackId = poly_track->get_track_id();
+        m_sourceAssembledTrackId = source_assembled_track_id;
+        m_crossing = crossing;
+        m_ntpcClusters = ntpc_clusters;
+        m_pt = std::isfinite(pt) ? pt : kUndefDouble;
+        fill_cluster_fields(cluster, ihit);
+        m_tree->Fill();
+        ++nfilled_track;
+        wrote_any = true;
+      }
+    }
+    if (wrote_any)
+    {
+      ++ntracks_written;
+    }
+  }
+
+  // ---------------- pass 2: TPC hits not on any track ----------------
+  if (m_saveUnassignedHits)
+  {
+    const TrkrHitSetContainer::ConstRange hitset_range = m_hits->getHitSets(TrkrDefs::TrkrId::tpcId);
+    for (auto hitset_iter = hitset_range.first; hitset_iter != hitset_range.second; ++hitset_iter)
+    {
+      const TrkrDefs::hitsetkey hitsetkey = hitset_iter->first;
+      TrkrHitSet* hitset = hitset_iter->second;
+      if (!hitset)
+      {
+        continue;
+      }
+
+      const TrkrHitSet::ConstRange hit_range = hitset->getHits();
+      for (auto hit_iter = hit_range.first; hit_iter != hit_range.second; ++hit_iter)
+      {
+        const TrkrDefs::hitkey hitkey = hit_iter->first;
+        const TrkrHit* hit = hit_iter->second;
+        if (!hit)
         {
           continue;
         }
 
-        reset_tree_values();
-        m_event = m_evt;
-        m_polyTrackId = poly_track->get_track_id();
-        m_sourceAssembledTrackId = source_assembled_track_id;
-        m_crossing = crossing;
-        m_polyClusterId = cluster->get_cluster_id();
-        m_ntpcClusters = ntpc_clusters;
-        m_pt = pt;
-        m_pad = pad;
-        m_timebin = timebin;
-        m_layer = layer;
-        m_sector = sector;
-        m_side = side;
-        m_phi = phi;
-        m_radius = radius;
-        m_polyClusterX = cluster->get_centroid_x();
-        m_polyClusterY = cluster->get_centroid_y();
-        m_polyClusterZ = cluster->get_centroid_z();
-        m_polyClusterRmsX = cluster->get_rms_x();
-        m_polyClusterRmsY = cluster->get_rms_y();
-        m_polyClusterRmsZ = cluster->get_rms_z();
-        m_polyClusterRPhiError = std::hypot(cluster->get_rms_x(), cluster->get_rms_y());
-        m_polyClusterZError = std::fabs(cluster->get_rms_z());
-        m_x = cluster->get_hit_x(ihit);
-        m_y = cluster->get_hit_y(ihit);
-        m_z = cluster->get_hit_z(ihit);
-        m_adc = hit->getAdc();
+        const uint64_t hit_id = make_hit_id(hitsetkey, hitkey);
+        if (track_hits.count(hit_id))
+        {
+          continue;
+        }
+
+        reset_tree_values();  // track fields stay at short max
+        if (!fill_hit_fields(hitsetkey, hitkey, hit))
+        {
+          continue;
+        }
+
+        // hit may still sit in a cluster that is not attached to any track
+        const auto cl_iter = cluster_by_hit.find(hit_id);
+        if (cl_iter != cluster_by_hit.end())
+        {
+          fill_cluster_fields(cl_iter->second.first, cl_iter->second.second);
+        }
+
         m_tree->Fill();
-        ++nfilled;
+        ++nfilled_free;
       }
     }
   }
@@ -305,7 +382,9 @@ int Tpc_PolyTrackHits::process_event(PHCompositeNode* topNode)
   {
     std::cout << Name() << "::process_event - event " << m_evt
               << " poly_tracks=" << npoly_tracks
-              << " hits=" << nfilled << std::endl;
+              << " tracks_written=" << ntracks_written
+              << " track_hits=" << nfilled_track
+              << " unassigned_hits=" << nfilled_free << std::endl;
   }
 
   return Fun4AllReturnCodes::EVENT_OK;
